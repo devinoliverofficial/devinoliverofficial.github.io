@@ -9958,6 +9958,8 @@
     contact: ['profile', 'my info', 'me', 'username', 'photo', 'picture', 'phone', 'email'],
     merchroom: ['merch', 'square', 'sales', 'store', 'token'],
     history: ['history', 'past tours', 'old tours', 'summary', 'closeout', 'pdf', 'spreadsheet', 'budget'],
+    cpa: ['cpa', 'accountant', 'tax', 'taxes', 'year end', 'year-end', '1099', '1065', 'workbook', 'ledger'],
+    business: ['business', 'business name', 'tax type', 'llc', 'partnership', 'cpa', 'tax'],
     notifications: ['alerts', 'push', 'notify', 'sounds', 'buzz', 'alarms', 'reminders'],
     settings: ['preferences', 'options', 'account'],
     share: ['share', 'link', 'invite'],
@@ -10025,6 +10027,9 @@
     if (g.mine && !IN_SHELL) add('merchroom', 'tag', 'Merchroom', 'Money', function () { go({ name: 'merchroom', back: here }); });
     var bh = function () { return G.isObj(S.menuBh) ? S.menuBh : (S.menuBh = { open: false, year: '', artist: '' }); };
     if (g.music) add('history', 'tabmoney', 'Budget History', 'Money', menuReveal(function () { bh().open = true; }, 'Budget History'));
+    if (g.music && historyTree().length && historyArtists().length) add('cpa', 'tabsheet', 'CPA Package', 'Budget History', function () {
+      go({ name: 'history', back: here, cpa: { year: '', artist: '' }, ls: { to: here, label: 'the menu', short: 'Back' } });
+    });
     if (t) menuTourRows(tid).forEach(function (r) { add(r[3], r[0], r[1], tname, r[2], { danger: r[3] === 'deltour' }); });
     settingsIndex(add);
     var push = IN_SHELL || !!(B && typeof B.pushSupported === 'function' && B.pushSupported());
@@ -12201,6 +12206,7 @@
     var cm = d.offId ? cardMenuTap(d.offId) : null;
     if (cm) add('cardsettings', cm.ic, cm.label, cm.tap);
     if (d.cards) add('linked', 'card', 'Linked Cards', d.cards);
+    if (historyArtists().length) add('business', 'tag', 'Business details', function () { openCpaBusiness(null, openSettingsSheet); });
     if (d.trashed) add('trash', 'trash', 'Deleted tours (' + d.trashed + ')', A.trash);
     if (d.signedIn) add('signout', 'back', 'Sign out', A.signout);
     if (d.signedIn && B.deleteAccount && !d.asArtist) add('deleteme', 'trash', 'Delete my account', A.deleteme, true);
@@ -13195,7 +13201,7 @@
     }).then(done, done);
   }
   function offMoveBtn(id, r, again) {
-    return h('button', { class: 'sw-edit', type: 'button', 'aria-label': 'Move ' + r.label + ' to MY PAY',
+    return h('button', { class: 'sw-edit tray-move', type: 'button', 'aria-label': 'Move ' + r.label + ' to MY PAY',
       onclick: function () { offMoveAsk(id, r, again); } }, icon('cash', 16), 'Move to MY PAY');
   }
   function offMoveAsk(id, r, again) {
@@ -14687,7 +14693,7 @@
       var canCpa = function (r) { return cpaOk && cpaFieldsOf(id, r).any; };
       var cpaBtn = function (r) {
         return h('button', { class: 'sw-edit sw-group', type: 'button', 'aria-label': 'Mark ' + r.label + ' for your CPA',
-          onclick: function () { openCpaMarks(id, r, function () { reopen(); }); } }, icon('tag', 16), 'For CPA');
+          onclick: function () { openCpaMarks(id, r, function () { reopen(); }); } }, icon('tabsheet', 16), 'For CPA');
       };
       var anyMove = all.some(function (r) { return offMoveOk(id, r); });
       var anySlide = all.some(function (r) { return slides(r) || mine(r); });
@@ -14883,6 +14889,7 @@
             segmented(['Business', 'Personal'], f.use === 'business' ? 0 : f.use === 'personal' ? 1 : -1,
               function (i) { f.use = i === 1 ? 'personal' : 'business'; }, 'Business or personal'),
             f.use ? null : 'Not marked yet: counted as Business.') : null,
+          fields.use && offMoveOk(bookId, r) ? h('p', { class: 'hint' }, 'Yours alone, not the band\u2019s? Move to MY PAY takes it off the band\u2019s book.') : null,
           fields.how ? cpaAsk('How it was paid', howChips,
             [guess ? 'Looks like ' + G.cpaHowLabel(guess) : '',
               split ? 'For the whole payment, split between ' + splitNames(line.book, split) : ''].filter(Boolean).join('. ') || null) : null,
@@ -17112,7 +17119,7 @@
   function myPayOwnLink(id, t) {
     var artist = artistOf(t), own = t && !isOffTour(t) && artist ? offPayOf(artist) : null;
     if (!own) return null;
-    return h('p', { class: 'hist-who', style: 'margin-top:0' }, 'Your book for ' + (t.name || 'this tour') + ' \u00b7 ', h('button', { class: 'linkbtn rb-link', type: 'button',
+    return h('p', { class: 'hist-who', style: 'margin-top:0' }, 'Your book for ' + (t.name || 'this tour'), h('br'), h('button', { class: 'linkbtn rb-link', type: 'button',
       onclick: function () { go(Object.assign(offRoute(artist, 'mypay', id), { list: (S.route && S.route.list) || null })); } }, 'Open your own book between tours \u203a'));
   }
   function myPayTab(id) {
