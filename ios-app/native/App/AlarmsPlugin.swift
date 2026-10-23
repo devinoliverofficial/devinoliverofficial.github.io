@@ -1,11 +1,14 @@
-// Alarms: Greenroom's own small Capacitor plugin for the stage, bus call and guest list last call alarms (Devin, Oct 22,
-// all "Yes").
+// Alarms: Greenroom's own small Capacitor plugin for the stage, bus call, bus call warning and guest list last call
+// alarms (Devin, Oct 22, all "Yes"; the bus call warning Oct 23).
 //
 //   (1) Stage alarm: 30 minutes before your band's set, the phone rings and vibrates like an alarm; tap Stop.
 //   (2) Bus call alarm: at bus call the phone goes off like an alarm; the alarm screen has one more button, "I'm on the
 //       bus", which says On bus in Bus Check without unlocking the phone or opening the app.
 //   (3) Guest list last call alarm ("GUEST LIST LAST CALL", "15min earlier"): 15 minutes before the day's last call
 //       (the day sheet's, else the tour's LAST CALL TIME), like the stage alarm; tap Stop.
+//   (4) Bus call warning alarm (Devin, Oct 23: "an alarm 20min prior to bus call "BUS CALL - 20MIN WARNING""), kind
+//       "bus20": 20 minutes before each bus call alarm, for the same people on the same days; tap Stop (no "I'm on the
+//       bus"). It follows the bus call alarm's switch (bus), and a day off's always gets its stand-in, as the bus call's.
 //   iPhone asks once "Allow Greenroom to set alarms?" (NSAlarmKitUsageDescription, set by prepare.sh). No snooze. An
 //   iPhone older than iOS 26 (no AlarmKit), or one where alarms are not allowed, gets a normal notification at the same
 //   moment instead (only when this phone does not already get the server's own alert for it).
@@ -16,8 +19,8 @@
 //                                                    "notDetermined" (AlarmKit), "" without it; notify: "granted" |
 //                                                    "denied" | "prompt" (normal notifications)
 //   sync(plan)    -> { ok, mode, auth, set, pending }   plan: { uid, stage, bus, lastcall (the three switches), fbStage,
-//                    fbBus, fbLastcall (a normal notification may stand in), items: [{ id, kind ("stage" | "bus" |
-//                    "lastcall"), at (seconds), tour, title, body }], busAnswer: { url, key, device, secret, uid } | null, ask (may put up iOS's one
+//                    fbBus, fbLastcall, fbBus20 (a normal notification may stand in), items: [{ id, kind ("stage" | "bus" |
+//                    "lastcall" | "bus20"), at (seconds), tour, title, body }], busAnswer: { url, key, device, secret, uid } | null, ask (may put up iOS's one
 //                    question now) }. Sets every alarm switched on that is still to come, takes away every one that is
 //                    gone (never one ringing right now), and keeps the plan on the phone. mode: "alarm" | "notify" |
 //                    "none". pending: words said from the lock screen with no signal, for the page to say (once).
@@ -75,7 +78,8 @@ public class AlarmsPlugin: CAPPlugin, CAPBridgedPlugin {
         let raw = (call.getArray("items") ?? []).compactMap { $0 as? [String: Any] }
         var plan = AlarmPlan(uid: call.getString("uid") ?? "", stage: call.getBool("stage") ?? true, bus: call.getBool("bus") ?? true,
                              fbStage: call.getBool("fbStage") ?? true, fbBus: call.getBool("fbBus") ?? true, items: [],
-                             lastcall: call.getBool("lastcall") ?? true, fbLastcall: call.getBool("fbLastcall") ?? true)
+                             lastcall: call.getBool("lastcall") ?? true, fbLastcall: call.getBool("fbLastcall") ?? true,
+                             fbBus20: call.getBool("fbBus20") ?? true)
         plan.items = raw.compactMap { AlarmItem(js: $0) }
         if let b = call.getObject("busAnswer") {
             var v: [String: String] = [:]
@@ -104,7 +108,8 @@ public class AlarmsPlugin: CAPPlugin, CAPBridgedPlugin {
     }
 }
 
-/// One alarm the page (or the server's hand-over) asked for.
+/// One alarm the page (or the server's hand-over) asked for. A kind this build does not know (one added after it) is
+/// left out, item by item: the rest of a sync or a hand-over is still set (init(js:) answers nil for it alone).
 struct AlarmItem: Codable, Equatable {
     var id: String
     var kind: String
@@ -116,8 +121,11 @@ struct AlarmItem: Codable, Equatable {
     init?(js o: [String: Any]) {
         id = DayBarJS.str(o["id"]); kind = DayBarJS.str(o["kind"]); at = DayBarJS.num(o["at"])
         tour = DayBarJS.str(o["tour"]); title = DayBarJS.str(o["title"]); body = DayBarJS.str(o["body"])
-        guard !id.isEmpty, id.count <= 200, kind == "stage" || kind == "bus" || kind == "lastcall", at > 0, !tour.isEmpty else { return nil }
-        if title.isEmpty { title = kind == "bus" ? "BUS CALL" : kind == "lastcall" ? "GUEST LIST LAST CALL" : "30 MIN UNTIL STAGE TIME" }
+        guard !id.isEmpty, id.count <= 200, kind == "stage" || kind == "bus" || kind == "lastcall" || kind == "bus20", at > 0, !tour.isEmpty else { return nil }
+        if title.isEmpty {
+            title = kind == "bus" ? "BUS CALL" : kind == "lastcall" ? "GUEST LIST LAST CALL" : kind == "bus20" ? "BUS CALL - 20MIN WARNING"
+                : "30 MIN UNTIL STAGE TIME"
+        }
         title = String(title.prefix(60)); body = String(body.prefix(120))
     }
 
@@ -145,12 +153,20 @@ struct AlarmPlan: Codable {
     // build (without them) still reads: missing is on, as the page's switch starts.
     var lastcall: Bool? = nil
     var fbLastcall: Bool? = nil
+    // The bus call warning's stand-in (Oct 23), optional the same way: missing, it may stand in (Ari sends nothing at its
+    // minute). It has no switch of its own: it follows the bus call alarm's (bus).
+    var fbBus20: Bool? = nil
 
-    func wants(_ it: AlarmItem) -> Bool { it.kind == "bus" ? bus : it.kind == "lastcall" ? (lastcall ?? true) : stage }
+    func wants(_ it: AlarmItem) -> Bool {
+        (it.kind == "bus" || it.kind == "bus20") ? bus : it.kind == "lastcall" ? (lastcall ?? true) : stage
+    }
     // A day off's bus call (its id "bus|<tour>|off:<date>", from the page and the server's hand-over alike) always gets its
-    // stand-in: Ari sends no BUS CALL alert on a day off, so there is nothing for it to double.
+    // stand-in: Ari sends no BUS CALL alert on a day off, so there is nothing for it to double. Its 20 minute warning
+    // ("bus20|<tour>|off:<date>") the same.
     func standIn(_ it: AlarmItem) -> Bool {
-        it.kind == "bus" ? (fbBus || it.id.hasPrefix("bus|" + it.tour + "|off:")) : it.kind == "lastcall" ? (fbLastcall ?? true) : fbStage
+        it.kind == "bus" ? (fbBus || it.id.hasPrefix("bus|" + it.tour + "|off:"))
+            : it.kind == "bus20" ? ((fbBus20 ?? true) || it.id.hasPrefix("bus20|" + it.tour + "|off:"))
+            : it.kind == "lastcall" ? (fbLastcall ?? true) : fbStage
     }
 
     private static let name = "greenroom.alarms.plan"
@@ -379,7 +395,7 @@ actor AlarmDesk {
     }
 
     /// How one alarm looks and sounds: the system's own alarm sound, Stop, and for the bus call one more button, "I'm on
-    /// the bus" (custom: it runs AlarmOnBusIntent; never a snooze).
+    /// the bus" (custom: it runs AlarmOnBusIntent; never a snooze). The bus call warning ("bus20") is Stop alone.
     @available(iOS 26.0, *)
     private static func config(_ it: AlarmItem, id: UUID) -> AlarmManager.AlarmConfiguration<GreenroomAlarmMeta> {
         let title = LocalizedStringResource(String.LocalizationValue(it.title))

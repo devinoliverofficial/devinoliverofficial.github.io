@@ -359,7 +359,7 @@ bash prepare.sh check >/dev/null && ok "check passes again once the project is p
 # ---- the alarms (Devin, Oct 22): iOS's question has its words, the quiet hand-over may wake the app, the AppDelegate passes
 # it to the Alarms plugin, the scene registers the plugin, its files are in both targets as they should be, and the
 # frameworks newer than iOS 15 are linked weakly (an older iPhone still opens the app).
-/usr/libexec/PlistBuddy -c 'Print :NSAlarmKitUsageDescription' "$PL" | grep -q "30 minutes before your band’s set, at bus call, and 15 minutes before the guest list’s last call" \
+/usr/libexec/PlistBuddy -c 'Print :NSAlarmKitUsageDescription' "$PL" | grep -q "30 minutes before your band’s set, 20 minutes before bus call, at bus call, and 15 minutes before the guest list’s last call" \
   && ok "the alarm question's words are in the Info.plist (all three alarms)" || bad "NSAlarmKitUsageDescription"
 [ "$(/usr/libexec/PlistBuddy -c 'Print :UIBackgroundModes:0' "$PL")" = "remote-notification" ] && ok "the app may be woken by a quiet push" || bad "UIBackgroundModes"
 [ "$(grep -c 'GreenroomAlarms.remote(userInfo, completionHandler)' "$A/AppDelegate.swift")" = "1" ] \
@@ -400,7 +400,9 @@ bash prepare.sh check >/dev/null && ok "check passes again" || bad "check after 
 # The stand-in rule (AlarmPlan.standIn), cut out of the plugin by its own text and run (plain Swift, no SDK) with stand-ins
 # for its two structs: a phone that already gets the server's SHOW TIME and BUS CALL (fbStage, fbBus false, as the page
 # hands over for prefs { stage30: true, buscall: true }) gets no second one, except at a day off's bus call (Ari sends no
-# BUS CALL then); the guest list last call's always comes.
+# BUS CALL then); the guest list last call's always comes. The bus call warning (bus20, Oct 23: 20 minutes before bus
+# call, where Ari sends nothing) comes as the page says (fbBus20: always yes; missing, from a plan an older build kept,
+# yes too), and a day off's always, as the bus call's: even a plan saying no (strict) keeps a day off's.
 if command -v swiftc >/dev/null; then
   if python3 - "$HERE/native/App/AlarmsPlugin.swift" "$T/standin.swift" <<'PYX'
 import sys
@@ -415,17 +417,20 @@ open(sys.argv[2], 'w').write('''struct AlarmItem { var id: String; var kind: Str
 struct AlarmPlan {
     var fbStage: Bool
     var fbBus: Bool
-    var fbLastcall: Bool? = nil''' + s[i:j + 1] + '''
+    var fbLastcall: Bool? = nil
+    var fbBus20: Bool? = nil''' + s[i:j + 1] + '''
 }
 let items = [AlarmItem(id: "bus|t1|off:2026-10-23", kind: "bus", tour: "t1"), AlarmItem(id: "bus|t1|s22", kind: "bus", tour: "t1"),
-             AlarmItem(id: "stage|t1|s22", kind: "stage", tour: "t1"), AlarmItem(id: "lastcall|t1|s22", kind: "lastcall", tour: "t1")]
-let gets = AlarmPlan(fbStage: false, fbBus: false, fbLastcall: true), none = AlarmPlan(fbStage: true, fbBus: true, fbLastcall: true)
-print([gets, none].map { p in items.map { p.standIn($0) ? "1" : "0" }.joined() }.joined(separator: " "))
+             AlarmItem(id: "stage|t1|s22", kind: "stage", tour: "t1"), AlarmItem(id: "lastcall|t1|s22", kind: "lastcall", tour: "t1"),
+             AlarmItem(id: "bus20|t1|off:2026-10-23", kind: "bus20", tour: "t1"), AlarmItem(id: "bus20|t1|s22", kind: "bus20", tour: "t1")]
+let gets = AlarmPlan(fbStage: false, fbBus: false, fbLastcall: true), none = AlarmPlan(fbStage: true, fbBus: true, fbLastcall: true, fbBus20: true)
+let strict = AlarmPlan(fbStage: false, fbBus: false, fbLastcall: false, fbBus20: false)
+print([gets, none, strict].map { p in items.map { p.standIn($0) ? "1" : "0" }.joined() }.joined(separator: " "))
 ''')
 PYX
   then
-    [ "$(swiftc -o "$T/standin" "$T/standin.swift" 2>/dev/null && "$T/standin")" = "1001 1111" ] \
-      && ok "stand-ins: none where the server's alert comes at that minute, always at a day off's bus call and the guest list last call" \
+    [ "$(swiftc -o "$T/standin" "$T/standin.swift" 2>/dev/null && "$T/standin")" = "100111 111111 100010" ] \
+      && ok "stand-ins: none where the server's alert comes at that minute, always at a day off's bus call (and its 20 minute warning), the guest list last call and the bus call warning" \
       || bad "AlarmPlan.standIn"
   else
     bad "AlarmPlan.standIn not found in AlarmsPlugin.swift"
@@ -433,6 +438,84 @@ PYX
 else
   echo "  skip  the stand-in rule (no swiftc on this Mac)"
 fi
+# The kinds (Oct 23: the bus call warning, "bus20"), cut out the same way and run. AlarmItem(js:) takes "bus20" (its
+# words when none came: BUS CALL - 20MIN WARNING) and leaves out a kind it does not know, that item alone; an older build
+# (the same text with the allowlist it had before Oct 23) leaves out "bus20" and keeps every other alarm whole, from the
+# page's sync and the server's hand-over alike (both read items one at a time with compactMap, and the hand-over then
+# replaces only that tour's items). Its version check reads the tour's version alone, never the kinds. AlarmPlan.wants:
+# the bus call warning follows the bus call alarm's switch (bus).
+if command -v swiftc >/dev/null; then
+  if python3 - "$HERE/native/App/AlarmsPlugin.swift" "$HERE/native/App/DayBarPlugin.swift" "$T/kinds.swift" <<'PYX'
+import sys
+s = open(sys.argv[1]).read()
+js = open(sys.argv[2]).read()
+def cut(text, head):
+    i = text.index(head)
+    j, d = text.index('{', i), 0
+    while True:
+        d += {'{': 1, '}': -1}.get(text[j], 0)
+        if d == 0: break
+        j += 1
+    return text[i:j + 1]
+init = cut(s, '\n    init?(js o: [String: Any]) {')
+wants = cut(s, '\n    func wants(_ it: AlarmItem) -> Bool {')
+now = 'kind == "stage" || kind == "bus" || kind == "lastcall" || kind == "bus20",'
+assert init.count(now) == 1, 'the allowlist'
+old = init.replace(now, 'kind == "stage" || kind == "bus" || kind == "lastcall",')
+fields = 'var id: String; var kind: String; var at: Double; var tour: String; var title: String; var body: String'
+open(sys.argv[3], 'w').write('enum DayBarJS {' + cut(js, '\n    static func str(_ v: Any?) -> String {') + '''
+    // (The plugin's num also reads NSNumber, which needs Foundation; these checks are plain Swift, so plain numbers here.)
+    static func num(_ v: Any?) -> Double { (v as? Double) ?? (v as? Int).map { Double($0) } ?? 0 }
+}
+struct AlarmItem { ''' + fields + init + '''
+}
+struct OldItem { ''' + fields + old + '''
+}
+struct AlarmPlan {
+    var stage: Bool
+    var bus: Bool
+    var lastcall: Bool? = nil''' + wants + '''
+}
+let raw: [[String: Any]] = [
+    ["id": "stage|t1|s22", "kind": "stage", "at": 1792711800, "tour": "t1", "title": "30 MIN UNTIL STAGE TIME", "body": "The Fillmore"],
+    ["id": "bus20|t1|s22", "kind": "bus20", "at": 1792732200, "tour": "t1", "title": "", "body": "The Fillmore"],
+    ["id": "bus|t1|s22", "kind": "bus", "at": 1792733400, "tour": "t1", "title": "BUS CALL", "body": "The Fillmore"],
+    ["id": "lastcall|t1|s23", "kind": "lastcall", "at": 1792790100, "tour": "t1", "title": "GUEST LIST LAST CALL", "body": ""],
+    ["id": "later|t1|s23", "kind": "later", "at": 1792800000, "tour": "t1", "title": "A KIND FROM LATER", "body": ""]]
+let fresh = raw.compactMap { AlarmItem(js: $0) }
+let older = raw.compactMap { OldItem(js: $0) }
+// (The hand-over, as AlarmDesk.handOver keeps it: that tour's items replaced, another tour's left alone.)
+let kept = [OldItem(js: ["id": "bus|t2|s22", "kind": "bus", "at": 1792733000, "tour": "t2"])!]
+let after = kept.filter { $0.tour != "t1" } + older
+let on = AlarmPlan(stage: true, bus: true), busOff = AlarmPlan(stage: true, bus: false)
+print(fresh.map { $0.kind }.joined(separator: ",") + " " + fresh[1].title)
+print(older.map { $0.id + "@" + String(Int($0.at)) }.joined(separator: ","))
+print(after.map { $0.id }.joined(separator: ","))
+print([on, busOff].map { p in fresh.map { p.wants($0) ? "1" : "0" }.joined() }.joined(separator: " "))
+''')
+PYX
+  then
+    want="stage,bus20,bus,lastcall BUS CALL - 20MIN WARNING
+stage|t1|s22@1792711800,bus|t1|s22@1792733400,lastcall|t1|s23@1792790100
+bus|t2|s22,stage|t1|s22,bus|t1|s22,lastcall|t1|s23
+1111 1001"
+    [ "$(swiftc -o "$T/kinds" "$T/kinds.swift" 2>/dev/null && "$T/kinds")" = "$want" ] \
+      && ok "kinds: bus20 taken (its words when none came), a kind not known left out alone; an older build keeps every other alarm; the warning follows the bus call switch" \
+      || bad "AlarmItem(js:) kinds / AlarmPlan.wants"
+  else
+    bad "AlarmItem(js:) or AlarmPlan.wants not found in AlarmsPlugin.swift"
+  fi
+else
+  echo "  skip  the kinds (no swiftc on this Mac)"
+fi
+# ...and where the items are read: one at a time (compactMap) in the page's sync and the server's hand-over, the
+# hand-over replacing only its own tour's, its version check on the version alone.
+AP="$HERE/native/App/AlarmsPlugin.swift"
+grep -qF 'plan.items = raw.compactMap { AlarmItem(js: $0) }' "$AP" \
+  && grep -qF 'let fresh = ((a["i"] as? [Any]) ?? []).compactMap { ($0 as? [String: Any]).flatMap { AlarmItem(js: $0) } }' "$AP" \
+  && grep -qF 'guard var plan = AlarmPlan.load(), plan.uid == u, HandOverMarks.newer(v, than: HandOverMarks.had(t)) else { return false }' "$AP" \
+  && grep -qF 'plan.items = plan.items.filter { $0.tour != t } + fresh' "$AP" \
+  && ok "the sync and the hand-over read items one at a time; the version check never reads a kind" || bad "where the plugin reads its items"
 # The hand-overs' order (HandOverMarks.newer; review of rc-1, Oct 22), cut out the same way and run: the first one for a
 # tour is set, a newer one or one at the same version is set, an older one never (mute A, then unmute B a moment later:
 # if B's reaches the phone first, A's is dropped and B keeps the bus call alarm), and one with no version (a server from
@@ -491,5 +574,19 @@ grep -q '^    push_capability.call(app_id) if pushes$' "$F" && ! grep -q 'push_c
 # the recipe refuses a bad name
 ( APP_ID="not a bundle id" bash prepare.sh names ) >/dev/null 2>&1 && bad "a bad bundle ID was accepted" || ok "a bad bundle ID is refused"
 ( APP_NAME="This name is much longer than thirty characters" bash prepare.sh names ) >/dev/null 2>&1 && bad "a 49-character name was accepted" || ok "an over-long App Store name is refused"
+
+# ---- one check that is not the phone's (0216): every migration file says who may run or read what it makes ------
+# (tools/check_migrations.js, the database's lock kept in the files. It reads the real repository, read-only.)
+JSC=/System/Library/Frameworks/JavaScriptCore.framework/Versions/Current/Helpers/jsc
+if [ -x "$JSC" ]; then
+  if out=$(cd "$HERE/.." && "$JSC" tools/check_migrations.js -- supabase/migrations/*.sql 2>&1); then
+    ok "$(echo "$out" | tail -1)"
+  else
+    echo "$out" | grep -E "PROBLEM|Error" | head -8 | sed 's/^/        /' || true
+    bad "a migration leaves something open, or shut, without saying so (tools/check_migrations.js)"
+  fi
+else
+  echo "  skip  the migration locks (no JavaScriptCore on this Mac)"
+fi
 
 if [ "$fail" = 0 ]; then echo "selftest: all good"; else echo "selftest: FAILED"; exit 1; fi

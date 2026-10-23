@@ -42,7 +42,7 @@ DAYBAR_ID="$APP_ID.DayBar"
 # The alarms (Devin, Oct 22): the words iOS shows under its one question, "Allow Greenroom to set alarms?" (AlarmKit
 # refuses to set any alarm for an app without them). iOS 26 and newer only; older iPhones never see it. (Oct 22: and the
 # guest list's last call, 15 minutes before it: the day sheet's, else the tour's LAST CALL TIME.)
-ALARM_WORDS="Greenroom rings an alarm 30 minutes before your band’s set, at bus call, and 15 minutes before the guest list’s last call, from your tour’s day sheet and last call time. You can turn each one off in Greenroom’s Settings, Notifications."
+ALARM_WORDS="Greenroom rings an alarm 30 minutes before your band’s set, 20 minutes before bus call, at bus call, and 15 minutes before the guest list’s last call, from your tour’s day sheet and last call time. You can turn each one off in Greenroom’s Settings, Notifications."
 
 PB=/usr/libexec/PlistBuddy
 IOS_DIR="$HERE/ios/App"

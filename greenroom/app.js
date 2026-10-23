@@ -707,7 +707,13 @@
       delete store.local.tours[id]; saveLocal(); render(); return true;
     }
   };
-  function go(route) {
+  var motion = null, menuUnder = null;
+  var SLIDE_MS = 320, SLIDE_EASE = 'cubic-bezier(0.25, 0.45, 0.05, 1)', SLIDE_UNDER = 11.4;
+  function go(route, o) {
+    o = o || {};
+    if (motion && !o.keep) motion.finish();
+    if (menuUnder && !(route.name === 'mainmenu' && route.back === menuUnder.back) &&
+        !(route.back && route.back.name === 'mainmenu' && route.back.back === menuUnder.back)) menuUnder = null;
     if (!(route.name === 'wizard' && route.step === 2)) S.wzPeople = null;
     if (route.name === 'home' && actingAs()) { S.fromMap = {}; route = actHome(); }
     if (route.name === 'tour' && route.view === 'details') { S.dsIndex = null; S.dsMore = null; }
@@ -729,14 +735,15 @@
       else if (key !== prevKey && !(S.route && S.route.back === route) &&
         !(route.name === 'artist' && S.route && S.route.name === 'tour')) delete S.fromMap[key];
     }
-    if (route.name === 'mainmenu' && route.fresh) S.menuIn = true;
     if (S.route && S.route.name === 'home' && route.name !== 'home') S.homeY = window.scrollY;
     var backToTabs = route === PF_HOME && S.homeY;
-    if (route.name === 'home' && !backToTabs) S.pfMinH = 0;
+    var held = G.isObj(o.back) ? o.back : null;
+    if (route.name === 'home' && !backToTabs && !held) S.pfMinH = 0;
     if (route.name === 'home') artistAsks(true);
     S.route = route;
-    S.xsAt = null;
-    S.focusOnRender = !backToTabs;
+    if (!held) S.xsAt = null;
+    if (held) { S.dsIndex = held.dsIndex; S.dsMore = held.dsMore; S.cardsSide = held.cardsSide; S.wzPeople = held.wzPeople; }
+    S.focusOnRender = o.keep ? false : !backToTabs;
     window.scrollTo(0, 0);
     render(true);
     if (backToTabs) window.scrollTo(0, S.homeY);
@@ -810,6 +817,8 @@
     var newBar = node && node.querySelector ? node.querySelector('nav.tabbar') : null;
     if (oldBar && newBar && oldBar.getAttribute('data-sig') === newBar.getAttribute('data-sig')) newBar.replaceWith(oldBar);
     view.replaceChildren(node);
+    if (motion) slideRedrawn(view);
+    menuSwipeArm();
     if (key) {
       var el = view.querySelector('[data-k="' + key + '"]');
       if (el) {
@@ -827,7 +836,7 @@
     if (todoSheetLive) todoSheetLive();
     myPayRedraw();
     if (S.route.name === 'tour' || S.route.name === 'offtour') mountHero();
-    var payChart = $('.pay-chart');
+    var payChart = $('.pay-chart', $('#view'));
     if (payChart) drawChart(payChart);
     else teardownMinibar();
     if (S.focusOnRender) {
@@ -952,12 +961,14 @@
     }
   });
   function confirmSheet(o) {
+    var act = null;
     openSheet(function () {
       return [
         h('h2', { class: 'sh-title' }, o.title),
         o.body ? h('p', { class: 'sh-sub' }, o.body) : null,
+        o.extra || null,
         h('div', { class: 'stack' },
-          h('button', {
+          act = h('button', {
             class: 'btn block ' + (o.danger ? 'danger-solid' : 'primary'), type: 'button',
             onclick: async function (e) {
               e.currentTarget.disabled = true;
@@ -972,6 +983,7 @@
           }, o.cancel || 'Cancel'))
       ];
     }, { label: o.title, onClose: o.onClose });
+    return act;
   }
   function bookPlanned(c) { return !!G.spentOf && G.round(c.out) > G.round(G.spentOf(c)); }
   function heroCaption(c, book) {
@@ -1405,7 +1417,7 @@
     hero.classList.add(st);
   }
   function mountHero() {
-    var hero = $('#hero');
+    var hero = $('#hero', $('#view'));
     if (!hero) { teardownMinibar(); return; }
     var id = hero.__id || S.route.id;
     var c = hero.__calc;
@@ -1645,7 +1657,7 @@
     $('.name', bar).textContent = t.name || '';
     $('.num', bar).textContent = money(net == null ? c.net : net, true);
     if (S.io) S.io.disconnect();
-    var hero = $('#hero');
+    var hero = $('#hero', $('#view'));
     if (!hero || !('IntersectionObserver' in window)) return;
     S.io = new IntersectionObserver(function (entries) {
       var e = entries[entries.length - 1];
@@ -1794,6 +1806,10 @@
   }
   function artistOf(t) { return String(t && t.artist || '').trim(); }
   function isOffTour(t) { return !!(t && t.kind === 'offtour'); }
+  function offPayOf(artist) {
+    var id = artist ? offTourOf(artist) : null;
+    return id && S.mode === 'db' && createdTour(id) ? id : null;
+  }
   function offTourOf(artist) {
     var key = String(artist || '').trim().toLowerCase(), hit = null;
     var look = function (t, id) { if (!hit && isOffTour(t) && !t.deletedAt && artistOf(t).toLowerCase() === key) hit = id; };
@@ -2647,6 +2663,9 @@
     }
     var roles = personRoles(card);
     var tours = Array.isArray(card.tours) ? card.tours : [];
+    if (preview) tours = tours.filter(function (t) {
+      return G.tourLiveOnGreenroom(getTour(t.id) || { shows: { first: { date: t.first } } });
+    });
     var logos = G.isObj(card.logos) ? card.logos : {};
     var first = String(card.name || '').trim().split(/\s+/)[0] || 'They';
     var byArtist = new Map(), OTHER_TOURS = 'Other tours';
@@ -2744,11 +2763,12 @@
         if (conf) r.role = conf.role;
       }
       if (!r.own) return t.artistId
-        ? historyTourRow(t.artistId, r, null, { artist: r.artist, role: rolesShort(r.role || t.role || '') })
+        ? historyTourRow(t.artistId, r, null, { artist: r.artist, role: rolesShort(r.role || t.role || ''), noFlyer: tab !== 'tours' })
         : timelineRow(r, null, true);
+      var si = tab === 'tours' ? standInTour(creditList.filter(function (p) { return p && p.artistId; }), r, r.artist) : null;
       return timelineRow(r, function () {
         if (!preview && t.mine && getTour(t.id)) openTour(t.id); else openTourCard(t.id, uid, t);
-      }, true);
+      }, true, tab === 'tours' ? appTourFlyerBtn(!preview && t.mine ? t.id : null, r.name, si, si && si.artistId, false) : null);
     });
     var peer = { name: card.name, handle: card.handle, avatar: card.avatar, verified: card.verified };
     var pChecked = personChecked(card.verified, card.roadStats, card.endorsements);
@@ -2792,7 +2812,7 @@
       tab === 'artists'
         ? (artistRows.length ? h('ul', { class: 'tour-list rows vp-list' }, artistRows)
             : emptyState('No artists yet', first + ' hasn\u2019t added any artists yet.'))
-        : tab === 'stats' ? personFlowers(card)
+        : tab === 'stats' ? personFlowers(preview ? Object.assign({}, card, { tours: tours }) : card)
         : tab === 'top10' ? vpTopTen(uid, first)
         : (tourRows.length ? h('ul', { class: 'tour-list rows vp-list' }, tourRows)
             : emptyState('No tours yet', first + ' hasn\u2019t been on a tour in Greenroom yet.')),
@@ -3680,35 +3700,52 @@
     var known = S.actCards && S.actCards[artistId] && S.actCards[artistId].card;
     var on = {}, vouched = {};
     ((known && known.members) || []).forEach(function (m) { on[m.userId] = m.kind; if (m.endorsed || (m.kind === 'band' && m.settled)) vouched[m.userId] = true; });
-    var pageConfirmed = function () {
-      var c = S.actCards && S.actCards[artistId] && S.actCards[artistId].card;
-      return !!(c && c.verified);
-    };
+    var asked = {};
     var results = h('div', { class: 'am-results' });
-    var timer = 0, seq = 0, last = [];
+    var timer = 0, seq = 0, last = [], noteNow = null;
     var marks = checkList();
     var row = function (p) {
       var roles = personRoles(p);
-      var has = on[p.userId];
-      var btn = h('button', { class: 'am-add' + (has ? ' on' : ''), type: 'button' }, has === kind ? 'Added' : has ? (has === 'band' ? 'A member' : 'On the crew') : 'Add');
+      var has = on[p.userId], ask = asked[p.userId];
+      var btn = h('button', { class: 'am-add' + (has || ask === kind ? ' on' : ''), type: 'button' },
+        has === kind ? 'Added' : ask === kind ? 'Asked' : has ? (has === 'band' ? 'A member' : 'On the crew') : 'Add');
       btn.onclick = async function () {
         if (vouched[p.userId] && on[p.userId] === kind) { toast('To take them off, go to their name in the list on the page.'); return; }
         if (vouched[p.userId] && on[p.userId] === 'band' && kind === 'crew') { toast('They are a member. Letting a member go is done from the Members list.'); return; }
+        var first = String(p.name || 'They').split(' ')[0];
         btn.disabled = true;
         try {
-          if (on[p.userId] === kind) {
+          if (asked[p.userId] === kind && B.withdrawListAsk) {
+            await B.withdrawListAsk(artistId, p.userId);
+            delete asked[p.userId];
+            toast('Ask taken back.');
+          } else if (on[p.userId] === kind) {
             var r = await B.removeArtistMember(artistId, p.userId);
             if (r && r.pending) toast('Asked. Waiting on the other members.'); else delete on[p.userId];
+          } else if (B.askToList) {
+            var a = await B.askToList(artistId, p.userId, kind);
+            if (a && a.listed) on[p.userId] = a.kind || kind;
+            else if (a && a.asked) {
+              asked[p.userId] = kind;
+              toast('Asked. ' + first + ' is listed once they say yes in their app.');
+            } else {
+              btn.disabled = false;
+              toast(a && a.why === 'former_member' ? 'They were a Member here, so they can\u2019t be listed as crew. Add them under Members instead.'
+                : a && a.why === 'wait' ? first + ' said no to this less than a week ago. You can ask again after that.'
+                : a && a.why === 'many' ? 'Fifty people are waiting on an answer from you. Wait for some of them first.'
+                : a && a.why === 'unconfirmed' ? 'Until Greenroom has confirmed this page, you can ask people you\u2019ve toured with. ' +
+                  'Anyone else can open the page and tap Endorsements to ask.'
+                : 'That didn\u2019t go through. Try again.', a && a.why === 'unconfirmed' ? 9000 : 6000);
+              return;
+            }
           }
           else { await B.addArtistMember(artistId, p.userId, kind); on[p.userId] = kind; }
-          actOf(artistId, true); staleCards();
-          paint();
+          actOf(artistId, true); staleCards(); listAsksSentOf(artistId, true);
+          paint(noteNow);
         } catch (x) {
           btn.disabled = false;
           if (x && x.code === 'former_member') toast('They were a Member here, so they can\u2019t be listed as crew. Add them under Members instead.', 6000);
-          else if (x && x.code === 'permission' && !pageConfirmed()) {
-            toast('Until Greenroom has confirmed this page, you can add people you\u2019ve toured with. Anyone else can open the page and tap Endorsements to ask.', 9000);
-          }
+          else if (x && x.code === 'cant-send') toast('You can\u2019t ask ' + first + '.');
           else saveFailed('member', x);
         }
       };
@@ -3720,9 +3757,16 @@
         btn);
     };
     var paint = function (note) {
+      noteNow = note || null;
       results.replaceChildren.apply(results, note ? [h('p', { class: 'note' }, note)] : last.map(row));
       marks.ask();
     };
+    if (B && typeof B.listAsksSent === 'function') {
+      B.listAsksSent(artistId).then(function (l) {
+        (Array.isArray(l) ? l : []).forEach(function (x) { if (x && x.userId) asked[x.userId] = x.kind; });
+        if (results.isConnected) paint(noteNow);
+      }, function () {   });
+    }
     var search = function (v) {
       clearTimeout(timer);
       v = String(v || '').trim();
@@ -3744,7 +3788,8 @@
     openSheet(function () {
       return [
         h('h2', { class: 'sh-title ca-title' }, band ? 'Add members' : 'Add crew members'),
-        h('p', { class: 'sh-sub' }, (band ? 'Who are the members? The people actually in the band; a hired player goes under Crew.' : 'Who\u2019s on the crew? Hired players on stage too.') + ' Search for their Greenroom account.'),
+        h('p', { class: 'sh-sub' }, (band ? 'Who are the members? The people actually in the band; a hired player goes under Crew.' : 'Who\u2019s on the crew? Hired players on stage too.') + ' Search for their Greenroom account. ' +
+          'Each one says yes in their own app before they\u2019re listed.'),
         h('div', { class: 'rv-find am-find' }, icon('search', 17),
           h('input', { class: 'input rv-search', type: 'search', placeholder: 'Search name or @username', autocomplete: 'off',
             autocapitalize: 'none', autocorrect: 'off', spellcheck: 'false', 'aria-label': 'Search accounts',
@@ -3843,9 +3888,30 @@
         manage && !m.pending && !m.leaving ? h('button', { class: 'pe-x', type: 'button', 'aria-label': 'Take ' + (m.name || 'them') + ' off',
           onclick: function () { openLetGo(id, card, m); } }, icon('close', 14)) : null);
     };
+    var askedRows = function (kind) {
+      if (!manage) return [];
+      var l = listAsksSentOf(id).val;
+      return (Array.isArray(l) ? l : []).filter(function (x) { return x && x.userId && x.kind === kind; }).map(function (x) {
+        var who = x.name || 'Someone';
+        return h('li', { class: 'am-li' },
+          h('div', { class: 'fl-row' }, personPhoto(x, 'xs'),
+            h('span', { class: 'lr-text' }, h('span', { class: 'lr-title fl-name' }, who),
+              h('span', { class: 'lr-sub' }, [x.handle ? '@' + x.handle : '', 'Waiting on their yes'].filter(Boolean).join(' \u00b7 ')))),
+          h('span', { class: 'act-tag aq-pending' }, 'Asked'),
+          h('button', { class: 'pe-x', type: 'button', 'aria-label': 'Take back the ask to ' + who,
+            onclick: function () {
+              confirmSheet({ title: 'Take back the ask to ' + who + '?', body: 'They won\u2019t be asked to join ' + card.name + '\u2019s page any more. You can ask again later.',
+                action: 'Take it back', onConfirm: async function () {
+                  try { await B.withdrawListAsk(id, x.userId); listAsksSentOf(id, true); toast('Ask taken back.'); return true; }
+                  catch (e) { saveFailed('member', e); return false; }
+                } });
+            } }, icon('close', 14)));
+      });
+    };
     var people = function (list, kind) {
+      var rows = list.map(memberRow).concat(askedRows(kind));
       return [
-        list.length ? h('ul', { class: 'tour-list rows vp-list am-list' }, list.map(memberRow))
+        rows.length ? h('ul', { class: 'tour-list rows vp-list am-list' }, rows)
           : unclaimed ? emptyState('Nobody runs this page yet', kind === 'band' ? 'Once ' + card.name + ' claims it, their Members show up here.'
               : 'Crew who ask to be listed show up here. Whoever claims the page can keep them or take them off.')
           : emptyState(kind === 'band' ? 'No members yet' : 'No crew yet',
@@ -3870,15 +3936,16 @@
     };
     var tourRows = G.tourTimeline(tours, pastTours, G.tourToday()).map(function (r) {
       var t = r.tour;
-      if (!r.own) return historyTourRow(id, r, t.kind === 'shows' ? null : sayLine(t, t.kind === 'festival'));
+      if (!r.own) return historyTourRow(id, r, t.kind === 'shows' ? null : sayLine(t, t.kind === 'festival'), tab === 'tours' ? null : { noFlyer: true });
       var same = canSay && r.first ? pastTours.filter(function (p) {
         var a = String((p && p.first) || ''), b = String((p && (p.last || p.first)) || '');
         return p && p.kind !== 'festival' && p.kind !== 'shows' && !!a && a <= r.last && b >= r.first;
       }).sort(function (x, y) { return G.num(y.n) - G.num(x.n); })[0] : null;
+      var si = tab === 'tours' ? standInTour(pastTours, r) : null;
       var li = timelineRow(r, function () {
         if ((manage || !card.mine) && t.mine && getTour(t.id)) openTour(t.id);
         else openTourCard(t.id, null, t, id, same ? function () { return sayLine(same); } : null);
-      }, false);
+      }, false, tab === 'tours' ? appTourFlyerBtn(t.mine ? t.id : null, r.name, si, id, manage) : null);
       var line = same ? sayLine(same) : null;
       if (line) li.append(line);
       return li;
@@ -4342,19 +4409,24 @@
     var B = window.GR_BACKEND;
     return S.mode === 'db' && !!(B && B.placeSearchOn && B.placeSearch);
   }
-  function placeNearNow() {
+  function placeDayNow() {
     var tourId = profileTourId();
     var t = tourId ? getTour(tourId) : null;
-    if (!t || !tourIsLive(t)) return '';
+    if (!t || !tourIsLive(t)) return null;
     var got = overviewDays(t);
-    if (!got) return '';
+    if (!got) return null;
     var entry = got.days[got.index];
     var today = G.tourToday();
     if (entry.date < today && !entry.show) {
       entry = got.days.filter(function (x) { return x.show; }).pop() || entry;
     }
     var s = entry.show, off = s ? null : offDayFor(t, entry.date);
-    return String((s ? s.city : off && off.city) || '').trim();
+    var city = String((s ? s.city : off && off.city) || '').trim();
+    return city ? { city: city, venue: s ? String(s.venue || '').trim() : '' } : null;
+  }
+  function placeNearNow() {
+    var d = placeDayNow();
+    return d ? d.city : '';
   }
   function spotGeoFrom(p, nameNow) {
     if (!p || String(p.name || '').trim().slice(0, 80) !== nameNow) return null;
@@ -4377,12 +4449,154 @@
     if (state) return city + ', ' + state;
     return country && country !== 'United States' ? city + ', ' + country : city;
   }
-  function spotRowEl(x) {
+  function spotRowEl(x, f) {
+    f = f || {};
+    var when = f.open === true || f.open === false
+      ? h('span', { class: 'sp-when ' + (f.open ? 'pos' : 'neg') }, f.open ? 'Open' : 'Closed') : null;
+    var far = f.far ? h('span', { class: 'sp-far' }, f.far) : null;
     return h('li', { class: 'am-li td-li' },
       h('button', { class: 'fl-row td-open', type: 'button', onclick: function () { openSpotCard(x, { own: true }); } },
         h('span', { class: 'lr-text' },
           h('span', { class: 'lr-title' }, x.name, h('span', { class: 'fw-cat' }, spotKindLabel(x.kind))),
-          x.note ? h('span', { class: 'lr-sub' }, x.note) : null)));
+          x.note ? h('span', { class: 'lr-sub' }, x.note) : null),
+        when || far ? h('span', { class: 'sp-facts' }, when, far) : null));
+  }
+  function spotGroups(all, nowKey) {
+    var groups = [], slot = Object.create(null);
+    all.forEach(function (x) {
+      var k = G.roadCityKey(String(x.city || '').split(',')[0]);
+      var g = slot[k];
+      if (!g) { g = slot[k] = { key: k, city: String(x.city || '').trim() || 'Somewhere', items: [], newest: '' }; groups.push(g); }
+      g.items.push(x);
+      var at = String(x.createdAt || '');
+      if (at > g.newest) g.newest = at;
+    });
+    groups.sort(function (a, b) {
+      var an = !!nowKey && a.key === nowKey, bn = !!nowKey && b.key === nowKey;
+      if (an !== bn) return an ? -1 : 1;
+      return a.newest < b.newest ? 1 : a.newest > b.newest ? -1 : a.city.localeCompare(b.city);
+    });
+    return groups;
+  }
+  function spotListFacts(x, ctx, now) {
+    var pt = spotApplePt(x);
+    var town = String(x.city || '').split(',')[0].trim();
+    var known = x.id != null && ctx.hrs ? ctx.hrs[x.id] : null;
+    var hrs = known && known.hours ? G.hoursNow(known.hours, now || new Date()) : null;
+    return {
+      open: hrs && spotIsLocal({ here: ctx.here || null }, pt, town) ? hrs.open : null,
+      far: pt && ctx.ref ? G.geoMeters(ctx.ref.lat, ctx.ref.lon, pt.lat, pt.lon) : null
+    };
+  }
+  function spotsOrder(rows) {
+    var tier = function (r) { return r.f.open === true ? 0 : r.f.far != null ? 1 : 2; };
+    return rows.map(function (r, i) { return { r: r, i: i, t: tier(r) }; }).sort(function (a, b) {
+      if (a.t !== b.t) return a.t - b.t;
+      var am = a.r.f.far, bm = b.r.f.far;
+      if (am != null && bm != null && am !== bm) return am - bm;
+      if ((am == null) !== (bm == null)) return am == null ? 1 : -1;
+      return a.i - b.i;
+    }).map(function (o) { return o.r; });
+  }
+  function spotsHoursAsk(items) {
+    var B = window.GR_BACKEND;
+    if (!(B && B.spotDetails && B.spotDetailsOn && B.spotDetailsOn())) return;
+    var hrs = S.spotHrs = S.spotHrs || Object.create(null);
+    var q = S.spotHrsQ = S.spotHrsQ || { list: [], busy: false, now: null, timer: 0 };
+    items.forEach(function (x) {
+      if (x.id == null || hrs[x.id] || x.id === q.now || q.list.indexOf(x.id) >= 0) return;
+      q.list.push(x.id);
+    });
+    if (!q.busy && !q.timer && q.list.length) q.timer = setTimeout(spotsHoursNext, 0);
+  }
+  function spotsHoursNext() {
+    var q = S.spotHrsQ, B = window.GR_BACKEND;
+    if (!q) return;
+    q.timer = 0;
+    if (q.busy || !q.list.length || !B || !B.spotDetails) return;
+    var id = q.list.shift(), done = false;
+    q.busy = true; q.now = id;
+    var finish = function (a) {
+      if (done) return;
+      done = true;
+      S.spotHrs[id] = { hours: a && G.isObj(a.details) ? String(a.details.hours || '') : '', at: Date.now() };
+      q.busy = false; q.now = null;
+      render(true);
+      if (q.list.length && !q.timer) q.timer = setTimeout(spotsHoursNext, 0);
+    };
+    setTimeout(function () { finish(null); }, 20000);
+    B.spotDetails(id, function (a) { if (!a || !a.waiting) finish(a); }, false);
+  }
+  function spotsHereQuiet() {
+    var was = S.spotHere, fresh = was && Date.now() - was.at < 300e3 ? was : null;
+    if (fresh || (S.spotHereAsked && Date.now() - S.spotHereAsked < 60e3)) return fresh;
+    S.spotHereAsked = Date.now();
+    spotHereQuiet(function (here) { if (here) render(true); });
+    return null;
+  }
+  function spotPlainName(s) {
+    var t = String(s || '');
+    try { t = t.normalize('NFD').replace(/[\u0300-\u036f]/g, ''); } catch (e) {   }
+    return t.toLowerCase().replace(/&/g, ' and ').replace(/['\u2018\u2019`]/g, '')
+      .replace(/[^\p{L}\p{N}]+/gu, ' ').trim().replace(/^the /, '');
+  }
+  function spotNameAlike(want, got) {
+    var a = spotPlainName(want), b = spotPlainName(got);
+    if (!a || !b) return 0;
+    if (a === b) return 1;
+    var short = a.length <= b.length ? a : b, long = short === a ? b : a;
+    if (short.length >= 4 && (' ' + long + ' ').indexOf(' ' + short + ' ') >= 0) return 0.9;
+    var pairs = function (s) {
+      var t = s.replace(/ /g, ''), out = [];
+      for (var i = 0; i < t.length - 1; i++) out.push(t.slice(i, i + 2));
+      return out;
+    };
+    var dice = function (x, y) {
+      if (!x.length || !y.length) return 0;
+      var rest = y.slice(), hit = 0;
+      x.forEach(function (p) { var i = rest.indexOf(p); if (i >= 0) { hit += 1; rest.splice(i, 1); } });
+      return 2 * hit / (x.length + y.length);
+    };
+    return Math.max(dice(a.split(' '), b.split(' ')), dice(pairs(a), pairs(b)));
+  }
+  function spotPointOf(p) {
+    return G.isObj(p) && typeof p.lat === 'number' && typeof p.lon === 'number' && isFinite(p.lat) && isFinite(p.lon) &&
+      Math.abs(p.lat) <= 90 && Math.abs(p.lon) <= 180;
+  }
+  function spotsVenuePick(rows, venue, town) {
+    var tk = G.roadCityKey(town), best = null;
+    (Array.isArray(rows) ? rows : []).forEach(function (p) {
+      if (!spotPointOf(p) || !tk || G.roadCityKey(String(p.city || '')) !== tk) return;
+      var score = spotNameAlike(venue, p.name);
+      if (score >= 0.75 && (!best || score > best.score)) best = { score: score, lat: p.lat, lon: p.lon };
+    });
+    return best ? { lat: best.lat, lon: best.lon, label: String(venue).trim() } : null;
+  }
+  var SPOT_TOWN_KINDS = ['city', 'town', 'village', 'municipality', 'hamlet', 'borough'];
+  function spotsTownPick(rows, town) {
+    var tk = G.roadCityKey(town);
+    var hit = (Array.isArray(rows) ? rows : []).filter(function (p) {
+      return spotPointOf(p) && !!tk && SPOT_TOWN_KINDS.indexOf(String(p.kind || '')) >= 0 && G.roadCityKey(String(p.name || '')) === tk;
+    })[0];
+    return hit ? { lat: hit.lat, lon: hit.lon, label: String(town).trim() } : null;
+  }
+  function spotsRefNow() {
+    var B = window.GR_BACKEND, day = placeDayNow();
+    if (!day || !B || !B.placeFind || !placeFindOn() || !B.placeSearchOn()) return null;
+    var town = day.city.split(',')[0].trim(), tk = G.roadCityKey(town);
+    var key = tk + '|' + day.venue.toLowerCase(), r = S.spotRef;
+    if (!r || r.key !== key || (r.state === 'done' && !r.pt && Date.now() - r.at > 600e3)) {
+      var mine = S.spotRef = { key: key, town: tk, state: 'asking', pt: null, label: '', at: Date.now() };
+      var byTown = function () { return B.placeFind(town, day.city).then(function (rows) { return spotsTownPick(rows, town); }); };
+      (day.venue ? B.placeFind(day.venue, day.city).then(function (rows) { return spotsVenuePick(rows, day.venue, town) || byTown(); }) : byTown())
+        .then(function (got) {
+          if (S.spotRef !== mine) return;
+          mine.state = 'done'; mine.at = Date.now();
+          if (got) { mine.pt = { lat: got.lat, lon: got.lon }; mine.label = got.label; render(true); }
+        }, function () { if (S.spotRef === mine) { mine.state = 'done'; mine.at = Date.now(); } });
+      r = mine;
+    }
+    return r.pt ? r : null;
   }
   function pfSpots() {
     var B = window.GR_BACKEND;
@@ -4396,29 +4610,35 @@
         emptyState('No spots saved yet', 'Save the restaurants, coffee shops, bars, clubs and things you love in each city, and find them again next run.'),
         addBtn];
     }
-    var groups = [], slot = {};
-    all.forEach(function (x) {
-      var k = G.roadCityKey(String(x.city || '').split(',')[0]);
-      var g = slot[k];
-      if (!g) { g = slot[k] = { key: k, city: String(x.city || '').trim() || 'Somewhere', items: [], newest: '' }; groups.push(g); }
-      g.items.push(x);
-      var at = String(x.createdAt || '');
-      if (at > g.newest) g.newest = at;
-    });
-    groups.sort(function (a, b) { return a.newest < b.newest ? 1 : a.newest > b.newest ? -1 : a.city.localeCompare(b.city); });
+    var day = placeDayNow(), nowKey = day ? G.roadCityKey(day.city.split(',')[0]) : '';
+    var groups = spotGroups(all, nowKey);
     S.spotOpen = S.spotOpen || {};
+    var opened = groups.filter(function (g) { return S.spotOpen[g.key] === true; });
+    var ref = nowKey && opened.some(function (g) { return g.key === nowKey; }) ? spotsRefNow() : null;
+    var here = opened.length ? spotsHereQuiet() : null;
+    var miles = G.usesMiles(navigator.language);
     return [
       h('h3', { class: 'mn-h mn-over td-h' }, 'Favorite Local Spots'),
       groups.map(function (g) {
-        var open = S.spotOpen[g.key] === true;
+        var open = S.spotOpen[g.key] === true, rows = null, from = '';
+        if (open) {
+          var ctx = { here: here, hrs: S.spotHrs || null, ref: ref && ref.town === g.key ? ref.pt : null };
+          rows = spotsOrder(g.items.map(function (x) { return { x: x, f: spotListFacts(x, ctx) }; }));
+          if (rows.some(function (r) { return r.f.far != null; })) from = ref.label;
+          spotsHoursAsk(g.items.filter(function (x) {
+            return spotIsLocal({ here: here }, spotApplePt(x), String(x.city || '').split(',')[0].trim());
+          }));
+        }
         return h('section', { class: 'pt-run' + (open ? ' open' : '') },
           h('button', { class: 'pt-run-h', type: 'button', 'aria-expanded': open ? 'true' : 'false',
             onclick: function () { S.spotOpen[g.key] = !open; render(true); } },
             h('span', { class: 'lr-text' },
               h('span', { class: 'lr-title' }, g.city),
-              h('span', { class: 'lr-sub' }, plural(g.items.length, 'spot'))),
+              h('span', { class: 'lr-sub' }, plural(g.items.length, 'spot') + (from ? ' · distances from ' + from : ''))),
             icon('chevron', 16)),
-          open ? h('ul', { class: 'rows td-list sp-list' }, g.items.map(spotRowEl)) : null);
+          open ? h('ul', { class: 'rows td-list sp-list' }, rows.map(function (r) {
+            return spotRowEl(r.x, { open: r.f.open, far: r.f.far != null ? G.distanceText(r.f.far, miles) : '' });
+          })) : null);
       }),
       addBtn
     ];
@@ -4609,11 +4829,10 @@
     var near = placeNearNow();
     return !!town && !!near && G.roadCityKey(town) === G.roadCityKey(near.split(',')[0]);
   }
-  function spotFact(label, value, tone, sub) {
+  function spotFact(label, value, tone) {
     return h('div', { class: 'spc-fact' },
       h('span', { class: 'spc-fact-k' }, label),
-      h('span', { class: 'spc-fact-v' + (tone ? ' ' + tone : '') }, value),
-      sub ? h('span', { class: 'spc-fact-s' }, sub) : null);
+      h('span', { class: 'spc-fact-v' + (tone ? ' ' + tone : '') }, value));
   }
   function spotLine(label, value) {
     return h('div', { class: 'spc-line' }, h('span', { class: 'spc-k' }, label), value);
@@ -4727,17 +4946,17 @@
     var acts = h('div', { class: 'spc-acts' },
       h('a', { class: 'spc-act go', href: 'https://maps.apple.com/?daddr=' + dest + '&dirflg=w', target: '_blank', rel: 'noopener' },
         icon('walk', 20), h('span', null, mins && mins <= 90 ? mins + ' min' : 'Walk')),
-      web ? h('a', { class: 'spc-act', href: web, target: '_blank', rel: 'noopener' }, icon('globe', 20), h('span', null, 'Website')) : null,
-      tel.length >= 5 ? h('a', { class: 'spc-act', href: 'tel:' + tel }, icon('phone', 20), h('span', null, 'Call')) : null);
+      tel.length >= 5 ? h('a', { class: 'spc-act', href: 'tel:' + tel }, icon('phone', 20), h('span', null, 'Call')) : null,
+      web ? h('a', { class: 'spc-act', href: web, target: '_blank', rel: 'noopener' }, icon('globe', 20), h('span', null, 'Website')) : null);
     var facts = [];
     var hrs = d.hours ? G.hoursNow(d.hours, new Date()) : null;
     if (hrs) {
       facts.push(spotIsLocal(st, pt, town)
-        ? spotFact('Hours', hrs.open ? 'Open' : 'Closed', hrs.open ? 'pos' : 'neg', hrs.today === 'Closed' ? '' : hrs.today)
+        ? spotFact('Hours', hrs.open ? 'Open' : 'Closed', hrs.open ? 'pos' : 'neg')
         : spotFact('Hours today', hrs.today));
     }
     if (pt && far != null) {
-      facts.push(spotFact('Distance', G.distanceText(far, G.usesMiles(navigator.language)), '', G.walkText(far)));
+      facts.push(spotFact('Distance', G.distanceText(far, G.usesMiles(navigator.language))));
     } else if (pt && (st.hereState === 'prompt' || st.hereState === 'failed')) {
       facts.push(h('button', { class: 'spc-fact spc-ask', type: 'button',
         onclick: function () {
@@ -5523,9 +5742,68 @@
         icon('chevron', 16));
     }));
   }
+  function listAsksSentOf(artistId, fresh) {
+    var B = window.GR_BACKEND;
+    if (!artistId || !socialOn() || !B || typeof B.listAsksSent !== 'function') return NO_ANSWER;
+    return kept('aq:sent:' + artistId, function () { return B.listAsksSent(artistId); }, fresh);
+  }
+  function myListAsks(fresh) {
+    var B = window.GR_BACKEND;
+    if (!socialOn() || !B || typeof B.myListAsks !== 'function') return NO_ANSWER;
+    return kept('aq:listme', function () { return B.myListAsks(); }, fresh);
+  }
+  function listAskCards() {
+    var list = myListAsks().val;
+    list = (Array.isArray(list) ? list : []).filter(function (x) { return x && x.artistId; });
+    if (!list.length) return null;
+    return h('div', { class: 'tc-asks' }, list.map(function (x) {
+      return h('button', { class: 'tc-ask on', type: 'button', onclick: function () { openListAsk(x); } },
+        h('span', { class: 'tc-ask-t' }, (x.artist || 'An artist') + ' asks to list you as ' + (x.kind === 'band' ? 'a Member' : 'crew') +
+          (x.verified === false ? ' · Not confirmed by Greenroom' : '')),
+        icon('chevron', 16));
+    }));
+  }
+  function openListAsk(x) {
+    var B = window.GR_BACKEND, artist = x.artist || 'This artist', member = x.kind === 'band', busy = false;
+    if (!B || typeof B.answerListAsk !== 'function') return;
+    var answer = async function (yes) {
+      if (busy) return;
+      busy = true;
+      var r = null;
+      try { r = await B.answerListAsk(x.artistId, yes); }
+      catch (e) { busy = false; saveFailed('request', e); return; }
+      busy = false;
+      myListAsks(true); myActs(true); actOf(x.artistId, true); staleCards();
+      closeSheet();
+      toast(!r || r.ok === false
+        ? (r && r.why === 'former_member' ? 'You were a Member of ' + artist + ', so you can\u2019t be listed as crew there.'
+          : r && r.why === 'expired' ? 'That ask ran out after 30 days.' : 'That ask was already settled.')
+        : yes ? 'You\u2019re on ' + artist + '\u2019s page.' : 'Said no. Nothing changed.');
+      render(true);
+    };
+    openSheet(function () {
+      return [
+        h('h2', { class: 'sh-title' }, artist + ' asks to list you'),
+        h('p', { class: 'sh-sub' }, (x.askedBy ? x.askedBy + ', who runs its page, asks' : 'Its page asks') + ' to list you as ' +
+          (member ? 'a Member' + (x.listedAs === 'crew' ? ' (you are on its crew now).' : '.') : 'crew.')),
+        x.verified === false ? h('p', { class: 'note' }, 'Greenroom hasn’t confirmed this page is really ' + artist +
+          '’s. Say yes only if you know who runs it.') : null,
+        h('p', { class: 'note' }, 'Say yes, and you show on ' + artist + '\u2019s page as ' + (member ? 'a Member' : 'crew') +
+          ', it shows on your profile, and the people on that page can see your profile and message you' +
+          (member ? '. Its shows count on your page.' : '.') + ' No tour and no money comes with it.'),
+        h('p', { class: 'note' }, 'Say no, and nothing changes.'),
+        h('div', { class: 'stack' },
+          h('button', { class: 'btn primary block', type: 'button', onclick: function () { answer(true); } }, 'Yes, list me'),
+          h('button', { class: 'btn danger block', type: 'button', onclick: function () { answer(false); } }, 'No'),
+          h('button', { class: 'btn ghost block', type: 'button', onclick: function () { closeSheet(); } }, 'Not now'))
+      ];
+    }, { label: artist + ' asks to list you' });
+  }
   function artistAsks(fresh) {
     var B = window.GR_BACKEND;
+    myListAsks(fresh);
     joinedAsks(fresh);
+    tourInvites(fresh);
     if (!socialOn() || !B || typeof B.artistRequestQueue !== 'function') return NO_ANSWER;
     return kept('aq:all', function () { return B.artistRequestQueue(null); }, fresh);
   }
@@ -5533,6 +5811,57 @@
     var B = window.GR_BACKEND;
     if (!socialOn() || !B || typeof B.unclaimedJoins !== 'function') return NO_ANSWER;
     return kept('aq:joined', function () { return B.unclaimedJoins(null); }, fresh);
+  }
+  function tourInvites(fresh) {
+    var B = window.GR_BACKEND;
+    if (S.mode !== 'db' || !B || typeof B.myInvites !== 'function') return NO_ANSWER;
+    return kept('aq:invites', function () { return B.myInvites(); }, fresh);
+  }
+  function inviteWords(x) {
+    var tour = String((x && x.tour) || '').trim() || 'a tour';
+    var artist = String((x && x.artist) || '').trim();
+    var title = String((x && x.title) || '').trim();
+    return (String((x && x.by) || '').trim() || 'Someone') + ' added you to ' + tour +
+      (artist && artist.toLowerCase() !== tour.toLowerCase() ? ' (' + artist + ')' : '') +
+      ' as ' + (x && x.manager ? 'a Manager' : 'crew') + (title ? ' · ' + title : '');
+  }
+  function inviteCards() {
+    var list = tourInvites().val;
+    list = (Array.isArray(list) ? list : []).filter(function (x) { return x && x.tourId; });
+    if (!list.length) return null;
+    return h('div', { class: 'tc-asks' }, list.map(function (x) {
+      return h('button', { class: 'tc-ask on', type: 'button', onclick: function () { openInviteJoin(x); } },
+        h('span', { class: 'tc-ask-t' }, inviteWords(x)), icon('chevron', 16));
+    }));
+  }
+  function openInviteJoin(x) {
+    var B = window.GR_BACKEND, busy = false, tour = String(x.tour || '').trim() || 'this tour';
+    if (!B || typeof B.acceptInvite !== 'function') return;
+    var join = async function () {
+      if (busy) return;
+      busy = true;
+      var r = null;
+      try { r = await B.acceptInvite(x.tourId); }
+      catch (e) { busy = false; saveFailed('invite', e); return; }
+      busy = false;
+      tourInvites(true);
+      closeSheet();
+      if (r && r.ok) toast(r.already ? 'You’re already on ' + tour + '.' : 'You’re on ' + tour + '.');
+      else if (r && r.why === 'documents') toast('Agree to Greenroom’s documents first, then Join.');
+      else toast('That invite isn’t there any more.');
+      render(true);
+    };
+    openSheet(function () {
+      return [
+        h('h2', { class: 'sh-title' }, 'Join ' + tour + '?'),
+        h('p', { class: 'sh-sub' }, inviteWords(x) + '.'),
+        h('p', { class: 'note' }, 'Join, and you’re on the tour: its people see you on the crew list and can reach you there. ' +
+          'Until you do, nothing about you is shared with it.'),
+        h('div', { class: 'stack' },
+          h('button', { class: 'btn primary block', type: 'button', onclick: function () { join(); } }, 'Join'),
+          h('button', { class: 'btn ghost block', type: 'button', onclick: function () { closeSheet(); } }, 'Not now'))
+      ];
+    }, { label: 'Join ' + tour });
   }
   function joinedPages(artistId) {
     var list = joinedAsks().val, by = {}, out = [];
@@ -5554,7 +5883,7 @@
     }));
   }
   function openJoined(artistId, artist) {
-    var B = window.GR_BACKEND, busy = {}, armed = {}, done = {};
+    var B = window.GR_BACKEND, busy = {}, armed = {}, done = {}, seatsOf = {};
     if (!B || typeof B.answerUnclaimedJoin !== 'function') return;
     var host = h('div', { class: 'tc-host' });
     function tourLine(g) {
@@ -5579,6 +5908,7 @@
       S.creditQueue = null;
       toast(out.ok === false ? 'Already answered.'
         : keep ? first + ' stays on ' + artist + '.'
+        : out.kept ? first + ' is a Member of ' + artist + ' now, so they stay on the page. Members are let go from the Members list.'
         : x.listed ? first + ' is off ' + artist + '. Their tours there are taken back.'
         : first + '\u2019s tours on ' + artist + ' are taken back.');
       if (!people().length) closeSheet();
@@ -5597,6 +5927,8 @@
       fillEl(host, list.map(function (x) {
         var name = x.name || 'Someone', tours = Array.isArray(x.list) ? x.list : [];
         var roles = String(x.role || '').trim();
+        var sts = seatsOf[x.userId] || (seatsOf[x.userId] = yesSeats(artistId, x.userId, 'keep', function () { if (host.isConnected) draw(); }));
+        var notes = yesSeatNotes(sts);
         return h('div', { class: 'ledger cq-card' },
           h('div', { class: 'row' }, personPhoto({ name: x.name, avatar: x.avatar }, 'xs'),
             h('div', { class: 'row-label' }, nameWith(name, marks.mark(x.userId, false)),
@@ -5606,9 +5938,10 @@
           tours.length ? tours.map(tourLine)
             : h('div', { class: 'row cq-note' }, h('div', { class: 'row-label' }, 'Tours', h('span', { class: 'hint cq-said' }, 'None confirmed'))),
           tours.length ? h('div', { class: 'row total' }, h('span', null, tallyText(x)), h('strong', { class: 'amt num' }, plural(G.num(x.shows), 'show'))) : null,
+          notes.length ? h('div', { class: 'row cq-note' }, h('div', { class: 'row-label' }, notes)) : null,
           h('div', { class: 'stack', style: 'margin-top:10px' },
-            h('button', { class: 'btn primary block', type: 'button', disabled: busy[x.userId] || null,
-              onclick: function () { answer(x, true); } }, 'Keep'),
+            h('button', { class: 'btn primary block', type: 'button', disabled: busy[x.userId] || !sts.done || null,
+              onclick: function () { answer(x, true); } }, sts.done ? 'Keep' : 'Checking your tours\u2026'),
             h('button', { class: 'btn danger block', type: 'button', disabled: busy[x.userId] || null,
               onclick: function () { answer(x, false); } },
               armed[x.userId] ? 'Take ' + name.split(' ')[0] + ' off ' + artist + '?' : 'Take off')));
@@ -5639,11 +5972,45 @@
         icon('chevron', 16));
     }));
   }
+  function yesSeats(artistId, userId, why, then) {
+    var B = window.GR_BACKEND, st = { d: null, done: false, failed: false, off: true };
+    if (!B || typeof B.artistYesSeats !== 'function') { st.done = true; return st; }
+    var settle = function (d, failed) { if (st.done) return; st.d = G.isObj(d) ? d : null; st.failed = !!failed; st.done = true; if (then) then(); };
+    B.artistYesSeats(artistId, userId, why).then(function (d) { settle(d, false); }, function () { settle(null, true); });
+    setTimeout(function () { settle(null, true); }, 15000);
+    return st;
+  }
+  function tourNames(list) {
+    var n = (list || []).map(function (t) { return (t && t.name) || 'your tour'; });
+    return n.length <= 1 ? (n[0] || 'your tour') : n.slice(0, -1).join(', ') + ' and ' + n[n.length - 1];
+  }
+  function yesSeatNotes(st) {
+    if (!st || !st.done) return [h('p', { class: 'note' }, 'Checking what this gives them on your tours…')];
+    if (!st.d) return st.failed ? [h('p', { class: 'note' }, 'Couldn’t check your tours just now. A yes can give them a seat on your tours.')] : [];
+    var give = Array.isArray(st.d.give) ? st.d.give : [], back = Array.isArray(st.d.back) ? st.d.back : [];
+    var mgr = give.filter(function (t) { return t.level === 'manager'; }), crew = give.filter(function (t) { return t.level !== 'manager'; });
+    var out = [];
+    if (mgr.length) out.push(h('p', { class: 'note' }, 'This also makes them a Manager of ' + tourNames(mgr) +
+      ': money, cards, can change the tour and add people. Not your Off Tour book.'));
+    if (crew.length) out.push(h('p', { class: 'note' }, 'This seats them on ' + tourNames(crew) + ' as crew: crew list, guest list, chat, day sheets.'));
+    if (back.length) out.push(h('p', { class: 'note' }, 'They were taken off ' + tourNames(back) + ', so this doesn’t put them back' +
+      (back.length > 1 ? ' on any of them. ' : '. ') + 'Invite them from the crew list and they can Join again.'));
+    var left = Array.isArray(st.d.left) ? st.d.left : [];
+    if (left.length) out.push(h('p', { class: 'note' }, 'They left ' + tourNames(left) + ' themselves, so this doesn’t put them back. ' +
+      'Invite them from the crew list and they can Join again.'));
+    return out;
+  }
   function openArtistRequest(artistId, artistName, x) {
     var B = window.GR_BACKEND, name = x.name || 'Someone', artist = artistName || x.artist || 'this artist';
     var member = x.kind === 'band', busy = false;
     var roles = (Array.isArray(x.roles) ? x.roles : []).filter(Boolean);
     if (!B || typeof B.decideArtistRequest !== 'function') return;
+    var seatsHost = h('div'), acceptBtn = null;
+    var seats = yesSeats(artistId, x.userId, 'request', function () {
+      if (!seatsHost.isConnected) return;
+      fillEl(seatsHost, yesSeatNotes(seats));
+      if (acceptBtn) { acceptBtn.disabled = false; acceptBtn.textContent = 'Accept and endorse'; }
+    });
     var answer = async function (yes) {
       if (busy) return;
       busy = true;
@@ -5663,6 +6030,9 @@
       else toast('Declined.');
       render(true);
     };
+    fillEl(seatsHost, yesSeatNotes(seats));
+    acceptBtn = h('button', { class: 'btn primary block', type: 'button', disabled: seats.done ? null : true,
+      onclick: function () { answer(true); } }, seats.done ? 'Accept and endorse' : 'Checking your tours…');
     openSheet(function () {
       return [
         h('h2', { class: 'sh-title' }, name + ' asks to be listed'),
@@ -5678,8 +6048,9 @@
         h('p', { class: 'note' }, 'Endorsing says ' + name + ' really ' + (member ? 'is in ' : 'worked for ') + artist +
           '. It shows on their page and can’t be taken back.'),
         member ? h('p', { class: 'note' }, 'Accepting makes them a Member of ' + artist + '. Letting a Member go later takes every other Member’s yes.') : null,
+        seatsHost,
         h('div', { class: 'stack' },
-          h('button', { class: 'btn primary block', type: 'button', onclick: function () { answer(true); } }, 'Accept and endorse'),
+          acceptBtn,
           h('button', { class: 'btn danger block', type: 'button', onclick: function () { answer(false); } }, 'Decline'),
           h('button', { class: 'btn ghost block', type: 'button', onclick: function () { closeSheet(); } }, 'Not now'))
       ];
@@ -6767,7 +7138,7 @@
       box.replaceChildren(
         h('div', { class: 'ledger lf-card' }, onOff('New Members manage the tours', 'membersManage', 'New Members manage the tours')),
         h('p', { class: 'note lf-note' }, 'ON: someone you accept as a Member gets Manager access on every one of ' + name +
-          '’s tours. OFF: they get Crew access, and you can still make them a Manager on a tour by hand. People already on a tour keep what they have.'),
+          '’s tours (never your Off Tour book). OFF: they get Crew access, and you can still make them a Manager on a tour by hand. People already on a tour keep what they have.'),
         h('div', { class: 'ledger lf-card' }, onOff('Members who leave keep their tours', 'leaversKeep', 'Members who leave keep their tours')),
         h('p', { class: 'note lf-note' }, 'ON: a Member who leaves the band stays on the tours they were on. OFF: leaving takes them off every one of ' +
           name + '’s tours. Their history stays on their own page either way.'));
@@ -6809,10 +7180,29 @@
     var others = (card.members || []).filter(function (x) { return x.kind === 'band' && x.userId !== m.userId && x.userId !== me; }).length;
     var asks = !nothing && !mine && m.kind === 'band' && others > 0;
     var rules = m.kind === 'band' ? seatRulesFor(artistId) : null;
+    var offer = !mine && !asks && !(rules && rules.leaversKeep === false) && !!(B && B.artistSeatsOff && B.artistYesSeats);
+    var seatsHost = h('div'), seats = null, takeBtn = null;
+    var action = mine ? 'Leave' : asks ? 'Ask the other members' : 'Take off';
+    var offNotes = function () {
+      if (seats && !seats.done) return [h('p', { class: 'note' }, 'Checking their seats on your tours…')];
+      if (seats && seats.failed) return [h('p', { class: 'note' }, 'Couldn’t check their seats on your tours just now. ' +
+        'They stay on any tour they are on until they are taken off it from its crew list.')];
+      var on = seats && seats.d && Array.isArray(seats.d.on) ? seats.d.on : [];
+      if (!on.length) return [];
+      return [h('div', { class: 'fa-ticks' }, h('label', { class: 'fa-tick' },
+        h('input', { type: 'checkbox', class: 'rv-check', checked: seats.off ? true : null, onchange: function (e) { seats.off = e.target.checked; } }),
+        h('span', null, h('b', null, 'Also take them off ' + tourNames(on)),
+          h('span', { class: 'hint' }, (on.some(function (t) { return t.level === 'manager'; }) ? 'Their Manager seat: the money, cards, ' : 'Their seat: ') +
+            'crew list, guest list, chat and day sheets. You can invite them again any time.'))))];
+    };
+    if (offer) seats = yesSeats(artistId, m.userId, 'seated', function () {
+      if (seatsHost.isConnected) fillEl(seatsHost, offNotes());
+      if (takeBtn) { takeBtn.disabled = false; takeBtn.textContent = action; }
+    });
     var stays = rules && rules.leaversKeep === false
       ? ' Leaving takes them off every one of ' + artist + '’s tours too (your Member access setting).'
-      : ' They stay on any tour they are on until they are taken off that tour.';
-    confirmSheet({
+      : offer ? '' : ' They stay on any tour they are on until they are taken off that tour.';
+    takeBtn = confirmSheet({
       title: mine ? 'Leave ' + artist + '?' : (asks ? 'Let ' + name + ' go from ' : 'Take ' + name + ' off ') + artist + '?',
       body: nothing
         ? (m.kind === 'band'
@@ -6825,18 +7215,27 @@
             name + ' comes off ' + artist + '\u2019s page. Everything up to that day stays on their own page; nothing after it is added.' + stays
           : 'From today they are not listed on ' + artist + ', and nothing new from ' + artist + ' is added to their page. ' +
             'Everything up to today stays on it: their history is not erased.' + stays + ' You can add them again any time.',
-      action: mine ? 'Leave' : asks ? 'Ask the other members' : 'Take off', danger: true,
+      action: action, danger: true,
+      extra: offer ? seatsHost : null,
       onConfirm: async function () {
         try {
           var r = await B.removeArtistMember(artistId, m.userId);
           actOf(artistId, true); staleCards(); if (mine) myActs(true);
+          var off = 0;
+          if (offer && seats && seats.off && seats.d && Array.isArray(seats.d.on) && seats.d.on.length && !(r && r.pending)) {
+            try { var o2 = await B.artistSeatsOff(artistId, m.userId); off = G.num(o2 && o2.off); seats.d.on.forEach(function (t) { forgetCrew(t.tourId); }); }
+            catch (e2) { toast(name + ' is off the page, but couldn\u2019t be taken off the tours. Do it from each tour\u2019s crew list.', 6000); return true; }
+          }
+          var tours = off ? ' Off your tours too.' : '';
           toast(r && r.pending ? 'Asked. ' + plural(G.num(r.waiting), 'member') + ' will see it at the top of their profile.'
             : mine ? 'You are off ' + artist + '\u2019s page. Your history stays on yours.'
-            : r && r.kept ? name + ' is off the page. Their history stays on their own page.'
-            : name + ' is off the page.');
+            : r && r.kept ? name + ' is off the page. Their history stays on their own page.' + tours
+            : name + ' is off the page.' + tours);
           return true;
         } catch (x) { saveFailed('member', x); return false; }
       } });
+    if (offer) fillEl(seatsHost, offNotes());
+    if (offer && seats && !seats.done && takeBtn) { takeBtn.disabled = true; takeBtn.textContent = 'Checking their seats…'; }
   }
   function openLeaving(artistId, artist, m) {
     var B = window.GR_BACKEND, name = m.name || 'This person', left = G.num(m.leaving && m.leaving.waiting);
@@ -7132,8 +7531,10 @@
     var who = item.name || 'They', first = String(who).split(' ')[0];
     function load() {
       st.d = null; st.failed = false; draw();
-      B.creditDetail(item.artistId, item.userId).then(function (d) { st.d = d; st.failed = !d; draw(); })
-        .catch(function () { st.failed = true; draw(); });
+      B.creditDetail(item.artistId, item.userId).then(function (d) {
+        st.d = d; st.failed = !d;
+        draw();
+      }).catch(function () { st.failed = true; draw(); });
     }
     function line(g, isNew) {
       return h('div', { class: 'row' },
@@ -7170,7 +7571,8 @@
         h('div', { class: 'ledger' }, pend.map(function (g) { return line(g, keeps && !same(g)); }),
           h('div', { class: 'row total' }, h('span', null, tallyText(t)), h('strong', { class: 'amt num' }, plural(t.shows, 'show')))),
         had.length ? h('p', { class: 'note' }, keeps ? 'Everything you approved before (' + tallyText(total(had)) + ') is still in it. The lines marked new are what was added.'
-          : 'This replaces what you approved before (' + tallyText(total(had)) + ').') : null
+          : 'This replaces what you approved before (' + tallyText(total(had)) + ').') : null,
+        h('p', { class: 'note' }, 'Approving credits ' + first + ' with these in ' + d.artist + '’s tour history. It doesn’t put them on any of your tours.')
       ]);
       fillEl(foot, [
         h('button', { class: 'btn primary block', type: 'button', disabled: st.busy || null,
@@ -7205,13 +7607,14 @@
       return [h('h2', { class: 'sh-title' }, who + '’s tours'), host, foot];
     }, { label: 'Tour credits to approve' });
   }
-  function timelineRow(r, onTap, withArtist) {
+  function timelineRow(r, onTap, withArtist, flyer) {
     var span = r.first ? tourSpan(r.first, r.last) + (r.n ? ' · ' + plural(r.n, 'show') : '')
       : (r.n ? plural(r.n, 'show') : 'No dates yet');
     var festTag = r.tour && r.tour.kind === 'festival' ? h('span', { class: 'tn-tag tn-kind' }, 'festival') : null;
     var played = rolesShort(r.role || (r.tour && !r.own && r.tour.role) || '');
     var inner = [h('span', { class: 'lr-text' },
-      r.now ? h('span', { class: 'lr-title tl-title' }, h('span', { class: 'tl-name' }, r.name), h('span', { class: 'tl-now' }, 'Currently on'))
+      r.now ? h('span', { class: 'lr-title tl-title' }, h('span', { class: 'tl-name' }, r.name), h('span', { class: 'tl-now' }, 'Currently on'), flyer || null)
+        : flyer ? h('span', { class: 'lr-title tl-title' }, h('span', { class: 'tl-name' }, r.name), festTag, flyer)
         : h('span', { class: 'lr-title' }, r.name, festTag),
       h('span', { class: 'lr-sub' }, [withArtist ? r.artist : '', span].filter(Boolean).join(' · ')),
       played ? h('span', { class: 'lr-sub tl-role' }, played) : null),
@@ -7258,6 +7661,41 @@
             function (x) { b.disabled = false; saveFailed('flyer', x); });
         } }, 'Remove flyer') : null];
     }, { label: name + ' flyer', cls: 'tc-sheet' });
+  }
+  function tourFlyerOf(artistId, r) {
+    if (!artistId || !r || !flyersOn()) return null;
+    var fmap = window.GR_BACKEND.tourFlyers(artistId);
+    if (!fmap) return null;
+    var src0 = r.tour && typeof r.tour === 'object' ? r.tour : r;
+    var qkey = tourAskName(r), nkey = src0.kind === 'shows' && src0.key ? src0.key : r.name;
+    var fkey = fmap[qkey] ? qkey : fmap[nkey] ? nkey : qkey;
+    var fl = fmap[fkey];
+    return fl && fl.url ? { fl: fl, fkey: fkey } : null;
+  }
+  function tourFlyerBtn(artistId, name, f, manage) {
+    return h('button', { class: 'tn-flyer', type: 'button', 'aria-label': 'Flyer: ' + name,
+      onclick: function (e) { e.stopPropagation(); openFlyerLook(artistId, name, f.fl, manage, f.fkey); } }, 'Flyer');
+  }
+  function ownTourFlyer(tourId) {
+    var B = window.GR_BACKEND;
+    return !!(tourId && S.mode === 'db' && B && typeof B.tourFlyerHas === 'function' && getTour(tourId) && B.tourFlyerHas(tourId) === true);
+  }
+  function appTourFlyerBtn(tourId, name, standIn, standArtist, manage) {
+    if (ownTourFlyer(tourId)) {
+      return h('button', { class: 'tn-flyer', type: 'button', 'aria-label': 'Flyer: ' + name,
+        onclick: function (e) { e.stopPropagation(); openFlyerSheet(tourId); } }, 'Flyer');
+    }
+    var f = standIn && standArtist ? tourFlyerOf(standArtist, { name: standIn.name, tour: standIn }) : null;
+    return f ? tourFlyerBtn(standArtist, name, f, manage) : null;
+  }
+  function standInTour(list, r, artist) {
+    if (!r || !r.first) return null;
+    var low = function (v) { return String(v || '').trim().toLowerCase(); };
+    return (Array.isArray(list) ? list : []).filter(function (p) {
+      var a = String((p && p.first) || ''), b = String((p && (p.last || p.first)) || '');
+      return !!p && p.kind !== 'festival' && p.kind !== 'shows' && !!a && a <= r.last && b >= r.first &&
+        (artist == null || low(p.artist) === low(artist));
+    }).sort(function (x, y) { return G.num(y.n) - G.num(x.n); })[0] || null;
   }
   function tnSrcLink(url) {
     var host = (/^https:\/\/(?:www\.)?([^\/]+)/.exec(String(url || '')) || [])[1] || '';
@@ -7337,8 +7775,6 @@
   function historyTourRow(artistId, r, say, o) {
     o = o || {};
     S.tnOpen = S.tnOpen || {};
-    var src0 = r.tour && typeof r.tour === 'object' ? r.tour : r;
-    var nkey = src0.kind === 'shows' && src0.key ? src0.key : r.name;
     var qkey = tourAskName(r);
     var k = artistId + '|' + qkey, open = !!S.tnOpen[k];
     var span = r.first ? tourSpan(r.first, r.last) + (r.n ? ' \u00b7 ' + plural(r.n, 'show') : '') : (r.n ? plural(r.n, 'show') : 'No dates yet');
@@ -7399,10 +7835,10 @@
           h('button', { class: 'linkbtn', type: 'button', onclick: function (e) { e.stopPropagation(); openAct(x.id); } }, String(x.name))];
       })) : null;
     var flyerLine = null;
+    var rowFlyer = open || !o.noFlyer ? tourFlyerOf(artistId, r) : null;
     if (open && flyersOn()) {
-      var fmap = window.GR_BACKEND.tourFlyers(artistId);
-      var fkey = fmap && fmap[qkey] ? qkey : fmap && fmap[nkey] ? nkey : qkey;
-      var fl = fmap ? fmap[fkey] : null;
+      var fkey = rowFlyer ? rowFlyer.fkey : qkey;
+      var fl = rowFlyer ? rowFlyer.fl : null;
       var fparts = [];
       if (fl && fl.url) fparts.push(h('button', { class: 'linkbtn', type: 'button',
         onclick: function () { openFlyerLook(artistId, r.name, fl, manage, fkey); } }, 'View flyer'));
@@ -7420,7 +7856,10 @@
     var inner = h('div', { class: 'pt-run tn-run' + (open ? ' open' : '') + (conflict ? ' has-conflict' : '') },
       h('button', { class: 'pt-run-h', type: 'button', 'aria-expanded': open ? 'true' : 'false',
         onclick: function () { S.tnOpen[k] = !open; render(true); } },
-        h('span', { class: 'lr-text' }, h('span', { class: 'lr-title' }, r.name, festTag, tag),
+        h('span', { class: 'lr-text' },
+          rowFlyer ? h('span', { class: 'lr-title tl-title' }, h('span', { class: 'tl-name' }, r.name), festTag, tag,
+              tourFlyerBtn(artistId, r.name, rowFlyer, manage))
+            : h('span', { class: 'lr-title' }, r.name, festTag, tag),
           h('span', { class: 'lr-sub' }, [o.artist || '', span].filter(Boolean).join(' · ')),
           o.role ? h('span', { class: 'lr-sub tl-role' }, o.role) : null),
         icon('chevron', 16)),
@@ -7697,7 +8136,7 @@
     for (var tries = 0; ; tries++) {
       try { return await S.sample.json(prompt, opts); }
       catch (e) {
-        if (e && (e.code === 'session_expired' || SAMPLE_GONE.indexOf(e.code) >= 0)) throw e;
+        if (e && (e.code === 'session_expired' || e.code === 'daily_limit' || SAMPLE_GONE.indexOf(e.code) >= 0)) throw e;
         if (e && e.code === 'rate_limited' && tries < 3) { await tfWait(15000 * (tries + 1)); continue; }
         return null;
       }
@@ -7715,7 +8154,7 @@
         if (Array.isArray(out)) return { found: out, read: urls, failed: [] };
         throw { code: 'invalid_json' };
       } catch (e) {
-        if (e && (e.code === 'session_expired' || SAMPLE_GONE.indexOf(e.code) >= 0)) throw e;
+        if (e && (e.code === 'session_expired' || e.code === 'daily_limit' || SAMPLE_GONE.indexOf(e.code) >= 0)) throw e;
         if (e && e.code === 'rate_limited' && tries < 3) { tries += 1; await tfWait(15000 * tries); continue; }
         if (e && e.code !== 'rate_limited' && batch.length > 1) {
           var mid = Math.ceil(batch.length / 2);
@@ -7775,7 +8214,8 @@
         c.state = Object.assign({}, c.state || {}, { status: 'extracting' }); c.at = 0;
         clearTimeout(c.timer); c.timer = setTimeout(function () { c.timer = null; tfOf(id, true); }, 5000);
       } else {
-        c.error = e && e.code === 'session_expired' ? 'Sign in again to finish.' : 'Couldn’t sort the tours just now.';
+        c.error = e && e.code === 'session_expired' ? 'Sign in again to finish.'
+          : e && e.code === 'daily_limit' ? sampleErrorMessage('daily_limit') : 'Couldn’t sort the tours just now.';
       }
       if (e && SAMPLE_GONE.indexOf(e.code) >= 0) S.sample = null;
     }
@@ -9050,8 +9490,308 @@
     return h('button', { class: 'iconbtn pf-menu', type: 'button', 'aria-label': 'Menu', onclick: openMenu }, icon('menu', 26));
   }
   function openMenu() {
-    go({ name: 'mainmenu', back: S.route || { name: 'home' }, fresh: true });
+    if (motion) motion.finish();
+    blurActive();
+    var view = $('#view'), old = view ? view.firstElementChild : null;
+    var back = S.route || { name: 'home' };
+    var under = { node: old, y: window.scrollY, back: back, inner: innerScrolls(old), scrolls: pageScrolls(),
+      bar: old && old.querySelector ? old.querySelector('nav.tabbar') : null,
+      st: { dsIndex: S.dsIndex, dsMore: S.dsMore, cardsSide: S.cardsSide, wzPeople: S.wzPeople } };
+    S.menuQ = '';
+    menuUnder = null;
+    go({ name: 'mainmenu', back: back, fresh: true });
+    menuUnder = under;
+    var menu = view ? view.firstElementChild : null;
+    if (!old || !menu || menu === old || !menu.classList.contains('mn-page')) return;
+    var L = slideLayers();
+    if (!L) return;
+    L.scroll.replaceChildren(old);
+    L.snap.hidden = false;
+    L.snap.setAttribute('inert', '');
+    L.scroll.scrollTop = under.y;
+    innerRestore(old, under.inner);
+    L.dim.hidden = false;
+    var keep = slideStart(under.scrolls);
+    L.frame.classList.add('gr-on');
+    view.scrollTop = 0;
+    var m = motion = { kind: 'push', y: 0, lift: liftBar(menu, old, !!under.bar), anims: [], timer: 0 };
+    m.finish = function () {
+      if (motion !== m) return;
+      motion = null;
+      slideStop(m);
+      L.frame.classList.remove('gr-on');
+      L.snap.hidden = true;
+      L.snap.removeAttribute('inert');
+      L.scroll.replaceChildren();
+      L.dim.hidden = true;
+      slideEnd(keep);
+      window.scrollTo(0, 0);
+      var t = view.querySelector('.mn-title'), a = document.activeElement;
+      if (t && !sheet && (!a || a === document.body)) t.focus({ preventScroll: true });
+    };
+    slideRun(m, [[L.frame, 'translateX(100%)', 'translateX(0)'], [L.snap, 'translateX(0)', 'translateX(-' + SLIDE_UNDER + '%)'], [L.dim, 0, 1]],
+      [L.frame, 0, 1]);
   }
+  function menuBack() {
+    if (motion) { if (motion.kind !== 'push') return; motion.finish(); }
+    var view = $('#view'), menu = view ? view.firstElementChild : null;
+    var to = (S.route && S.route.back) || { name: 'home' };
+    var held = menuUnder && menuUnder.back === to ? menuUnder : null;
+    var my = window.scrollY, scrolls = pageScrolls();
+    S.menuQ = '';
+    blurActive();
+    var L = menu && menu.classList.contains('mn-page') ? slideLayers() : null;
+    if (L) {
+      L.scroll.replaceChildren(menu);
+      L.snap.classList.add('gr-top');
+      L.snap.hidden = false;
+      L.snap.setAttribute('inert', '');
+      L.scroll.scrollTop = my;
+    }
+    go(to, { keep: true, back: held ? held.st : null });
+    var page = view ? view.firstElementChild : null;
+    if (held) innerRestore(page, held.inner);
+    var y = held ? held.y : window.scrollY;
+    menuUnder = null;
+    var done = function () {
+      window.scrollTo(0, y);
+      var b = view ? view.querySelector('.pf-menu') : null, a = document.activeElement;
+      if (b && !sheet && (!a || a === document.body)) b.focus({ preventScroll: true });
+    };
+    if (!L) { done(); return; }
+    if (!page) { L.snap.classList.remove('gr-top'); L.snap.removeAttribute('inert'); L.snap.hidden = true; view.appendChild(menu); return; }
+    var keep = slideStart(scrolls);
+    L.frame.classList.add('gr-on', 'gr-low');
+    view.scrollTop = y;
+    L.dim.hidden = false;
+    var m = motion = { kind: 'back', y: y, lift: liftBar(page, menu), anims: [], timer: 0 };
+    m.finish = function () {
+      if (motion !== m) return;
+      motion = null;
+      slideStop(m);
+      L.frame.classList.remove('gr-on', 'gr-low');
+      L.snap.hidden = true;
+      L.snap.classList.remove('gr-top');
+      L.snap.removeAttribute('inert');
+      L.scroll.replaceChildren();
+      L.dim.hidden = true;
+      slideEnd(keep);
+      done();
+    };
+    slideRun(m, [[L.snap, 'translateX(0)', 'translateX(100%)'], [L.frame, 'translateX(-' + SLIDE_UNDER + '%)', 'translateX(0)'], [L.dim, 1, 0]],
+      [L.snap, 1, 0]);
+  }
+  function slideLayers() {
+    var frame = $('#gr-frame'), snap = $('#gr-snap'), dim = $('#gr-dim'), view = $('#view');
+    var scroll = snap ? snap.querySelector('.gr-scroll') : null;
+    return frame && snap && dim && view && scroll ? { frame: frame, snap: snap, dim: dim, view: view, scroll: scroll } : null;
+  }
+  function slideRun(m, moves, fade) {
+    var El = typeof Element === 'function' ? Element : null;
+    if (!El || !El.prototype || typeof El.prototype.animate !== 'function') { m.finish(); return; }
+    var calm = reduced();
+    m.anims = calm ? [fade[0].animate([{ opacity: fade[1] }, { opacity: fade[2] }], { duration: 200, easing: 'ease', fill: 'both' })]
+      : moves.map(function (x) {
+        var k = typeof x[1] === 'number' ? 'opacity' : 'transform', a = {}, b = {};
+        a[k] = x[1]; b[k] = x[2];
+        return x[0].animate([a, b], { duration: SLIDE_MS, easing: SLIDE_EASE, fill: 'both' });
+      });
+    var left = m.anims.length;
+    m.anims.forEach(function (a) { a.onfinish = function () { if (--left <= 0) m.finish(); }; });
+    var tries = 0, wait = function () {
+      m.timer = setTimeout(function () {
+        if (motion !== m) return;
+        var moving = m.anims.some(function (a) { return a.playState === 'running' || a.playState === 'paused'; });
+        if (moving && ++tries < 4) wait(); else m.finish();
+      }, tries ? 150 : (calm ? 200 : SLIDE_MS) + 130);
+    };
+    wait();
+  }
+  function slideStop(m) {
+    clearTimeout(m.timer);
+    if (m.raf) cancelAnimationFrame(m.raf);
+    (m.anims || []).forEach(function (a) { try { a.cancel(); } catch (e) {   } });
+    var L = slideLayers();
+    if (L) { L.frame.style.transform = ''; L.snap.style.transform = ''; L.dim.style.opacity = ''; L.frame.style.opacity = ''; L.snap.style.opacity = ''; }
+    dropBar(m.lift);
+  }
+  function slideRedrawn(view) {
+    view.scrollTop = motion.y;
+    var l = motion.lift, bar = view.querySelector('nav.tabbar');
+    if (l && bar && bar !== l.bar) {
+      if (l.bar.parentNode === document.body) l.bar.remove();
+      l.bar = bar; l.home = bar.parentNode; l.next = bar.nextSibling;
+      document.body.appendChild(bar);
+    }
+  }
+  function liftBar(front, behind, had) {
+    var bar = front && front.querySelector('nav.tabbar'), other = behind && behind.querySelector('nav.tabbar');
+    if (!bar || (!other && !had)) return null;
+    var l = { bar: bar, home: bar.parentNode, next: bar.nextSibling, hid: other || null };
+    if (other) other.style.visibility = 'hidden';
+    document.body.appendChild(bar);
+    return l;
+  }
+  function dropBar(l) {
+    if (!l) return;
+    if (l.hid) l.hid.style.visibility = '';
+    if (l.home && l.home.isConnected) l.home.insertBefore(l.bar, l.next && l.next.parentNode === l.home ? l.next : null);
+    else if (l.bar.parentNode === document.body) l.bar.remove();
+  }
+  function pageScrolls() {
+    var de = document.documentElement;
+    return !!(de && window.innerHeight && de.scrollHeight > window.innerHeight + 1);
+  }
+  function slideStart(scrolls) {
+    var de = document.documentElement, was = de.style.overflowY;
+    if (scrolls) de.style.overflowY = 'scroll';
+    return was;
+  }
+  function slideEnd(was) { document.documentElement.style.overflowY = was || ''; }
+  function innerScrolls(node) {
+    var out = [];
+    if (!node || typeof node.querySelectorAll !== 'function') return out;
+    Array.prototype.forEach.call(node.querySelectorAll('*'), function (el) {
+      if (el.scrollLeft || el.scrollTop) {
+        var path = [];
+        for (var p = el; p && p !== node; p = p.parentNode) path.unshift(Array.prototype.indexOf.call(p.parentNode.children, p));
+        out.push([path, el.scrollLeft, el.scrollTop]);
+      }
+    });
+    return out;
+  }
+  function innerRestore(node, list) {
+    (list || []).forEach(function (x) {
+      var el = node;
+      for (var i = 0; el && i < x[0].length; i++) el = el.children ? el.children[x[0][i]] : null;
+      if (el && el !== node) { el.scrollLeft = x[1]; el.scrollTop = x[2]; }
+    });
+  }
+  document.addEventListener('keydown', function (e) {
+    if (e.key !== 'Escape' || e.defaultPrevented || sheet || !S.route || S.route.name !== 'mainmenu') return;
+    if (String(S.menuQ || '').trim()) return;
+    e.preventDefault();
+    menuBack();
+  });
+  var swipeOn = null, swipeArmed = false;
+  function menuSwipeArm() {
+    if (!swipeOn) return;
+    var on = !!(S.route && S.route.name === 'mainmenu');
+    if (on === swipeArmed) return;
+    swipeArmed = on;
+    swipeOn.forEach(function (x) {
+      if (on) document.addEventListener(x[0], x[1], x[2]); else document.removeEventListener(x[0], x[1], x[2]);
+    });
+  }
+  (function menuSwipe() {
+    var t = null;
+    var at = function (s) {
+      s.raf = 0;
+      var p = Math.max(0, Math.min(1, s.dx / (window.innerWidth || 1)));
+      s.L.frame.style.transform = 'translateX(' + (p * 100) + '%)';
+      s.L.snap.style.transform = 'translateX(' + (-SLIDE_UNDER * (1 - p)) + '%)';
+      s.L.dim.style.opacity = String(1 - p);
+    };
+    var take = function (s) {
+      var L = slideLayers(), menu = L ? L.view.firstElementChild : null, under = menuUnder;
+      if (!menu || !under || !under.node) return false;
+      blurActive();
+      s.L = L; s.under = under;
+      s.keep = slideStart(pageScrolls());
+      L.frame.classList.add('gr-on', 'swiping');
+      L.view.scrollTop = s.my;
+      L.scroll.replaceChildren(under.node);
+      L.snap.hidden = false;
+      L.snap.setAttribute('inert', '');
+      L.scroll.scrollTop = under.y;
+      innerRestore(under.node, under.inner);
+      L.dim.hidden = false;
+      var m = motion = { kind: 'swipe', y: s.my, lift: liftBar(menu, under.node, !!under.bar), anims: [], timer: 0 };
+      m.finish = function () { if (motion === m) settle(s, false); };
+      s.m = m;
+      at(s);
+      return true;
+    };
+    var release = function (s, now) {
+      var w = window.innerWidth || 1, p = Math.max(0, Math.min(1, s.dx / w));
+      var pts = s.pts.filter(function (x) { return now - x[0] <= 80; });
+      var v = pts.length > 1 ? (pts[pts.length - 1][1] - pts[0][1]) / Math.max(1, pts[pts.length - 1][0] - pts[0][0]) : 0;
+      var back = p > 0.35 || v > 0.35;
+      var El = typeof Element === 'function' ? Element : null;
+      if (!El || typeof El.prototype.animate !== 'function') { settle(s, back); return; }
+      var ms = Math.max(120, Math.min(SLIDE_MS, SLIDE_MS * (back ? 1 - p : p)));
+      var o = { duration: ms, easing: SLIDE_EASE, fill: 'forwards' };
+      var m = s.m, L = s.L;
+      L.frame.classList.add('gr-let');
+      m.anims = [
+        L.frame.animate([{ transform: L.frame.style.transform }, { transform: back ? 'translateX(100%)' : 'translateX(0%)' }], o),
+        L.snap.animate([{ transform: L.snap.style.transform }, { transform: back ? 'translateX(0%)' : 'translateX(-' + SLIDE_UNDER + '%)' }], o),
+        L.dim.animate([{ opacity: L.dim.style.opacity }, { opacity: back ? 0 : 1 }], o)];
+      m.finish = function () { if (motion === m) settle(s, back); };
+      var left = m.anims.length;
+      m.anims.forEach(function (a) { a.onfinish = function () { if (--left <= 0) m.finish(); }; });
+      m.timer = setTimeout(function () { m.finish(); }, ms + 400);
+    };
+    var settle = function (s, back) {
+      var L = s.L, under = s.under, m = s.m;
+      motion = null;
+      slideStop(m);
+      L.frame.classList.remove('gr-on', 'swiping', 'gr-let');
+      L.scroll.replaceChildren();
+      L.snap.hidden = true;
+      L.snap.removeAttribute('inert');
+      L.dim.hidden = true;
+      if (back && menuUnder === under) {
+        S.menuQ = '';
+        go(under.back, { keep: true, back: under.st });
+        innerRestore(L.view.firstElementChild, under.inner);
+        menuUnder = null;
+        slideEnd(s.keep);
+        window.scrollTo(0, under.y);
+      } else {
+        slideEnd(s.keep);
+        window.scrollTo(0, s.my);
+      }
+    };
+    var start = function (e) {
+      t = null;
+      if (e.touches.length !== 1 || motion || sheet || !S.route || S.route.name !== 'mainmenu') return;
+      if (!menuUnder || !menuUnder.node || menuUnder.back !== S.route.back) return;
+      var p = e.touches[0], tg = e.target;
+      if (p.clientX > 24) return;
+      if (tg && tg.closest && tg.closest('input, textarea, select, .rv-chips, [data-noswipe], .swipe-wrap, [class*="sw-"]')) return;
+      t = { x0: p.clientX, y0: p.clientY, dx: 0, on: false, my: window.scrollY, pts: [[e.timeStamp, p.clientX]], raf: 0 };
+    };
+    var move = function (e) {
+      if (!t) return;
+      var p = e.touches[0], dx = p.clientX - t.x0, dy = p.clientY - t.y0;
+      if (!t.on) {
+        var side = dx > 1.2 * Math.abs(dy);
+        if (Math.abs(dy) > 10 && !side) { t = null; return; }
+        if (!(dx > 10 && side)) return;
+        if (!e.cancelable || !take(t)) { t = null; return; }
+        t.on = true;
+      }
+      e.preventDefault();
+      t.dx = Math.max(0, dx);
+      t.pts.push([e.timeStamp, p.clientX]);
+      if (t.pts.length > 12) t.pts.shift();
+      var s = t;
+      if (!s.raf) s.raf = requestAnimationFrame(function () { if (s.m && motion === s.m) at(s); });
+      s.m.raf = s.raf;
+    };
+    var end = function (e) {
+      var s = t;
+      t = null;
+      if (!s || !s.on || !s.m || motion !== s.m) return;
+      if (s.raf) { cancelAnimationFrame(s.raf); s.raf = 0; s.m.raf = 0; }
+      at(s);
+      release(s, e.timeStamp);
+    };
+    swipeOn = [['touchstart', start, { passive: true }], ['touchmove', move, { passive: false }],
+      ['touchend', end, { passive: true }], ['touchcancel', end, { passive: true }]];
+    menuSwipeArm();
+  })();
   function menuHead(title, o) {
     return [
       h('div', { class: 'headband dark mn-top' },
@@ -9066,7 +9806,8 @@
     o = o || {};
     var drops = typeof o.open === 'boolean';
     return h('button', { class: 'mn-row' + (o.cls ? ' ' + o.cls : '') + (o.open ? ' open' : ''), type: 'button',
-      'aria-expanded': drops ? (o.open ? 'true' : 'false') : null, onclick: onTap },
+      'aria-expanded': drops ? (o.open ? 'true' : 'false') : null,
+      onclick: onTap && !drops ? function (e) { if (motion) motion.finish(); return onTap(e); } : onTap },
       h('span', { class: 'mn-ic', 'aria-hidden': 'true' }, o.face || icon(ic, 24)),
       h('span', { class: 'mn-text' }, h('span', { class: 'mn-label' }, label), sub ? h('span', { class: 'mn-sub' }, sub) : null),
       h('span', { class: 'mn-chev', 'aria-hidden': 'true' }, icon('chevron', 18)));
@@ -9123,44 +9864,324 @@
     }
     startTour(name);
   }
+  function menuGates() {
+    var B = window.GR_BACKEND;
+    return { mine: artistSide(), signedIn: !!(S.mode === 'db' && B && B.signOut), music: inMusic() };
+  }
+  var MENU_TITLE = 'Settings';
   function viewMenu() {
     var backTo = S.route.back || { name: 'home' };
     var here = { name: 'mainmenu', back: backTo };
-    var first = S.menuIn; S.menuIn = false;
-    var mine = artistSide();
-    var signedIn = S.mode === 'db' && window.GR_BACKEND && window.GR_BACKEND.signOut;
-    return h('div', { class: 'page home menu-page has-tabs' + (first ? ' mn-in' : '') },
-      menuHead(null),
+    var g = menuGates();
+    var tg = menuTourGroup(backTo);
+    var body = h('div', { class: 'mn-body' },
+      menuSection('Your account', [
+        g.signedIn ? menuRow('people', 'Contact Card', function () { openContactCard(); }) : null,
+        g.signedIn ? menuRow('bell', 'Notifications', function () { openNotifications(null); }) : null,
+        menuRow('gear', 'Settings', function () { openSettingsSheet(); })]),
+      menuSection('Tours', [
+        g.mine ? menuRow('plus', 'Create a tour', createTourFromMenu) : null,
+        tg ? Array.prototype.slice.call(tg.childNodes) : null]),
+      menuSection('Money', [
+        g.mine && !IN_SHELL ? menuRow('tag', 'Merchroom', function () { go({ name: 'merchroom', back: here }); }) : null,
+        g.music ? menuHistoryGroup(here) : null]));
+    var find = menuFind(here, backTo, body);
+    return h('div', { class: 'page home menu-page mn-page mn-look has-tabs' },
+      menuNav(MENU_TITLE, menuBack),
       dbBanner(),
-      h('section', { class: 'mn-group' },
-        mine ? menuRow('plus', 'Create a tour', createTourFromMenu) : null,
-        signedIn ? menuRow('people', 'Contact Card', function () { openContactCard(); }) : null,
-        mine && !IN_SHELL ? menuRow('tag', 'Merchroom', function () { go({ name: 'merchroom', back: here }); }) : null,
-        inMusic() ? menuRow('tabmoney', 'Budget History', function () { go({ name: 'history', back: here }); }) : null,
-        signedIn ? menuRow('bell', 'Notifications', function () { openNotifications(null); }) : null,
-        menuRow('gear', 'Settings', function () { openSettingsSheet(); })),
-      menuTourGroup(backTo),
+      find.field,
+      body,
+      find.said,
+      find.results,
       h('span', { class: 'logo-mark home-mark', 'aria-hidden': 'true' }),
       socialBar(''));
   }
-  function menuTourGroup(backTo) {
+  function menuSection(head, rows) {
+    rows = flatten(rows).filter(function (x) { return x != null && x !== false; });
+    return rows.length ? h('section', { class: 'mn-group' }, h('h2', { class: 'mn-h' }, head), rows) : null;
+  }
+  function menuNav(title, onBack, tag) {
+    return h('div', { class: 'mn-nav' },
+      h('button', { class: 'ccd-round mn-back', type: 'button', 'aria-label': 'Back', onclick: onBack }, icon('back', 31)),
+      h(tag || 'h1', { class: 'mn-title', tabindex: '-1' }, title));
+  }
+  function findField(o) {
+    var input = h('input', { class: 'sr-in mn-q', type: 'search', value: o.q(), placeholder: 'Search', 'data-k': o.key,
+      enterkeyhint: 'search', autocomplete: 'off', autocapitalize: 'none', autocorrect: 'off', spellcheck: 'false', 'aria-label': o.label,
+      oninput: function (e) { o.set(e.target.value); sync(); o.paint(); },
+      onkeydown: function (e) { if (e.key === 'Escape' && input.value) { e.preventDefault(); e.stopPropagation(); clear(); } } });
+    var x = h('button', { class: 'mn-clear', type: 'button', 'aria-label': 'Clear search', hidden: o.q() ? null : true },
+      h('span', { class: 'mn-clear-c' }, icon('close', 10)));
+    var sync = function () { x.hidden = !input.value; };
+    var clear = function () {
+      input.value = ''; o.set(''); sync(); o.paint();
+      try { input.focus({ preventScroll: true }); } catch (e) {   }
+    };
+    pressable(x, clear);
+    return h('form', { class: 'sr-pill mn-find', role: 'search', onsubmit: function (e) { e.preventDefault(); blurActive(); } },
+      icon('search', 20), input, x);
+  }
+  function menuFind(here, backTo, body) {
+    var results = h('div', { class: 'mn-results' });
+    var said = h('p', { class: 'sr', 'aria-live': 'polite' });
+    var idx = null, asked = false;
+    var paint = function () {
+      var q = String(S.menuQ || '');
+      body.hidden = !!q.trim();
+      if (!q.trim()) { fillEl(results, null); said.textContent = ''; return; }
+      if (!asked) { asked = true; menuAsk(function () { idx = null; if (results.isConnected && String(S.menuQ || '').trim()) paint(); }); }
+      var hits = menuMatch(idx || (idx = menuIndex(here, backTo)), q);
+      said.textContent = hits.length ? plural(hits.length, 'result') : 'No results';
+      fillEl(results, menuResults(q, hits));
+    };
+    results.addEventListener('touchmove', function () {
+      var a = document.activeElement;
+      if (a && a.classList && a.classList.contains('mn-q')) a.blur();
+    }, { passive: true });
+    paint();
+    return { results: results, said: said, paint: paint,
+      field: findField({ key: 'menu-q', label: 'Search Settings', paint: paint,
+        q: function () { return String(S.menuQ || ''); }, set: function (v) { S.menuQ = v; } }) };
+  }
+  function menuResults(q, hits, hint) {
+    if (!hits.length) {
+      return h('div', { class: 'mn-empty' },
+        h('p', { class: 'mn-empty-t' }, 'Nothing found for “' + String(q).trim() + '”.'),
+        h('p', { class: 'mn-empty-s' }, hint || 'Try another word, like card, notifications or contact.'));
+    }
+    return hits.map(function (it) {
+      return pressable(menuRow(it.ic, it.label, null, it.where, { cls: it.danger ? 'mn-danger' : null }), function () { blurActive(); it.open(); });
+    });
+  }
+  var MENU_WORDS = {
+    create: ['new tour', 'start a tour', 'add a tour', 'make a tour'],
+    contact: ['profile', 'my info', 'me', 'username', 'photo', 'picture', 'phone', 'email'],
+    merchroom: ['merch', 'square', 'sales', 'store', 'token'],
+    history: ['history', 'past tours', 'old tours', 'summary', 'closeout', 'pdf', 'spreadsheet', 'budget'],
+    notifications: ['alerts', 'push', 'notify', 'sounds', 'buzz', 'alarms', 'reminders'],
+    settings: ['preferences', 'options', 'account'],
+    share: ['share', 'link', 'invite'],
+    rename: ['rename', 'tour name', 'change name'],
+    crew: ['members', 'people', 'team', 'band', 'roles'],
+    flyer: ['poster'],
+    import: ['import', 'master tour', 'atvenu', 'settlement', 'upload', 'sync'],
+    cash: ['cash'],
+    deltour: ['remove tour', 'trash'],
+    linked: ['bank', 'card', 'cards', 'plaid', 'credit card', 'debit', 'connect a bank', 'accounts'],
+    trash: ['trash', 'restore', 'recover', 'undo'],
+    signout: ['log out', 'logout', 'sign off'],
+    deleteme: ['close account', 'remove account', 'delete account'],
+    blocked: ['block', 'unblock'],
+    contactus: ['help', 'support', 'feedback', 'email greenroom'],
+    invite: ['invite', 'code', 'sign up code'],
+    agreed: ['agreed', 'agreements', 'accepted'],
+    reports: ['report', 'flagged', 'moderation'],
+    docs: ['terms', 'privacy', 'privacy policy', 'terms of service', 'legal', 'eula'],
+    cardsettings: ['card dates', 'card info'],
+    statements: ['statements', 'imports'],
+    labels: ['labels', 'categories', 'merchants'],
+    banklines: ['transactions', 'lines']
+  };
+  function menuNorm(s) {
+    return String(s == null ? '' : s).normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase()
+      .replace(/[‘’]/g, "'").replace(/&/g, ' and ').replace(/[^a-z0-9']+/g, ' ').replace(/'/g, '').replace(/\s+/g, ' ').trim();
+  }
+  function menuMatch(items, q) {
+    var want = menuNorm(q);
+    if (!want) return [];
+    var words = want.split(' ');
+    var split = function (s) { return menuNorm(s).split(' ').filter(Boolean); };
+    var hits = function (pool) { return function (w) { return pool.some(function (p) { return p.indexOf(w) === 0; }); }; };
+    var out = [];
+    items.forEach(function (it, i) {
+      var name = menuNorm(it.label), nameW = split(it.label);
+      var plain = (it.words || []).map(menuNorm), plainW = flatten(plain.map(function (p) { return p.split(' '); })).filter(Boolean);
+      var whereW = split(it.where);
+      var both = nameW.concat(plainW);
+      var rank = name === want || plain.indexOf(want) >= 0 ? 1
+        : name.indexOf(want) === 0 ? 2
+        : words.every(hits(nameW)) ? 3
+        : words.every(hits(both)) ? 4
+        : words.every(hits(both.concat(whereW))) ? 5 : 0;
+      if (rank) out.push({ it: it, rank: rank, i: i });
+    });
+    out.sort(function (a, b) { return a.rank - b.rank || a.i - b.i; });
+    return out.slice(0, 50).map(function (x) { return x.it; });
+  }
+  function menuIndex(here, backTo) {
+    var B = window.GR_BACKEND, g = menuGates(), out = [];
+    var add = function (key, ic, label, where, open, o) {
+      o = o || {};
+      out.push({ key: key, ic: ic, label: label, where: where, open: open, danger: !!o.danger,
+        words: (MENU_WORDS[key] || []).concat(o.words || []) });
+    };
+    var inSheet = function (opener, sheets) { return function (label) { return function () { var was = sheet ? sheet.panel : null; opener(); menuPoint(label, sheets, was); }; }; };
+    if (g.signedIn) add('contact', 'people', 'Contact Card', 'Your account', function () { openContactCard(); });
+    if (g.signedIn) add('notifications', 'bell', 'Notifications', 'Your account', function () { openNotifications(null); });
+    add('settings', 'gear', 'Settings', 'Your account', function () { openSettingsSheet(); });
+    if (g.mine) add('create', 'plus', 'Create a tour', 'Tours', createTourFromMenu);
+    var tid = menuTourId(backTo), t = tid ? getTour(tid) : null, tname = t ? (t.name || 'Untitled tour') : '';
+    if (t) add('tour', 'calendar', tname, 'Tours', menuReveal(function () { S.menuTourOpen = true; }, tname));
+    if (g.mine && !IN_SHELL) add('merchroom', 'tag', 'Merchroom', 'Money', function () { go({ name: 'merchroom', back: here }); });
+    var bh = function () { return G.isObj(S.menuBh) ? S.menuBh : (S.menuBh = { open: false, year: '', artist: '' }); };
+    if (g.music) add('history', 'tabmoney', 'Budget History', 'Money', menuReveal(function () { bh().open = true; }, 'Budget History'));
+    if (t) menuTourRows(tid).forEach(function (r) { add(r[3], r[0], r[1], tname, r[2], { danger: r[3] === 'deltour' }); });
+    settingsIndex(add);
+    var push = IN_SHELL || !!(B && typeof B.pushSupported === 'function' && B.pushSupported());
+    if (g.signedIn && push) {
+      var bell = inSheet(function () { openNotifications(null); }, ['Notifications']);
+      var A = IN_SHELL ? appPushPlugin() : true, AL = IN_SHELL ? alarmsPlugin() : null;
+      var money = IN_SHELL ? appPushSeesMoney(null) : notifSeesMoney(null);
+      if (IN_SHELL) add('', 'bell', 'Lock screen day bar', 'Notifications', bell('Lock screen day bar'), { words: ['On show days: where the day is, from the day sheet, with a bar to the next thing'] });
+      if (AL) {
+        add('', 'clock', 'Stage alarm', 'Notifications', bell('Stage alarm'), { words: ['30 minutes before your band’s set, the phone rings like an alarm'] });
+        add('', 'clock', 'Bus call alarm', 'Notifications', bell('Bus call alarm'), { words: ['At bus call, with an I’m on the bus button on the alarm, and a 20 minute warning before it'] });
+        add('', 'clock', 'Guest list last call alarm', 'Notifications', bell('Guest list last call alarm'), { words: ['15 minutes before the guest list’s last call, the phone rings like an alarm'] });
+      }
+      if (A) {
+        add('', 'bell', 'Tour alerts', 'Notifications', bell('Tour alerts'), { words: ['From the tour manager — always on'] });
+        add('', 'bell', 'All', 'Notifications', bell('All'), { words: ['Every kind below, on or off at once'] });
+        NOTIF_GROUPS.forEach(function (grp) {
+          if (grp[0] === 'Money' && !money) return;
+          grp[1].forEach(function (k) { add('', 'bell', k[1], 'Notifications', bell(k[1]), { words: [k[2]] }); });
+        });
+      }
+    }
+    if (g.signedIn && B && B.saveProfile) {
+      var card = inSheet(function () { openContactCard(); }, ['Contact Card']);
+      [['people', 'Name'], ['phone', 'Phone number'], ['mail', 'Email'], ['star', 'Status'], ['people', 'Role']].concat(ccdPurpose() === null ? [] : [['check', 'Purpose']])
+        .forEach(function (x) { add('', x[0], x[1], 'Contact Card', card(x[1])); });
+    }
+    if (g.mine && !IN_SHELL) {
+      ['Square', 'Nights'].forEach(function (l) { add('', l === 'Square' ? 'card' : 'calendar', l, 'Merchroom', function () { go({ name: 'merchroom', back: here }); }); });
+    }
+    if (g.music) {
+      var thisYear = String(new Date().getFullYear());
+      historyTree().forEach(function (y) {
+        add('', 'calendar', y.year, 'Budget History', menuReveal(function () { var s = bh(); s.open = true; s.year = y.year; s.artist = ''; }, y.year));
+        y.artists.forEach(function (a) {
+          var ak = a.name.toLowerCase(), at = 'Budget History › ' + y.year;
+          add('', 'music', a.name, at, menuReveal(function () { var s = bh(); s.open = true; s.year = y.year; s.artist = ak; }, a.name));
+          a.tours.forEach(function (e) { add('', 'tabmoney', e[1].name || 'Untitled tour', at + ' › ' + a.name, menuHistoryLeaf(here, { kind: 'tour', id: e[0] })); });
+          if (a.off) add('', 'tabcost', 'Off Tour', at + ' › ' + a.name, menuHistoryLeaf(here, { kind: 'off', artist: a.name, year: y.year }));
+        });
+      });
+    }
+    return out;
+  }
+  function settingsIndex(add) {
+    var d = settingsDoors();
+    settingsItems(d).forEach(function (r) { add(r.key, r.ic, r.label, 'Settings', r.tap, { danger: r.danger }); });
+    var LC = { 'Card dates': ['calendar', ''], 'Bank lines': ['bank', 'banklines'], 'Card statement history': ['tabsheet', 'statements'],
+      'Learned labels': ['tag', 'labels'], 'Connect a bank or card': ['card', ''], 'How Linked Cards work': ['card', ''] };
+    linkedCardsItems(d.lc).forEach(function (l) {
+      var k = LC[l] || ['bank', ''];
+      add(k[1], k[0], l, 'Settings › Linked Cards', function () { var was = sheet ? sheet.panel : null; d.cards(); menuPoint(l, ['Linked Cards', 'Link a card'], was); });
+    });
+  }
+  function menuReveal(set, label) {
+    return function () {
+      S.menuQ = '';
+      set();
+      render(true);
+      if (typeof document.querySelectorAll !== 'function') return;
+      var row = Array.prototype.filter.call(document.querySelectorAll('#view .mn-body .mn-row[aria-expanded="true"]'), function (b) {
+        var l = b.querySelector('.mn-label');
+        return l && l.textContent === label;
+      })[0];
+      if (row) menuPointAt(row);
+    };
+  }
+  function menuAsk(again) {
+    var B = window.GR_BACKEND;
+    if (!(S.mode === 'db' && B && B.signOut)) return;
+    var adminSaid = false;
+    if (B.inviteCodes) inviteCodesKnown(function (list) {
+      if (Array.isArray(list) && !adminSaid) {
+        adminSaid = true;
+        if (typeof B.legalList === 'function') legalListKnown(function () { again(); });
+        if (typeof B.reportsList === 'function') reportsKnown(function () { again(); });
+      }
+      again();
+    });
+    if (typeof B.legal === 'function' && typeof B.legalDocs === 'function') legalKnown(function () { again(); });
+    if (typeof B.modOn === 'function' && typeof B.refreshBlocks === 'function' && !modOn()) {
+      B.refreshBlocks().then(function () { if (modOn()) again(); }, function () {   });
+    }
+  }
+  function menuPoint(label, sheets, was) {
+    var root = $('#sheet-root');
+    if (!root || typeof MutationObserver !== 'function') return;
+    var done = false, mo = null, timer = 0;
+    var stop = function () { done = true; if (mo) mo.disconnect(); clearTimeout(timer); };
+    var look = function () {
+      if (done) return;
+      var panel = sheet ? sheet.panel : null;
+      if (!panel || panel === was) return;
+      if (sheets.indexOf(panel.getAttribute('aria-label')) < 0) { stop(); return; }
+      var el = menuPointTarget(panel, label);
+      if (!el) return;
+      stop();
+      menuPointAt(el);
+    };
+    mo = new MutationObserver(look);
+    mo.observe(root, { childList: true, subtree: true });
+    timer = setTimeout(stop, 3000);
+    look();
+  }
+  function menuPointTarget(panel, label) {
+    var want = menuNorm(label), hit = null;
+    (function walk(el) {
+      var kids = el.childNodes || [];
+      for (var i = 0; i < kids.length && !hit; i++) {
+        var n = kids[i];
+        if (n.nodeType === 3 || (n.tagName == null && typeof n.data === 'string')) { if (menuNorm(n.data) === want) hit = el; }
+        else if (n.childNodes) walk(n);
+      }
+    })(panel);
+    for (var p = hit; p && p !== panel; p = p.parentNode) {
+      if (p.tagName === 'BUTTON' || ['ds-yn', 'lc-row', 'lc-card', 'ccd-card'].some(function (c) { return p.classList && p.classList.contains(c); })) return p;
+    }
+    return hit;
+  }
+  function menuPointAt(el) {
+    if (typeof el.scrollIntoView === 'function') {
+      try { el.scrollIntoView({ block: 'center', behavior: reduced() ? 'auto' : 'smooth' }); } catch (e) { el.scrollIntoView(); }
+    }
+    el.classList.remove('gr-point');
+    void el.offsetWidth;
+    el.classList.add('gr-point');
+    setTimeout(function () { el.classList.remove('gr-point'); }, 1300);
+  }
+  function menuTourId(backTo) {
     var id = backTo && backTo.name === 'tour' && getTour(backTo.id) ? backTo.id : profileTourId();
     var t = id ? getTour(id) : null;
-    if (!t || isOffTour(t) || !canEditTour(id)) return null;
+    return !t || isOffTour(t) || !canEditTour(id) ? null : id;
+  }
+  function menuTourGroup(backTo) {
+    var id = menuTourId(backTo);
+    var t = id ? getTour(id) : null;
+    if (!t) return null;
     var open = !!S.menuTourOpen;
     return h('section', { class: 'mn-group' },
       menuRow('calendar', t.name || 'Untitled tour', function () { S.menuTourOpen = !S.menuTourOpen; render(true); }, null,
         { open: open, cls: 'mn-tour' }),
-      !open ? null : h('div', { class: 'mn-drop' },
-      menuRow('share', 'Share this tour', function () { openShare(id); }),
-      menuRow('edit', 'Name and artist', function () { openRename(id); }),
-      menuRow('people', 'Crew', function () { openCrewSheet(id); }),
+      !open ? null : h('div', { class: 'mn-drop' }, menuTourRows(id).map(function (r) {
+        return menuRow(r[0], r[1], r[2], null, r[3] === 'deltour' ? { cls: 'mn-danger' } : null);
+      })));
+  }
+  function menuTourRows(id) {
+    return [
+      ['share', 'Share this tour', function () { openShare(id); }, 'share'],
+      ['edit', 'Name and artist', function () { openRename(id); }, 'rename'],
+      ['people', 'Crew', function () { openCrewSheet(id); }, 'crew'],
       (S.mode === 'db' && window.GR_BACKEND && window.GR_BACKEND.flyer)
-        ? menuRow('flyer', 'Tour flyer', function () { openFlyerSheet(id); }) : null,
-      menuRow('card', 'Bring in your info', function () { openImportHub(id); }),
-      canSeeMoney(id) ? menuRow('cash', 'Merch cash log', function () { go({ name: 'tour', id: id, view: 'cashlog' }); }) : null,
+        ? ['flyer', 'Tour flyer', function () { openFlyerSheet(id); }, 'flyer'] : null,
+      ['card', 'Bring in your info', function () { openImportHub(id); }, 'import'],
+      canSeeMoney(id) ? ['cash', 'Merch cash log', function () { go({ name: 'tour', id: id, view: 'cashlog' }); }, 'cash'] : null,
       createdTour(id) || S.mode === 'local'
-        ? menuRow('trash', 'Delete tour', function () { confirmDeleteTour(id, function () { go({ name: 'home' }); }); }, null, { cls: 'mn-danger' }) : null));
+        ? ['trash', 'Delete tour', function () { confirmDeleteTour(id, function () { go({ name: 'home' }); }); }, 'deltour'] : null
+    ].filter(Boolean);
   }
   var FR_KINDS = ['member', 'crew', 'fan', 'promoter'];
   var FR_CARDS = {
@@ -10287,6 +11308,7 @@
   function viewHistory() {
     var backTo = S.route.back || { name: 'mainmenu', back: { name: 'home' } };
     var here = { name: 'history', back: backTo };
+    if (G.isObj(S.route.cpa)) return viewCpa(S.route, here);
     var sum = G.isObj(S.route.sum) ? S.route.sum : S.route.off && S.route.year ? { kind: 'off', artist: S.route.off, year: String(S.route.year) } : null;
     if (sum) return viewHistorySummary(sum, here);
     var tree = historyTree(), thisYear = String(new Date().getFullYear());
@@ -10316,6 +11338,49 @@
         ];
       })) : emptyState('Nothing here yet', 'Once you’re on a tour, its budget shows up here, year by year.'),
       socialBar(''));
+  }
+  function menuHistoryGroup(here) {
+    var st = G.isObj(S.menuBh) ? S.menuBh : (S.menuBh = { open: false, year: '', artist: '' });
+    var row = menuRow('tabmoney', 'Budget History', function () { st.open = !st.open; render(true); if (st.open) menuDropIn('top'); }, null, { open: !!st.open });
+    if (!st.open) return row;
+    var tree = historyTree(), thisYear = String(new Date().getFullYear());
+    var open = function (s) { return menuHistoryLeaf(here, s); };
+    var cpaRow = tree.length && historyArtists().length ? menuRow('tabsheet', 'CPA Package', function () {
+      go({ name: 'history', back: here, cpa: { year: st.year || '', artist: st.artist || '' }, ls: { to: here, label: 'the menu', short: 'Back' } });
+    }, 'Your year, ready for your CPA') : null;
+    return [row, h('div', { class: 'mn-drop', 'data-bh': 'top' }, !tree.length ? h('p', { class: 'mn-none' }, 'No budget history yet.') : [cpaRow].concat(tree.map(function (y) {
+      var yOpen = st.year === y.year, yk = 'y' + y.year;
+      return [
+        menuRow('calendar', y.year, function () { st.year = yOpen ? '' : y.year; st.artist = ''; render(true); if (!yOpen) menuDropIn(yk); },
+          plural(y.artists.length, 'artist'), { open: yOpen, cls: 'bh-year' }),
+        !yOpen ? null : h('div', { class: 'mn-drop', 'data-bh': yk }, y.artists.map(function (a) {
+          var ak = a.name.toLowerCase(), aOpen = st.artist === ak;
+          var bits = [a.tours.length ? plural(a.tours.length, 'tour') : '', a.off ? 'Off Tour' : ''].filter(Boolean).join(' · ');
+          return [
+            menuRow('music', a.name, function () { st.artist = aOpen ? '' : ak; render(true); if (!aOpen) menuDropIn(yk + '|' + ak); }, bits, { open: aOpen }),
+            !aOpen ? null : h('div', { class: 'mn-drop', 'data-bh': yk + '|' + ak },
+              a.tours.map(function (e) {
+                return menuRow('tabmoney', e[1].name || 'Untitled tour', open({ kind: 'tour', id: e[0] }), tourSpanLine(e[1]));
+              }),
+              a.off ? menuRow('tabcost', 'Off Tour', open({ kind: 'off', artist: a.name, year: y.year }),
+                y.year === thisYear ? 'So far this year' : 'The whole year') : null)
+          ];
+        }))
+      ];
+    })))];
+  }
+  function menuHistoryLeaf(here, s) {
+    return function () { go({ name: 'history', back: here, sum: Object.assign(s, { ls: { to: here, label: 'the menu', short: 'Back' } }) }); };
+  }
+  function menuDropIn(key) {
+    if (reduced()) return;
+    var view = $('#view');
+    var d = view ? Array.prototype.filter.call(view.querySelectorAll('.mn-drop[data-bh]'), function (x) { return x.getAttribute('data-bh') === key; })[0] : null;
+    if (!d || typeof d.animate !== 'function') return;
+    var tall = d.offsetHeight;
+    d.style.overflow = 'hidden';
+    var a = d.animate([{ height: '0px', opacity: 0 }, { height: tall + 'px', opacity: 1 }], { duration: 240, easing: 'cubic-bezier(0.25, 0.45, 0.05, 1)' });
+    a.onfinish = a.oncancel = function () { d.style.overflow = ''; };
   }
   function viewHistorySummary(sum, here) {
     var ls = G.isObj(sum.ls) ? sum.ls : { to: here, label: 'Budget History', short: 'Back' };
@@ -10359,7 +11424,7 @@
     if (c.failed && !c.info) return { retry: { text: 'Couldn’t load your pay just now.', go: function () { myPayInfo(id, true); render(true); } } };
     if (!c.info) return { wait: true };
     var d = G.rows(t.shows).map(function (x) { return x.date; }).filter(G.parseDay).sort();
-    return { model: G.paySummary({ tour: { name: t.name, artist: artistOf(t), first: d[0], last: d[d.length - 1] }, info: c.info, book: c.book }),
+    return { model: G.paySummary({ tour: { name: t.name, artist: artistOf(t), first: d[0], last: d[d.length - 1] }, info: c.info, book: c.book, names: myPayNames(id) }),
       stem: fileStem((t.name || 'tour') + ' my pay'),
       door: { label: 'Open MY PAY', go: function () { openTour(id, 'mypay', here, 'Summary', 'list'); } } };
   }
@@ -10451,6 +11516,166 @@
     setTimeout(function () { URL.revokeObjectURL(url); }, 60e3);
     toast('Saved ' + file.name);
   }
+  function cpaArtistBooks(artist) {
+    var key = String(artist || '').trim().toLowerCase(), out = { tours: [], off: null, deleted: [], unknown: false };
+    if (!key) return out;
+    allTourEntries(true).forEach(function (e) {
+      var t = e[1];
+      if (!G.isObj(t) || artistOf(t).toLowerCase() !== key) return;
+      if (!roleKnown(e[0])) { tourRole(e[0]); out.unknown = true; return; }
+      if (!canSeeMoney(e[0])) return;
+      if (t.deletedAt) {
+        var hasMoney = G.rows(t.charges).length || G.rows(t.otherIncome).length || G.rows(t.shows).some(function (s) { return !!s.loggedAt; });
+        if (hasMoney) out.deleted.push({ name: String(t.name || '').trim() || 'Untitled tour' });
+        return;
+      }
+      out.tours.push({ id: e[0], doc: t });
+    });
+    var offId = mayOpenOff(artist) ? offTourOf(artist) : null, offDoc = offId ? getTour(offId) : null;
+    if (offDoc) out.off = { id: offId, doc: offDoc };
+    return out;
+  }
+  function cpaInputFor(artist, year) {
+    var here = S.route;
+    var later = function () { setTimeout(function () { if (S.route === here) render(true); }, 700); return { wait: true }; };
+    if (!scopeRolesKnown()) return later();
+    if (!artist || !mayOpenOff(artist)) return { none: true };
+    var b = cpaArtistBooks(artist);
+    if (b.unknown) return later();
+    var offDoc = b.off ? b.off.doc : null;
+    var spans = offTours(artist, offDoc);
+    if (spans.wait) return { wait: true };
+    if (spans.partial) {
+      return { retry: { text: 'Couldn’t read ' + artist + '’s tour history just now, so the package can’t tell yet which lines happened during a tour.',
+        go: function () { offTours(artist, offDoc, true); render(true); } } };
+    }
+    var B = window.GR_BACKEND;
+    var reimbRead = !reimbOn() || !B || typeof B.reimbursementsRead !== 'function' || !!B.reimbursementsRead();
+    var reimb = reimbOn() ? (reimbRead ? {} : null) : S.mode === 'db' ? null : {};
+    if (reimb) b.tours.forEach(function (t) { reimb[t.id] = reimbRows(t.id); });
+    var waiting = cpaWaitingFor(b);
+    if (waiting && waiting.wait) return later();
+    var now = new Date();
+    return { input: { artist: artist, year: String(year), today: G.ymd(now), made: new Intl.DateTimeFormat('en-US', { dateStyle: 'long' }).format(now),
+      tours: b.tours, off: b.off, spans: spans.tours, reimb: reimb, deleted: b.deleted, deposits: null, cardPayments: null, waiting: waiting } };
+  }
+  var cpaWaitSince = 0;
+  function cpaWaitingFor(b) {
+    if (S.mode !== 'db') return { charges: [], deposits: [] };
+    var names = {};
+    b.tours.forEach(function (t) { names[t.id] = String(t.doc.name || '').trim() || 'Untitled tour'; });
+    if (b.off) names[b.off.id] = 'Off Tour';
+    var mine = Object.keys(names).filter(createdTour), B = window.GR_BACKEND;
+    if (!mine.length || !B || !B.feedWatch) return null;
+    var inc = incomeReady(mine[0]);
+    if (inc) ensureIncomeNew(mine[0]);
+    var mt = inc ? cpaMatchedRead() : null;
+    if (S.feed === undefined || (inc && (!S.incomeNew || !mt))) {
+      if (!cpaWaitSince) cpaWaitSince = Date.now();
+      if (Date.now() - cpaWaitSince < 8000) return { wait: true };
+    } else cpaWaitSince = 0;
+    var feed = S.feed;
+    var charges = feed === undefined || (feed && feed.failed) ? null : !feed || !feed.row ? []
+      : (feed.items || []).filter(function (it) { return !it.tour_id || names[it.tour_id] || feedTourGone(it.tour_id); })
+        .map(function (it) { return { date: String(it.date || ''), amount: G.num(it.amount), book: (it.tour_id && names[it.tour_id]) || '' }; });
+    var dep = inc ? S.incomeNew : null;
+    var deposits = feed === undefined || (feed && feed.failed && !feed.row) ? null : !inc ? [] : !dep || dep.failed ? null
+      : (dep.items || []).map(function (d) { return { date: String(d.date || ''), amount: G.num(d.amount) }; });
+    var matched = feed === undefined || (feed && feed.failed && !feed.row) ? null : !inc ? [] : !mt || mt.failed ? null
+      : (mt.items || []).filter(function (d) { return !!names[d.tour_id] && Array.isArray(d.show_ids) && d.show_ids.length > 0; }).map(function (d) {
+        return { date: String(d.date || ''), amount: G.num(d.amount), tour: String(d.tour_id), shows: d.show_ids.map(String) };
+      });
+    return { charges: charges, deposits: deposits, depositsCut: !!(deposits && deposits.length >= 200), matched: matched };
+  }
+  function cpaMatchedRead() {
+    var B = window.GR_BACKEND, P = S.cpaMatched;
+    if (!B || typeof B.depositsMatched !== 'function') return { items: [], at: 0, failed: true };
+    if ((!P || Date.now() - P.at > 120e3) && !S.cpaMatchedBusy) {
+      S.cpaMatchedBusy = true;
+      B.depositsMatched().then(function (items) { return items; }, function () { return null; }).then(function (items) {
+        S.cpaMatchedBusy = false;
+        S.cpaMatched = { items: items || [], at: Date.now(), failed: !items };
+        render(true);
+      });
+    }
+    return S.cpaMatched || null;
+  }
+  function viewCpa(route, here) {
+    var c = G.isObj(route.cpa) ? route.cpa : {};
+    var ls = G.isObj(route.ls) ? route.ls : { to: here, label: 'Budget History', short: 'Back' };
+    var page = function (body) {
+      return h('div', { class: 'page home menu-page has-tabs bh-page cpa-page' }, menuHead(null, { menu: true, back: ls }), dbBanner(), body, socialBar(''));
+    };
+    var names = historyArtists().slice().sort(function (a, b) { return a.localeCompare(b); });
+    var key = String(c.artist || '').trim().toLowerCase();
+    var artist = names.filter(function (n) { return n.toLowerCase() === key; })[0] || names[0] || '';
+    if (!artist) return page(emptyState('Nothing to show', 'Only the people who see an artist’s money see its CPA package.'));
+    var today = G.ymd(new Date());
+    var yearsOf = function (n, moneyOnly) { var b = cpaArtistBooks(n); return G.cpaYears(b.tours.concat(b.off ? [b.off] : []), today, moneyOnly); };
+    var years = yearsOf(artist);
+    var year = years.indexOf(String(c.year || '')) >= 0 ? String(c.year) : years[0];
+    var got = cpaInputFor(artist, year);
+    if (got.none) return page(emptyState('Nothing to show', 'Only the people who see ' + artist + '’s money see its CPA package.'));
+    if (got.wait) return page(h('p', { class: 'note pay-note' }, 'Loading…'));
+    if (got.retry) {
+      return page(h('div', { class: 'stack' }, h('p', { class: 'note' }, got.retry.text),
+        h('button', { class: 'btn ghost block', type: 'button', onclick: got.retry.go }, 'Try again')));
+    }
+    var pack = G.cpaLedger(got.input), m = G.cpaPdfModel(pack, got.input.made), t = pack.totals;
+    var pickTo = function (y, a) { route.cpa = { year: y, artist: a }; render(true); };
+    var pick = function (label, list, value, onPick) {
+      var sel = h('select', { class: 'input', 'aria-label': label, onchange: function (e) { onPick(e.target.value); } },
+        list.map(function (v) { return h('option', { value: v }, v); }));
+      sel.value = value;
+      return h('div', { class: 'field cpa-pick' }, h('span', { class: 'field-label' }, label), h('div', { class: 'sel-wrap' }, sel, icon('chevron', 16)));
+    };
+    var artists = names.filter(function (n) { return n === artist || yearsOf(n, true).indexOf(year) >= 0; });
+    var stat = function (k, cents, net) {
+      var v = Math.round(cents / 100);
+      return h('div', { class: 'bh-stat' + (net ? ' net' + (v < 0 ? ' neg' : ' pos') : '') },
+        h('span', { class: 'bh-k' }, k), h('strong', { class: 'bh-v num' }, money(v, !!net)));
+    };
+    var dl = function (label, kind) {
+      return h('button', { class: 'btn quiet glow', type: 'button', onclick: function () { cpaDownload(kind, pack); } }, icon('download', 16), label);
+    };
+    var biz = pack.business, y1 = G.cpaYearOf(got.input.off ? got.input.off.doc : null, year);
+    var counted = function (v) { return v == null ? 'not counted yet' : G.moneyCents(v); };
+    var reopen = function () { render(true); };
+    var sec = function (key) { return m.sections.filter(function (s) { return s.key === key; })[0]; };
+    var linesSec = sec('lines') ? Object.assign({}, sec('lines'), { notes: sec('lines').notes.slice(1) }) : null;
+    return page([
+      h('header', { class: 'bh-head' },
+        h('div', { class: 'bh-kicker' }, m.kicker),
+        h('h1', { class: 'bh-title' }, m.title),
+        h('p', { class: 'bh-sub' }, m.sub)),
+      h('div', { class: 'cpa-picks' },
+        pick('Year', years, year, function (v) { pickTo(v, artist); }),
+        artists.length > 1 ? pick('Artist', artists, artist, function (v) { pickTo(year, v); }) : null),
+      h('div', { class: 'bh-stats' }, stat('Income', t.page1.income), stat('Deductions', t.page1.deductions), stat('Net', t.page1.net, true)),
+      h('div', { class: 'bh-dl cpa-dl' }, dl('PDF', 'pdf'), dl('Workbook', 'workbook'), dl('Ledger (CSV)', 'ledger')),
+      h('p', { class: 'bh-dl-note' }, 'Read the PDF first; the workbook is your CPA’s working file; the ledger imports into their software.'),
+      h('section', { class: 'mn-group cpa-rows' },
+        menuRow('tag', biz.name && biz.type ? 'Business details' : 'Add the business name and tax type', function () { openCpaBusiness(artist, null); },
+          biz.name || biz.type ? [biz.name, biz.type ? G.cpaTaxTypeLabel(biz.type) : ''].filter(Boolean).join(' · ') : 'On the cover of the package'),
+        menuRow('cash', 'Merch on hand', function () { openCpaStock(artist, year, null); },
+          'Jan 1: ' + counted(y1.stockStart) + ' · Dec 31: ' + counted(y1.stockEnd))),
+      h('section', { class: 'bh-sec' }, h('h2', { class: 'mn-h mn-over' }, '1099s you received'), cpaGot1099List(artist, year, reopen)),
+      [m.adds, linesSec, m.apartList && m.apartList.lines.length ? m.apartList : null, m.openList].filter(Boolean).map(summarySection),
+      h('p', { class: 'note bh-foot' }, 'Not tax advice: your CPA decides every item marked CPA decides.')
+    ]);
+  }
+  function cpaDownload(kind, pack) {
+    var bytes, type;
+    try {
+      if (kind === 'pdf') { bytes = G.cpaPdfBytes(pack, pack.made); type = 'application/pdf'; }
+      else if (kind === 'workbook') { bytes = G.xlsxBytes(G.cpaWorkbook(pack)); type = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'; }
+      else { bytes = G.cpaCsvBytes(pack); type = 'text/csv'; }
+    } catch (e) { toast('Couldn’t make the file. Try again.'); return null; }
+    var name = G.cpaFileName(pack.year, pack.artist, kind === 'pdf' ? 'summary' : kind), title = 'CPA package ' + pack.year;
+    if (IN_SHELL) { shellHandOver(name, bytes, title); return name; }
+    handOverFile(new File([bytes], name, { type: type }), title);
+    return name;
+  }
   var PF_TABS = [
     { key: 'today', label: 'Today', icon: 'tabmap' },
     { key: 'artists', label: 'Artists', icon: 'music' },
@@ -10532,7 +11757,7 @@
       : (off.city || !isToday) ? kind : 'Today';
     var city = s ? (s.city || 'Show') : (off.city || kind);
     var place = s ? String(s.venue || '').trim() : String(off.hotel || '').trim();
-    var address = String(d.venueAddress || '').trim();
+    var address = s ? String(d.venueAddress || '').trim() : String(off.hotelAddress || '').trim();
     var next = !s ? shows.filter(function (x) { return x.date > entry.date; })[0] : null;
     var sheet = daySheetNodes(s, off, { onlySet: true, cliff: true, band: ourBand(t), bands: tourBands(t) });
     var checkIn = null;
@@ -10783,7 +12008,8 @@
         : 'Nothing has been shared with you yet.');
     }
     S.pfOpen = S.pfOpen || {};
-    return entries.map(function (e) {
+    var creditPages = (meCard && Array.isArray(meCard.creditTours) ? meCard.creditTours : []).filter(function (p) { return p && p.artistId; });
+    return entries.map(function (e, i) {
       var id = e[0], t = e[1], artist = artistOf(t), live = tourIsLive(t);
       var open = !!S.pfOpen[id];
       var cal = null;
@@ -10791,12 +12017,15 @@
         tourRole(id);
         cal = calendarRows(id, t, { from: PF_HOME, fromLabel: 'Profile' });
       }
+      var si = ownSpans[i] && ownSpans[i].first ? standInTour(creditPages, ownSpans[i], artist) : null;
+      var flyer = appTourFlyerBtn(id, t.name || 'Untitled tour', si, si && si.artistId, false);
       return h('section', { class: 'pt-run' + (open ? ' open' : '') + (live ? ' tl-live' : '') },
         h('button', { class: 'pt-run-h', type: 'button', 'aria-expanded': open ? 'true' : 'false',
           onclick: function () { S.pfOpen[id] = !open; render(true); } },
           h('span', { class: 'lr-text' },
             live ? h('span', { class: 'lr-title tl-title' }, h('span', { class: 'tl-name' }, t.name || 'Untitled tour'),
-                h('span', { class: 'tl-now' }, 'Currently on'))
+                h('span', { class: 'tl-now' }, 'Currently on'), flyer)
+              : flyer ? h('span', { class: 'lr-title tl-title' }, h('span', { class: 'tl-name' }, t.name || 'Untitled tour'), flyer)
               : h('span', { class: 'lr-title' }, t.name || 'Untitled tour'),
             h('span', { class: 'lr-sub' }, artist || 'No artist yet')),
           icon('chevron', 16)),
@@ -10849,13 +12078,14 @@
           'aria-selected': on ? 'true' : 'false', onclick: function () { pick(x.key); } },
           icon(x.icon, 20), h('span', null, x.label));
       })),
-      h('div', { class: 'pt-body', role: 'tabpanel', style: S.pfMinH > 0 ? 'min-height:' + S.pfMinH + 'px' : null }, memberAskCards(), artistAskCards(), joinedCards(null), body)
+      h('div', { class: 'pt-body', role: 'tabpanel', style: S.pfMinH > 0 ? 'min-height:' + S.pfMinH + 'px' : null },
+        inviteCards(), listAskCards(), memberAskCards(), artistAskCards(), joinedCards(null), body)
     ];
   }
   window.addEventListener('scroll', function () {
-    if (!(S.pfMinH > 0) || window.scrollY > 0) return;
+    if (!(S.pfMinH > 0) || window.scrollY > 0 || motion || !S.route || S.route.name !== 'home') return;
     S.pfMinH = 0;
-    var pb = document.querySelector('.page.profile .pt-body');
+    var pb = document.querySelector('#view .page.profile .pt-body');
     if (pb) pb.style.minHeight = '';
   }, { passive: true });
   function viewHome() {
@@ -10910,7 +12140,7 @@
     rows = (rows || []).filter(Boolean);
     return rows.length ? h('section', { class: 'mn-group' }, rows) : null;
   }
-  function openSettingsSheet() {
+  function settingsDoors() {
     var B = window.GR_BACKEND;
     var signedIn = S.mode === 'db' && B && B.signOut;
     var who = signedIn && B.email ? B.email() : null;
@@ -10920,28 +12150,81 @@
     var behind = S.route && S.route.name === 'mainmenu' ? S.route.back : S.route;
     var offId = behind && behind.name === 'offtour' && ['costs', 'cards', 'money'].indexOf(behind.view) >= 0
       ? (offTourOf(offArtistFor(behind.artist)) || null) : null;
+    var kind = '';
     var cardsDoor = function () {
       var hasFeed = !!(S.feed && S.feed.row);
       return !signedIn ? null
-        : (hasFeed && runsATour()) ? function () { openFeedSheet(null); }
-        : !inMusic() ? (hasFeed ? function () { openFeedSheet(null); } : null)
-        : (S.feed && S.feed.failed && runsATour()) ? function () { openFeedSheet(null); }
-        : (S.feed && S.feed.connectOnly && runsATour()) ? function () { if (linkedHasMore()) openLinkedStart(); else { closeSheet(); connectCards(null); } }
-        : (payTour && B.myPayAccounts) ? function () { openMyPayCards(payTour, false, 'Linked Cards'); }
-        : hasFeed ? function () { openFeedSheet(null); }
+        : (hasFeed && runsATour()) ? (kind = 'feed', function () { openFeedSheet(null); })
+        : !inMusic() ? (hasFeed ? (kind = 'feed', function () { openFeedSheet(null); }) : null)
+        : (S.feed && S.feed.failed && runsATour()) ? (kind = 'feed', function () { openFeedSheet(null); })
+        : (S.feed && S.feed.connectOnly && runsATour()) ? (kind = linkedHasMore() ? 'start' : 'connect',
+            function () { if (linkedHasMore()) openLinkedStart(); else { closeSheet(); connectCards(null); } })
+        : (payTour && B.myPayAccounts) ? (kind = 'mypay', function () { openMyPayCards(payTour, false, 'Linked Cards'); })
+        : hasFeed ? (kind = 'feed', function () { openFeedSheet(null); })
         : null;
     };
     var cards = cardsDoor() ? function () { var f = cardsDoor(); if (f) f(); }
-      : !signedIn && linkedMoreOn() ? function () { openLinkedStart({ local: true }); } : null;
+      : !signedIn && linkedMoreOn() ? (kind = 'local', function () { openLinkedStart({ local: true }); }) : null;
+    return { B: B, signedIn: signedIn, who: who, asArtist: asArtist, trashed: trashed, payTour: payTour, behind: behind, offId: offId,
+      cards: cards, lc: cards ? kind : '' };
+  }
+  function settingsActions(d) {
+    var B = d.B, who = d.who;
+    return {
+      invite: function () { openInviteCodes(); },
+      agreed: function () { openLegalList(); },
+      reports: function () { openReports(); },
+      blocked: function () { openBlocked(); },
+      contact: function () { window.location.href = 'mailto:' + CONTACT_EMAIL; },
+      trash: function () { closeSheet(); openTrash(); },
+      signout: function () {
+        confirmSheet({
+          title: 'Sign out of Greenroom?',
+          body: (who ? 'You’re signed in as ' + who + '. ' : '') +
+            'Your tours stay safe in your account.',
+          action: 'Sign out',
+          onConfirm: function () { toast('Signing out…'); B.signOut(); return false; }
+        });
+      },
+      deleteme: function () { openDeleteAccount(); },
+      docs: function () { openLegalDocs(); }
+    };
+  }
+  function settingsItems(d) {
+    var B = d.B, A = settingsActions(d), out = [], st = S.legal && S.legal.st;
+    var add = function (key, ic, label, tap, danger) { out.push({ key: key, ic: ic, label: label, tap: tap, danger: !!danger }); };
+    if (d.signedIn && B.inviteCodes && S.inviteCodes && Array.isArray(S.inviteCodes.list)) add('invite', 'tag', 'Invite codes', A.invite);
+    if (d.signedIn && typeof B.legalList === 'function' && S.legalList && S.legalList.yes === true) add('agreed', 'check', 'Who has agreed', A.agreed);
+    if (d.signedIn && typeof B.reportsList === 'function' && S.reportsRow && S.reportsRow.yes === true) add('reports', 'flag', 'Reports', A.reports);
+    if (d.signedIn && typeof B.modOn === 'function' && typeof B.refreshBlocks === 'function' && modOn()) add('blocked', 'block', 'Blocked people', A.blocked);
+    add('contactus', 'mail', 'Contact us', A.contact);
+    var cm = d.offId ? cardMenuTap(d.offId) : null;
+    if (cm) add('cardsettings', cm.ic, cm.label, cm.tap);
+    if (d.cards) add('linked', 'card', 'Linked Cards', d.cards);
+    if (d.trashed) add('trash', 'trash', 'Deleted tours (' + d.trashed + ')', A.trash);
+    if (d.signedIn) add('signout', 'back', 'Sign out', A.signout);
+    if (d.signedIn && B.deleteAccount && !d.asArtist) add('deleteme', 'trash', 'Delete my account', A.deleteme, true);
+    if (d.signedIn && typeof B.legal === 'function' && typeof B.legalDocs === 'function' && st && st.ready && st.acceptedAt) {
+      add('docs', 'tabsheet', 'Documents you agreed to', A.docs);
+    }
+    return out;
+  }
+  function openSettingsSheet() {
+    var d = settingsDoors();
+    var B = d.B, signedIn = d.signedIn, who = d.who, asArtist = d.asArtist, trashed = d.trashed, offId = d.offId, cards = d.cards;
+    var A = settingsActions(d);
     openSheet(function () {
-      var codesRow = signedIn && B.inviteCodes ? stRow('tag', 'Invite codes', function () { openInviteCodes(); }, { hidden: true }) : null;
-      var agreedRow = signedIn && typeof B.legalList === 'function' ? stRow('check', 'Who has agreed', function () { openLegalList(); }, { hidden: true }) : null;
+      var q = '', idx = null, paint = function () {};
+      var refind = function () { idx = null; if (q.trim()) paint(); };
+      var codesRow = signedIn && B.inviteCodes ? stRow('tag', 'Invite codes', A.invite, { hidden: true }) : null;
+      var agreedRow = signedIn && typeof B.legalList === 'function' ? stRow('check', 'Who has agreed', A.agreed, { hidden: true }) : null;
       var repSub = h('span', { class: 'lr-sub' }, '');
-      var reportsRow = signedIn && typeof B.reportsList === 'function' ? stRow('flag', 'Reports', function () { openReports(); }, { hidden: true, sub: repSub }) : null;
+      var reportsRow = signedIn && typeof B.reportsList === 'function' ? stRow('flag', 'Reports', A.reports, { hidden: true, sub: repSub }) : null;
       var adminGroup = codesRow || agreedRow || reportsRow ? h('section', { class: 'mn-group', hidden: true },
         [codesRow, agreedRow, reportsRow].filter(Boolean)) : null;
       var adminSeen = function () {
         if (adminGroup) adminGroup.hidden = (!codesRow || codesRow.hidden) && (!agreedRow || agreedRow.hidden) && (!reportsRow || reportsRow.hidden);
+        refind();
       };
       var askAgreed = function () {};
       var askReports = function () {};
@@ -10965,45 +12248,66 @@
         if (S.inviteCodes && Array.isArray(S.inviteCodes.list)) askReports();
       }
       var blockedRow = signedIn && typeof B.modOn === 'function' && typeof B.refreshBlocks === 'function'
-        ? stRow('block', 'Blocked people', function () { openBlocked(); }, { hidden: !modOn() }) : null;
-      if (blockedRow && blockedRow.hidden) B.refreshBlocks().then(function () { if (modOn()) blockedRow.hidden = false; });
+        ? stRow('block', 'Blocked people', A.blocked, { hidden: !modOn() }) : null;
+      if (blockedRow && blockedRow.hidden) B.refreshBlocks().then(function () { if (modOn()) { blockedRow.hidden = false; refind(); } });
       var legalSaid = h('span', { class: 'lr-sub' }, '');
       var legalGroup = signedIn && typeof B.legal === 'function' && typeof B.legalDocs === 'function'
         ? h('section', { class: 'mn-group', hidden: true },
-            stRow('tabsheet', 'Documents you agreed to', function () { openLegalDocs(); }, { sub: legalSaid })) : null;
+            stRow('tabsheet', 'Documents you agreed to', A.docs, { sub: legalSaid })) : null;
       if (legalGroup) legalKnown(function (st) {
         var day = st && st.ready && st.acceptedAt ? legalDay(st.acceptedAt) : '';
         legalGroup.hidden = !day;
         var due = day && st.notice === true && st.lockOn ? legalDay(st.lockOn) : '';
         legalSaid.textContent = day ? 'You accepted on ' + day + (due ? '. New versions: agree by ' + due : '') : '';
+        refind();
       });
-      return [
-        h('h2', { class: 'sh-title' }, 'Settings'),
-        who ? h('p', { class: 'sh-sub' }, 'Signed in as ' + who) : null,
+      var whoLine = who ? h('p', { class: 'sh-sub st-who' }, 'Signed in as ' + who) : null;
+      var body = h('div', { class: 'st-body' },
         adminGroup,
         stGroup('Your account', [
           blockedRow,
-          stRow('mail', 'Contact us', function () { window.location.href = 'mailto:' + CONTACT_EMAIL; }, { sub: CONTACT_EMAIL })]),
+          stRow('mail', 'Contact us', A.contact, { sub: CONTACT_EMAIL })]),
         stGroup('Your tours', [
           offId ? cardMenuItem(offId, true) : null,
           cards ? stRow('card', 'Linked Cards', cards) : null,
-          trashed ? stRow('trash', 'Deleted tours (' + trashed + ')', function () { closeSheet(); openTrash(); }) : null]),
+          historyArtists().length ? stRow('tag', 'Business details', function () { openCpaBusiness(null, openSettingsSheet); }) : null,
+          trashed ? stRow('trash', 'Deleted tours (' + trashed + ')', A.trash) : null]),
         stGroup(null, [
-          signedIn ? stRow('back', 'Sign out', function () {
-            confirmSheet({
-              title: 'Sign out of Greenroom?',
-              body: (who ? 'You\u2019re signed in as ' + who + '. ' : '') +
-                'Your tours stay safe in your account.',
-              action: 'Sign out',
-              onConfirm: function () { toast('Signing out\u2026'); B.signOut(); return false; }
-            });
-          }) : null,
-          signedIn && B.deleteAccount && !asArtist ? stRow('trash', 'Delete my account',
-            function () { openDeleteAccount(); }, { danger: true }) : null]),
-        legalGroup,
+          signedIn ? stRow('back', 'Sign out', A.signout) : null,
+          signedIn && B.deleteAccount && !asArtist ? stRow('trash', 'Delete my account', A.deleteme, { danger: true }) : null]),
+        legalGroup);
+      var results = h('div', { class: 'mn-results' });
+      var said = h('p', { class: 'sr', 'aria-live': 'polite' });
+      paint = function () {
+        var on = !!q.trim();
+        body.hidden = on;
+        if (whoLine) whoLine.hidden = on;
+        if (!on) { fillEl(results, null); said.textContent = ''; return; }
+        if (!idx) {
+          idx = [];
+          settingsIndex(function (key, ic, label, where, open, o) {
+            idx.push({ key: key, ic: ic, label: label, where: where, open: open, danger: !!(o && o.danger),
+              words: (MENU_WORDS[key] || []).concat((o && o.words) || []) });
+          });
+        }
+        var hits = menuMatch(idx, q);
+        said.textContent = hits.length ? plural(hits.length, 'result') : 'No results';
+        fillEl(results, menuResults(q, hits, 'Try another word, like card, bank or sign out.'));
+      };
+      results.addEventListener('touchmove', function () {
+        var a = document.activeElement;
+        if (a && a.classList && a.classList.contains('mn-q')) a.blur();
+      }, { passive: true });
+      return [
+        menuNav('Settings', function () { closeSheet(); }, 'h2'),
+        findField({ key: 'st-q', label: 'Search Settings', paint: function () { paint(); }, q: function () { return q; }, set: function (v) { q = v; } }),
+        whoLine,
+        body,
+        said,
+        results,
         h('p', { class: 'hint', style: 'margin:14px 0 0;opacity:.7;text-align:center' }, 'Version ' + (window.GREENROOM_BUILD || 'dev'))
       ];
-    }, { label: 'Settings', cls: 'st-sheet' });
+    }, { label: 'Settings', cls: 'st-sheet st-full mn-look' });
   }
   function legalKnown(then) {
     var B = window.GR_BACKEND;
@@ -11494,7 +12798,11 @@
       var ht = getTour(fr.host) || {};
       var back = function (view) { return function () { go({ name: 'tour', id: fr.host, view: view, list: (S.route && S.route.list) || null }); }; };
       if (canSeeMoney(fr.host)) tabs.push({ label: ht.name || 'Untitled tour', on: false, go: back('costs') });
-      tabs.push({ label: 'MY PAY', on: false, go: back('mypay') });
+      if (offPayOf(artist)) {
+        tabs.push({ label: 'MY PAY', on: current === 'mypay', go: function () {
+          if (current !== 'mypay') go(Object.assign(offRoute(artist, 'mypay', fr.host), { list: (S.route && S.route.list) || null }));
+        } });
+      } else tabs.push({ label: 'MY PAY', on: false, go: back('mypay') });
     } else {
       if (seesBudgets()) tabs.push({ label: 'Tours', on: current === 'tours', go: function () { if (current !== 'tours') go(offRoute(artist, 'tours')); } });
       tabs.push({ label: 'MY PAY', on: current === 'mypay', go: function () { if (current !== 'mypay') go(offRoute(artist, 'mypay')); } });
@@ -11551,7 +12859,7 @@
     if (view === 'tours' && fr.host) view = 'costs';
     if (!artist && view !== 'mypay') view = 'tours';
     if (view === 'mypay') {
-      if (fr.host) { S.route = { name: 'tour', id: fr.host, view: 'mypay', list: r.list || null }; return viewTour(); }
+      if (fr.host && !offPayOf(artist)) { S.route = { name: 'tour', id: fr.host, view: 'mypay', list: r.list || null }; return viewTour(); }
       return viewOffPay(fr, artist);
     }
     if (view === 'tours') return viewOffTours(fr, artist);
@@ -11560,13 +12868,14 @@
   function viewOffBook(fr, name, view) {
     var r = S.route, id = offTourOf(name);
     var mine = ownsBand(name) && canWrite();
+    if (id && offPayOf(name) === id) myPayInfo(id);
     if (!id && mine && r.start && !S.offMaking) startOffBook(name);
     var t = id ? getTour(id) : null;
     var body;
     if (!t) {
       body = !mine ? emptyState('Nothing off tour yet', 'Once the tour’s creator starts ' + name + '’s Off Tour book, it shows up here.')
         : r.start || S.offMaking ? h('p', { class: 'note', style: 'margin-top:24px' }, 'Starting the Off Tour book…')
-        : [emptyState('Nothing off tour yet', 'What ' + name + ' spends and earns between tours is kept in its Off Tour book.'),
+        : [emptyState('Nothing off tour yet', 'What ' + name + ' spends and earns between tours is kept in its Off Tour book, the band’s book.'),
             h('div', { class: 'stack' }, h('button', { class: 'btn primary block', type: 'button',
               onclick: function () { startOffBook(name); render(true); } }, icon('plus', 18), 'Start the Off Tour book'))];
     } else if (view === 'cards') body = tabCards(id, t);
@@ -11721,15 +13030,247 @@
       offBar(fr));
   }
   function viewOffPay(fr, artist) {
-    var all = scopedTours();
-    var e = fr.next ? [fr.next.id, fr.next.t] : (all.filter(function (x) { return !!firstNight(x[1]); })[0] || all[0] || null);
+    var own = offPayOf(artist), body, top = null;
+    if (own) {
+      top = myPayTop(own);
+      body = myPayBody(own, getTour(own), { lead: h('p', { class: 'hist-who', style: 'margin-top:0' }, 'Your own book, between tours') });
+    } else {
+      var all = scopedTours();
+      var e = fr.next ? [fr.next.id, fr.next.t] : (all.filter(function (x) { return !!firstNight(x[1]); })[0] || all[0] || null);
+      if (e) top = myPayTop(e[0]);
+      body = e ? myPayBody(e[0], e[1], { lead: h('p', { class: 'hist-who', style: 'margin-top:0' }, 'Your pay for ' + (e[1].name || 'Untitled tour')) })
+        : emptyState(NO_TOUR, 'Your pay shows up here once you are on a tour.');
+    }
     return h('div', { class: 'page tour has-tabs exp-page pay-page' },
       offBand(null, S.route.list),
       offTopTabs(fr, artist, 'mypay'),
+      top,
       dbBanner(),
-      e ? [h('p', { class: 'hist-who', style: 'margin-top:0' }, 'Your pay for ' + (e[1].name || 'Untitled tour')), myPayBody(e[0], e[1])]
-        : emptyState(NO_TOUR, 'Your pay shows up here once you are on a tour.'),
+      body,
       offBar(fr));
+  }
+  function offMoveKey(lineId) { return 'mv-' + String(lineId).replace(/[^A-Za-z0-9_-]/g, '').slice(0, 72); }
+  function offMoveOk(id, r) {
+    var t = getTour(id), B = window.GR_BACKEND;
+    if (!r || !r.chargeId || !t || !isOffTour(t) || offPayOf(artistOf(t)) !== id || !canWrite() || !canEditTour(id)) return false;
+    if (!B || !(B.patchMyPayBook || B.saveMyPayBook)) return false;
+    var ch = G.isObj(t.charges) ? t.charges[r.chargeId] : null;
+    if (!(G.isObj(ch) && !ch.accounted && G.num(ch.amount) > 0 && !ch.crewId && !G.crewSplitOf(ch))) return false;
+    if (offMoveTwin(t, id, r.chargeId)) return false;
+    if (chargeSource(t, ch) === 'PLAID' && !offMoveHeld()) return false;
+    return true;
+  }
+  function offMoveTwin(t, id, chargeId) {
+    return bandTours(artistOf(t)).some(function (e) {
+      var x = e[0] !== id && G.isObj(e[1].charges) ? e[1].charges[chargeId] : null;
+      return G.isObj(x) && x.category === 'offdebt';
+    });
+  }
+  function offMoveHeld() {
+    var d = S.acct && S.acct.data;
+    if (!d) { ensureAcct(); return false; }
+    return G.isObj(d.look) && typeof d.look.my_pay_moved === 'number';
+  }
+  function offMoveEntry(id, t, lineId, ch) {
+    var feed = chargeSource(t, ch) === 'PLAID' && /^p./.test(String(lineId)) ? String(lineId).slice(1) : null;
+    var note = String(ch.merchant || '').trim().slice(0, 60), day = String(ch.date || ''), amount = Math.round(G.num(ch.amount) * 100) / 100;
+    var was = JSON.parse(JSON.stringify(ch));
+    delete was.id;
+    if (was.date === day) delete was.date;
+    if (was.amount === amount) delete was.amount;
+    if (was.merchant === note) delete was.merchant;
+    var moved = { book: id, id: String(lineId) };
+    if (feed) moved.feed = feed;
+    moved.was = was;
+    return { date: day, amount: amount, how: ch.cash ? 'cash' : ch.paid ? 'debit' : 'credit', category: G.payCatOf(ch.category),
+      note: note, createdAt: Date.now(), moved: moved };
+  }
+  function offMoveSame(ch, e) {
+    var m = G.isObj(e && e.moved) ? e.moved : null;
+    if (!G.isObj(ch) || !m) return false;
+    var was = G.isObj(m.was) ? m.was : {};
+    var day = was.date !== undefined ? was.date : e.date, amt = was.amount !== undefined ? was.amount : e.amount;
+    return String(ch.importId || '') === String(was.importId || '') && String(ch.date || '') === String(day || '') &&
+      Math.round(G.num(ch.amount) * 100) === Math.round(G.num(amt) * 100);
+  }
+  function offMovedAgain(id, e) {
+    var t = getTour(id), m = G.isObj(e && e.moved) ? e.moved : null;
+    if (!t || !isOffTour(t) || !m || m.book !== id || m.back || m.id == null) return false;
+    var ch = G.isObj(t.charges) ? t.charges[String(m.id)] : null;
+    return G.isObj(ch) && !offMoveSame(ch, e);
+  }
+  function offMoving(id, on) { S.offMoving = S.offMoving || {}; if (on !== undefined) S.offMoving[id] = on; return !!S.offMoving[id]; }
+  async function offMoveToPay(id, lineId) {
+    var t = getTour(id), ch = t && G.isObj(t.charges) ? t.charges[lineId] : null;
+    if (!G.isObj(ch)) { toast('That entry isn’t there anymore.'); return false; }
+    if (offMoving(id)) return false;
+    var key = offMoveKey(lineId), entry = offMoveEntry(id, t, lineId, ch), cat = entry.category;
+    var label = cat.indexOf('x-') === 0 ? catName(t, cat) : '';
+    offMoving(id, true);
+    try {
+      var why = null;
+      var ok = await saveMyPayBook(id, function (next) {
+        next.entries = G.isObj(next.entries) ? next.entries : {};
+        next.entries[key] = entry;
+        if (label && !G.extraCatNames(next)[cat]) { next.extraCats = G.isObj(next.extraCats) ? next.extraCats : {}; next.extraCats[cat] = label; }
+      }, { quiet: true, err: function (e) { why = e; } });
+      if (!ok) {
+        if (why && why.code === 'full') toast('Your own book between tours is full, so nothing was moved.', 5200);
+        else saveFailed('pay', why);
+        return false;
+      }
+      var patch = { charges: {} };
+      patch.charges[lineId] = null;
+      if (!(await api.update(id, patch))) return false;
+      if (S.drafts) delete S.drafts['exp:' + id];
+      return true;
+    } finally { offMoving(id, false); }
+  }
+  async function offMoveBack(id, eid) {
+    if (offMoving(id)) return false;
+    offMoving(id, true);
+    try {
+      var there = true, c = myPayInfo(id);
+      var ok = await saveMyPayBook(id, function (next) {
+        var en = G.isObj(next.entries) ? next.entries : {};
+        if (!G.isObj(en[eid]) || !G.isObj(en[eid].moved) || en[eid].moved.book !== id) { there = false; return; }
+        en[eid] = Object.assign({}, en[eid], { moved: Object.assign({}, en[eid].moved, { back: Date.now() }) });
+      }, { fresh: true });
+      if (!ok) return false;
+      var e = G.isObj(c.book) && G.isObj(c.book.entries) ? c.book.entries[eid] : null;
+      if (!there || !G.isObj(e)) { toast('That entry isn’t there anymore.'); return false; }
+      return await offMoveBackFinish(id, eid, e);
+    } finally { offMoving(id, false); }
+  }
+  async function offMoveBackFinish(id, eid, e) {
+    var patch = { charges: {} };
+    patch.charges[String(e.moved.id)] = offBackLine(e);
+    if (!(await api.update(id, patch))) return false;
+    if (S.drafts) delete S.drafts['exp:' + id];
+    return saveMyPayBook(id, function (next) { if (G.isObj(next.entries)) delete next.entries[eid]; });
+  }
+  function offBackLine(e) {
+    var m = e.moved, was = G.isObj(m.was) ? JSON.parse(JSON.stringify(m.was)) : null;
+    var day = String(e.date || ''), amount = Math.round(G.num(e.amount) * 100) / 100;
+    var line = Object.assign({ id: String(m.id), date: day, amount: amount,
+      merchant: String(e.note || '') || 'Charge' }, was || { category: G.payCatOf(e.category), paid: e.how !== 'credit', cash: e.how === 'cash', manual: true });
+    line.id = String(m.id);
+    if (!m.feed) { line.date = day; line.amount = amount; }
+    var note = String(e.note || '').trim().slice(0, 60), had = was && was.merchant != null ? String(was.merchant).trim().slice(0, 60) : null;
+    if (!m.feed && note && had !== note) line.merchant = note;
+    return line;
+  }
+  function offMoveJobs(id, t, book) {
+    var lines = G.isObj(t && t.charges) ? t.charges : {}, en = G.isObj(book && book.entries) ? book.entries : {}, out = [];
+    Object.keys(en).forEach(function (k) {
+      var e = en[k], m = G.isObj(e) ? e.moved : null;
+      if (!G.isObj(m) || m.book !== id || m.id == null) return;
+      var on = G.isObj(lines[String(m.id)]);
+      if (!m.back && on) { if (offMoveSame(lines[String(m.id)], e)) out.push({ kind: 'off', key: k, e: e }); }
+      else if (m.back && on) out.push({ kind: 'drop', key: k, e: e });
+      else if (m.back) out.push({ kind: 'back', key: k, e: e });
+    });
+    return out;
+  }
+  function offMoveSettle(id) {
+    var B = window.GR_BACKEND, t = getTour(id), c = S.myPay && S.myPay[id];
+    if (!S.loaded || !t || !isOffTour(t) || offPayOf(artistOf(t)) !== id || !c || !G.isObj(c.book) || !canWrite() || !B || !B.myPayBook) return;
+    if (offMoving(id) || !offMoveJobs(id, t, c.book).length) return;
+    offMoving(id, true);
+    var done = function () { offMoving(id, false); render(true); };
+    B.myPayBook(id).then(function (doc) {
+      if (G.isObj(doc)) c.book = doc;
+      var jobs = offMoveJobs(id, getTour(id), c.book);
+      return jobs.reduce(function (p, j) {
+        return p.then(function () {
+          if (j.kind === 'off') {
+            var now = getTour(id), line = now && G.isObj(now.charges) ? now.charges[String(j.e.moved.id)] : null;
+            if (!offMoveSame(line, j.e)) return;
+            var patch = { charges: {} }; patch.charges[String(j.e.moved.id)] = null; return api.update(id, patch);
+          }
+          if (j.kind === 'drop') return saveMyPayBook(id, function (next) { if (G.isObj(next.entries)) delete next.entries[j.key]; }, { quiet: true });
+          return offMoveBackFinish(id, j.key, j.e);
+        });
+      }, Promise.resolve());
+    }).then(done, done);
+  }
+  function offMoveBtn(id, r, again) {
+    return h('button', { class: 'sw-edit', type: 'button', 'aria-label': 'Move ' + r.label + ' to MY PAY',
+      onclick: function () { offMoveAsk(id, r, again); } }, icon('cash', 16), 'Move to MY PAY');
+  }
+  function offMoveAsk(id, r, again) {
+    var t = getTour(id), ch = t && G.isObj(t.charges) ? t.charges[r.chargeId] : null;
+    if (!G.isObj(ch)) { toast('That entry isn’t there anymore.'); return; }
+    var what = [String(ch.merchant || 'This line'), money(G.num(ch.amount)), ch.date ? dayMD(ch.date) : ''].filter(Boolean).join(' · ');
+    var twin = bandTours(artistOf(t)).filter(function (e) {
+      var x = e[0] !== id && G.isObj(e[1].charges) ? e[1].charges[r.chargeId] : null;
+      return G.isObj(x) && x.category === 'offdebt';
+    })[0];
+    confirmSheet({
+      title: 'Move to MY PAY?',
+      body: what + ' comes off the band’s book (Off Tour) and goes into your own book (MY PAY), where only you see it. ' +
+        (twin ? 'It stays on ' + (twin[1].name || 'its tour') + ' as Off Tour Debt, because that tour’s card paid it. ' : '') +
+        'You can move it back from MY PAY.',
+      action: 'Move to MY PAY',
+      onConfirm: async function () {
+        var ok = await offMoveToPay(id, r.chargeId);
+        if (ok) toast('Moved to your MY PAY');
+        return ok;
+      },
+      onClose: function () { if (again) setTimeout(function () { if (!sheet) again(); }, 250); }
+    });
+  }
+  function offMoveBackOk(id, e) {
+    var t = getTour(id);
+    return !!t && isOffTour(t) && G.isObj(e && e.moved) && e.moved.book === id && offPayOf(artistOf(t)) === id && canWrite();
+  }
+  function offMoveBackAsk(id, e, again) {
+    var what = [String(e.note || 'This line'), money(G.num(e.amount)), e.date ? dayMD(e.date) : ''].filter(Boolean).join(' · ');
+    confirmSheet({
+      title: 'Move back to Off Tour?',
+      body: what + ' comes out of your own book (MY PAY) and goes back into the band’s book (Off Tour), as it was there. ' +
+        'Whoever sees the band’s money sees it again.',
+      action: 'Move back',
+      onConfirm: async function () {
+        var ok = await offMoveBack(id, e.id);
+        if (ok) toast('Moved back to Off Tour');
+        return ok;
+      },
+      onClose: function () { if (again) setTimeout(function () { if (!sheet) again(); }, 250); }
+    });
+  }
+  function offMoveDropAsk(id, e, again) {
+    var what = [String(e.note || 'This line'), money(G.num(e.amount)), e.date ? dayMD(e.date) : ''].filter(Boolean).join(' · ');
+    var back = offMoveBackOk(id, e), busy = false;
+    var act = function (fn) {
+      return async function (ev) {
+        if (busy) return;
+        busy = true; ev.currentTarget.disabled = true;
+        var ok = await fn();
+        busy = false;
+        closeSheet();
+        if (ok !== false) render(true);
+      };
+    };
+    openSheet(function () {
+      return [
+        h('h2', { class: 'sh-title' }, 'Remove this expense?'),
+        h('p', { class: 'sh-sub' }, what + ' came from the band’s book (Off Tour) and is not on it any more, so removing it here leaves it in neither book.' +
+          (back ? ' Move it back to Off Tour instead and the band’s book has it again.' : '')),
+        h('div', { class: 'stack' },
+          back ? h('button', { class: 'btn primary block', type: 'button', onclick: act(async function () {
+            var ok = await offMoveBack(id, e.id);
+            if (ok) toast('Moved back to Off Tour');
+            return ok;
+          }) }, 'Move back to Off Tour') : null,
+          h('button', { class: 'btn danger block', type: 'button', onclick: act(async function () {
+            var ok = await saveMyPayBook(id, function (next) { if (G.isObj(next.entries)) delete next.entries[e.id]; });
+            if (ok) toast('Removed');
+            return ok;
+          }) }, 'Remove it'),
+          h('button', { class: 'btn ghost block', type: 'button', autofocus: true, onclick: function () { closeSheet(); } }, 'Cancel'))
+      ];
+    }, { label: 'Remove this expense?', onClose: function () { if (again) setTimeout(function () { if (!sheet) again(); }, 250); } });
   }
   function viewOffEmpty(view) {
     var bar = tourTabs(null, view);
@@ -12496,6 +14037,14 @@
     label.split(/\s+/).some(function (w) { var next = out ? out + ' ' + w : w; if (next.length > 11) return true; out = next; return false; });
     return out ? out + '…' : label;
   }
+  function bookParts(byRow, rowName) {
+    var tints = ['crew', 'lcard', 'bus', 'members', 'mbill', 'comm'];
+    var biggest = Object.keys(byRow).filter(function (k) { return byRow[k] > 0.004; }).sort(function (a, b) { return byRow[b] - byRow[a]; });
+    var parts = biggest.slice(0, tints.length).map(function (k, i) { return { label: rowName[k] || 'Other', v: byRow[k], cls: tints[i] }; });
+    var small = biggest.slice(tints.length).reduce(function (n, k) { return n + byRow[k]; }, 0);
+    if (small > 0.004) parts.push({ label: 'Other', v: small, cls: 'other' });
+    return parts;
+  }
   function expenseSummary(c, expParts, off) {
     var by = G.isObj(c.incomeBy) ? c.incomeBy : {};
     var guarOther = (Array.isArray(c.otherRows) ? c.otherRows : []).reduce(function (n, x) { return n + (x && x.kind === 'guarantee' ? G.num(x.amount) : 0); }, 0);
@@ -12608,6 +14157,9 @@
         (off ? '' : '. ' + gap + (net >= 0 ? ' ahead' : ' behind') + ' so far') + '.' },
       body);
   }
+  function exNums() {
+    return h('span', { class: 'ex-nums' }, Array.prototype.slice.call(arguments));
+  }
   function tabExpenses(id, t, c, o) {
     var off = !!(o && o.off), partsOnly = !!(o && o.parts), readOnly = !!(o && o.readOnly);
     if (!off && !partsOnly) syncCrew(id);
@@ -12652,23 +14204,24 @@
       var inner = [
         h('div', { class: 'row-label' }, l.label,
           hint.text ? h('span', { class: 'hint' + hint.cls }, hint.text) : null),
-        h('span', { class: 'amt num glow ex-proj', 'aria-label': 'Projected ' + (unset ? 'not set' : money(l.projected)) },
+        exNums(h('span', { class: 'amt num glow ex-proj', 'aria-label': 'Projected ' + (unset ? 'not set' : money(l.projected)) },
           unset ? '\u2014' : money(l.projected)),
         creditCell(figured(l.key) ? 0 : l.creditOut != null ? l.creditOut : l.paid - paidPart(t, l.key), l.over > 0),
         paidCell(l.paidOut != null ? l.paidOut : figured(l.key) ? l.paid - rbCash : debitPart(t, l.key) +
           (l.key === 'card' ? G.cardDebts(t).reduce(function (n, d) { return n + G.cardSummary(d, t).paidOff; }, 0) : 0)),
-        cashCell(figured(l.key) ? rbCash : l.cashOut != null ? l.cashOut : cashPart(t, l.key))
+        cashCell(figured(l.key) ? rbCash : l.cashOut != null ? l.cashOut : cashPart(t, l.key)),
+        edit ? icon('chevron', 18) : null)
       ];
-      if (!edit) return h('div', { class: 'row ex-row' }, inner);
+      if (!edit) return h('div', { class: 'row ex-row ex-fit' }, inner);
       return h('button', {
-        class: 'row rowbtn ex-row', type: 'button',
+        class: 'row rowbtn ex-row ex-fit', type: 'button',
         onclick: function () {
           if (l.key === 'crew' || l.key === 'members') openCrewSheet(id, true);
           else if (l.key === 'commission') openCommissionSheet(id);
           else if (l.key === 'reimbursements') openReimbursements(id);
           else openCategorySheet(id, l.key);
         }
-      }, inner, icon('chevron', 18));
+      }, inner);
     };
     var owedOn = function (l) {
       return figured(l.key) ? 0 : Math.max(0, l.creditOut != null ? l.creditOut : l.paid - paidPart(t, l.key));
@@ -12713,12 +14266,7 @@
       var rowName = {};
       entries.forEach(function (e) { var k = e.l.label === 'Credit card (other)' ? 'card-other' : e.l.key; rowName[k] = bookPartName(k, e.l.label); });
       feedCards.forEach(function (card) { rowName['feed:' + card.id] = cardShort(card.feed.name || card.label, cardBank(card)); });
-      var tints = ['crew', 'lcard', 'bus', 'members', 'mbill', 'comm'];
-      var biggest = Object.keys(byRow).filter(function (k) { return byRow[k] > 0.004; }).sort(function (a, b) { return byRow[b] - byRow[a]; });
-      var bookParts = biggest.slice(0, tints.length).map(function (k, i) { return { label: rowName[k] || 'Other', v: byRow[k], cls: tints[i] }; });
-      var small = biggest.slice(tints.length).reduce(function (n, k) { return n + byRow[k]; }, 0);
-      if (small > 0.004) bookParts.push({ label: 'Other', v: small, cls: 'other' });
-      return bookParts;
+      return bookParts(byRow, rowName);
     }
     if (partsOnly) return expParts;
     var projTotal = 0, paidTotal = 0;
@@ -13135,23 +14683,32 @@
       var lead = S.mode === 'db' && bookLead(id) && serverLead(id);
       var slides = function (r) { return lead && r.source === 'PLAID' && /^p/.test(String(r.chargeId || '')); };
       var mine = function (r) { return canWrite() && canEditTour(id) && (r.typed || r.cashId || (r.chargeId && r.source === 'MANUAL')); };
+      var cpaMarks = cpaMarksFor(id), cpaOk = cpaMayMark(id);
+      var canCpa = function (r) { return cpaOk && cpaFieldsOf(id, r).any; };
+      var cpaBtn = function (r) {
+        return h('button', { class: 'sw-edit sw-group', type: 'button', 'aria-label': 'Mark ' + r.label + ' for your CPA',
+          onclick: function () { openCpaMarks(id, r, function () { reopen(); }); } }, icon('tag', 16), 'For CPA');
+      };
+      var anyMove = all.some(function (r) { return offMoveOk(id, r); });
       var anySlide = all.some(function (r) { return slides(r) || mine(r); });
-      var anyGroup = all.some(canGroup), anyWho = all.some(canWho), anyInfo = all.some(canInfo);
+      var anyGroup = all.some(canGroup), anyWho = all.some(canWho), anyInfo = all.some(canInfo), anyCpa = all.some(canCpa);
+      var fit = function (acts) { if (acts.length >= 5) acts.forEach(function (b) { b.style.width = '64px'; }); return acts; };
       var entryNode = function (r) {
           var line = logRow(r);
-          var first = (canGroup(r) ? [groupBtn(r)] : canWho(r) ? [whoBtn(r)] : []).concat(canInfo(r) ? [infoBtn(r)] : []);
+          var first = (canGroup(r) ? [groupBtn(r)] : canWho(r) ? [whoBtn(r)] : []).concat(canCpa(r) ? [cpaBtn(r)] : [], canInfo(r) ? [infoBtn(r)] : [])
+            .concat(offMoveOk(id, r) ? [offMoveBtn(id, r, function () { reopen(); })] : []);
           if (mine(r)) {
-            return swipeRow(line, first.concat([
+            return swipeRow(line, fit(first.concat([
               h('button', { class: 'sw-edit', type: 'button', 'aria-label': 'Edit ' + r.label,
                 onclick: function () { openManualEdit(id, key, r, back, o ? function () { reopen(); } : null); } }, icon('edit', 16), 'Edit'),
               h('button', { class: 'sw-undo', type: 'button', 'aria-label': 'Delete ' + r.label,
-                onclick: function () { removeEntry(r); } }, icon('trash', 16), 'Delete')]));
+                onclick: function () { removeEntry(r); } }, icon('trash', 16), 'Delete')])));
           }
-          if (!slides(r)) return first.length ? swipeRow(line, first) : line;
+          if (!slides(r)) return first.length ? swipeRow(line, fit(first)) : line;
           var ch = (whole.charges || {})[r.chargeId];
           ch = Object.assign({ id: r.chargeId }, ch || {});
           var busy = false;
-          return swipeRow(line, first.concat([
+          return swipeRow(line, fit(first.concat([
             h('button', { class: 'sw-edit', type: 'button', 'aria-label': 'Edit ' + r.label,
               onclick: function () { if (busy) return; busy = true; editCharge(id, ch).then(function () { busy = false; }); } },
               icon('edit', 16), 'Edit'),
@@ -13164,7 +14721,7 @@
                 toast(r.label + ' is back in new charges');
                 render(true);
                 setTimeout(function () { reopen(); }, 700);
-              } }, icon('back', 16), 'Undo')]));
+              } }, icon('back', 16), 'Undo')])));
       };
       var body = !list.length ? (away.length ? null : emptyState('Nothing logged yet', 'Charges from your linked cards, statements you import and payments you log by hand all show up here.'))
         : (groups && !only) ? h('div', { class: 'ledger logged' }, groups.map(function (g) {
@@ -13180,11 +14737,14 @@
         sheetLeftOut(id, key, person ? person.id : null, away),
         loose ? h('p', { class: 'note' }, plural(loose, 'entry').replace('entrys', 'entries') + ' under Crew ' + (loose === 1 ? 'isn\u2019t' : 'aren\u2019t') + ' anyone\u2019s yet.' +
           (anyWho ? ' Swipe one left and tap Who.' : '')) : null,
-        anySlide || anyGroup || anyWho ? h('p', { class: 'note sw-hint' }, anyGroup
+        anyCpa ? h('p', { class: 'note sw-hint' }, cpaSwipeWords(anyGroup, anyWho, anySlide, anyInfo),
+          anyMove ? ' Yours, not the band’s? Swipe it left and tap Move to MY PAY.' : '')
+        : anySlide || anyGroup || anyWho ? h('p', { class: 'note sw-hint' }, anyGroup
           ? 'Swipe one left to move it to another group' + (anySlide ? ', or to fix it.' : '.')
           : anyWho ? 'Swipe one left to say who it was for' + (anySlide ? ', or to fix it.' : '.')
-          : 'Logged one wrong? Swipe it left to fix it.')
-          : anyInfo ? h('p', { class: 'note sw-hint' }, 'Swipe a charge left for More info.') : null,
+          : 'Logged one wrong? Swipe it left to fix it.', anyMove ? ' Yours, not the band’s? Swipe it left and tap Move to MY PAY.' : '')
+          : anyInfo ? h('p', { class: 'note sw-hint' }, 'Swipe a charge left for More info.' + (anyMove ? ' Yours, not the band’s? Swipe it left and tap Move to MY PAY.' : ''))
+          : anyMove ? h('p', { class: 'note sw-hint' }, 'Yours, not the band’s? Swipe it left and tap Move to MY PAY.') : null,
         body,
         away.length ? [h('h3', { class: 'sh-h3' }, 'During a tour \u00b7 not counted here'),
           h('div', { class: 'ledger logged' }, away.map(entryNode))] : null,
@@ -13203,7 +14763,8 @@
           h('div', { class: 'row-label' }, r.label,
             h('span', { class: 'hint' }, [r.date ? dayMD(r.date) : '', r.detail,
               r.crewId && !person ? 'for ' + ((crewPerson(t, r.crewId) || {}).name || 'someone')
-                : r.split && !person ? 'split: ' + splitNames(t, r.split) : ''].filter(Boolean).join(' \u00b7 '))),
+                : r.split && !person ? 'split: ' + splitNames(t, r.split) : ''].concat(
+              cpaRowWords(id, r, cpaMarks)).filter(Boolean).join(' \u00b7 '))),
           h('span', { class: 'src-col' },
             h('span', { class: 'src-tag src-' + r.source.toLowerCase() }, r.source),
             r.card ? h('span', { class: 'src-card' }, r.card) : null),
@@ -13227,6 +14788,290 @@
       }
     }
     openSheet(build, { label: 'Logged Card Transactions', cls: 'cat-sheet' });
+  }
+  function cpaBooksOf(bookId) {
+    var t = getTour(bookId), artist = artistOf(t).toLowerCase(), out = [], seen = {};
+    if (!t) return out;
+    out.push({ id: bookId, doc: t });
+    seen[bookId] = true;
+    if (!artist) return out;
+    var add = function (doc, id) {
+      if (seen[id] || !G.isObj(doc) || doc.deletedAt || artistOf(doc).toLowerCase() !== artist || !canSeeMoney(id)) return;
+      seen[id] = true;
+      out.push({ id: id, doc: doc });
+    };
+    S.tours.forEach(add);
+    Object.keys(S.pending).forEach(function (id) { add(S.pending[id], id); });
+    return out;
+  }
+  function cpaMarksFor(bookId) { return G.cpaMarksOf(cpaBooksOf(bookId)); }
+  function cpaMayMark(bookId) { return canWrite() && canEditTour(bookId); }
+  function cpaLineOf(bookId, r) {
+    var t = getTour(bookId);
+    var coll = r && r.chargeId ? 'charges' : r && r.cashId ? 'cashLog' : '';
+    if (!t || !coll) return null;
+    var key = coll === 'charges' ? r.chargeId : r.cashId;
+    var x = G.isObj(t[coll]) ? t[coll][key] : null;
+    return G.isObj(x) ? { coll: coll, key: key, x: x, book: t } : null;
+  }
+  function cpaFieldsOf(bookId, r) {
+    var l = cpaLineOf(bookId, r);
+    return l ? G.cpaMarkFields(l.book, l.coll, l.x) : { any: false };
+  }
+  function cpaRowWords(bookId, r, marks) {
+    var l = cpaLineOf(bookId, r);
+    if (!l || !marks) return [];
+    return G.cpaMarkWords(marks[l.coll + ':' + l.key], G.cpaMarkFields(l.book, l.coll, l.x));
+  }
+  function cpaSwipeWords(anyGroup, anyWho, anySlide, anyInfo) {
+    var cpa = 'mark it for your CPA';
+    if (anyGroup) return 'Swipe one left to move it to another group' + (anySlide ? ', to fix it' : '') + ', or to ' + cpa + '.';
+    if (anyWho) return 'Swipe one left to say who it was for' + (anySlide ? ', to fix it' : '') + ', or to ' + cpa + '.';
+    if (anySlide) return 'Logged one wrong? Swipe it left to fix it, or to ' + cpa + '.';
+    return 'Swipe one left to ' + cpa + (anyInfo ? ', or for More info.' : '.');
+  }
+  function cpaByName() { return String(profileName() || myName() || '').replace(/\s+/g, ' ').trim().slice(0, 60); }
+  function cpaAsk(label, control, hint) {
+    return h('div', { class: 'field' }, h('span', { class: 'field-label' }, label), control, hint ? h('span', { class: 'hint' }, hint) : null);
+  }
+  function openCpaMarks(bookId, r, back) {
+    var line = cpaLineOf(bookId, r);
+    if (!line) { toast('That entry isn’t there anymore.'); return; }
+    var fields = G.cpaMarkFields(line.book, line.coll, line.x);
+    if (!fields.any || !cpaMayMark(bookId)) return;
+    var mk = line.coll + ':' + line.key;
+    var was = cpaMarksFor(bookId)[mk] || {};
+    var f = { use: was.use || null, how: was.how || null, keep: typeof was.keep === 'boolean' ? was.keep : null };
+    var guess = fields.how && !f.how ? G.cpaPayHowGuess(line.x, line.book) : '';
+    var split = fields.how ? G.crewSplitOf(line.x) : null;
+    var busy = false;
+    var again = function () { if (back) setTimeout(back, 260); };
+    openSheet(function () {
+      var hows = G.CPA_PAY_HOW;
+      var howChips = chipRow(hows.map(function (x) { return x.label; }), f.how ? G.cpaHowLabel(f.how) : null, function (label) {
+        f.how = (hows.filter(function (x) { return x.label === label; })[0] || {}).key || null;
+      });
+      var save = async function (e) {
+        e.preventDefault();
+        if (busy) return;
+        var m = {};
+        if (fields.use && f.use) m.use = f.use;
+        if (fields.how && f.how) m.how = f.how;
+        if (fields.keep && f.keep !== null) m.keep = f.keep;
+        var picked = Object.keys(m);
+        if (!picked.length) { toast('Pick an answer first'); return; }
+        if (picked.every(function (k) { return m[k] === was[k]; })) { closeSheet(); again(); return; }
+        if (!cpaLineOf(bookId, r)) { toast('That entry isn’t there anymore.'); closeSheet(); again(); return; }
+        m.at = Date.now();
+        m.by = cpaByName();
+        var p = { cpaMarks: {} };
+        p.cpaMarks[mk] = m;
+        busy = true;
+        var ok = await api.update(bookId, p);
+        busy = false;
+        if (!ok) return;
+        toast('Saved for your CPA');
+        closeSheet();
+        render(true);
+        again();
+      };
+      return [
+        h('h2', { class: 'sh-title' }, 'For your CPA'),
+        h('p', { class: 'sh-sub' }, [r.label, G.moneyCents(G.num(line.x.amount)), r.date ? dayMD(r.date) : ''].filter(Boolean).join(' · ')),
+        h('form', { class: 'sh-form', novalidate: true, onsubmit: save },
+          fields.use ? cpaAsk('Business or personal',
+            segmented(['Business', 'Personal'], f.use === 'business' ? 0 : f.use === 'personal' ? 1 : -1,
+              function (i) { f.use = i === 1 ? 'personal' : 'business'; }, 'Business or personal'),
+            f.use ? null : 'Not marked yet: counted as Business.') : null,
+          fields.how ? cpaAsk('How it was paid', howChips,
+            [guess ? 'Looks like ' + G.cpaHowLabel(guess) : '',
+              split ? 'For the whole payment, split between ' + splitNames(line.book, split) : ''].filter(Boolean).join('. ') || null) : null,
+          fields.keep ? cpaAsk('Gear we’re keeping',
+            segmented(['No', 'Yes'], f.keep === true ? 1 : f.keep === false ? 0 : -1,
+              function (i) { f.keep = i === 1; }, 'Gear we’re keeping'),
+            'Yes for gear or equipment the band keeps more than a year.') : null,
+          h('div', { class: 'stack' },
+            h('button', { class: 'btn primary block', type: 'submit' }, 'Save'),
+            h('button', { class: 'btn ghost block', type: 'button', onclick: function () { closeSheet(); again(); } }, 'Cancel')))
+      ];
+    }, { label: 'For your CPA', cls: 'cat-sheet cpa-sheet' });
+  }
+  async function cpaOffBook(artist) {
+    var id = offTourOf(artist), made = false;
+    if (!id) {
+      if (!ownsBand(artist)) { toast('Only whoever made ' + artist + '’s tours can start its Off Tour book, where this is kept.'); return null; }
+      id = await ensureOffTour(artist);
+      made = !!id;
+    }
+    if (!id) return null;
+    if (!made && !cpaMayMark(id)) { toast(VIEW_ONLY); return null; }
+    return id;
+  }
+  function openCpaBusiness(only, back) {
+    var key = String(only || '').trim().toLowerCase();
+    var names = historyArtists().filter(function (n) { return !key || n.toLowerCase() === key; });
+    if (!names.length) { toast('Nothing to set up yet.'); return; }
+    openSheet(function () {
+      return [
+        h('h2', { class: 'sh-title' }, 'Business details'),
+        h('p', { class: 'sh-sub' }, names.length === 1 ? names[0] + ' · on the cover of your CPA package' : 'On the cover of each CPA package'),
+        names.map(function (n) { return cpaBusinessForm(n, names.length > 1); }),
+        h('div', { class: 'stack' },
+          h('button', { class: 'btn ghost block', type: 'button', onclick: function () { closeSheet(); if (back) setTimeout(back, 260); } },
+            back ? 'Back' : 'Done'))
+      ];
+    }, { label: 'Business details', cls: 'cat-sheet cpa-sheet' });
+  }
+  function cpaBusinessForm(artist, named) {
+    var off = offTourOf(artist), had = G.cpaBusinessOf(off ? getTour(off) : null);
+    var f = { name: had.name, type: had.type }, busy = false;
+    var sel = h('select', { class: 'input', 'aria-label': 'Tax type for ' + artist, onchange: function (e) { f.type = e.target.value; } },
+      G.CPA_TAX_TYPES.map(function (t) { return h('option', { value: t.key }, t.label); }));
+    sel.value = f.type;
+    var save = async function (e) {
+      e.preventDefault();
+      blurActive();
+      if (busy) return;
+      var name = String(f.name || '').replace(/\s+/g, ' ').trim().slice(0, G.CPA_NAME_MAX);
+      if (name === had.name && f.type === had.type) { toast('Saved'); return; }
+      busy = true;
+      var id = await cpaOffBook(artist);
+      var ok = id ? await api.update(id, { cpa: { business: { name: name, type: f.type, at: Date.now() } } }) : false;
+      busy = false;
+      if (!ok) return;
+      had = { name: name, type: f.type };
+      toast('Saved');
+      render(true);
+    };
+    return h('form', { class: 'sh-form', novalidate: true, onsubmit: save },
+      named ? h('h3', { class: 'sh-h3' }, artist) : null,
+      field('Business name', h('input', { class: 'input', type: 'text', maxlength: G.CPA_NAME_MAX, autocomplete: 'off', value: f.name,
+        placeholder: artist, 'aria-label': 'Business name for ' + artist, oninput: function (e) { f.name = e.target.value; } })),
+      field('Tax type', h('div', { class: 'sel-wrap' }, sel, icon('chevron', 16))),
+      h('div', { class: 'stack' }, h('button', { class: 'btn primary block', type: 'submit' }, 'Save')));
+  }
+  function cpaMoneyBox(id, label, value, nextId) {
+    var input = h('input', { id: id, type: 'text', inputmode: 'decimal', autocomplete: 'off', 'aria-label': label,
+      enterkeyhint: nextId ? 'next' : 'done', placeholder: 'Not counted yet',
+      value: typeof value === 'number' ? String(Math.round(value * 100) / 100) : '',
+      onkeydown: function (e) {
+        if (e.key !== 'Enter') return;
+        e.preventDefault();
+        var nx = nextId && document.getElementById(nextId);
+        if (nx) nx.focus(); else advance(e.target);
+      } });
+    return { node: h('div', { class: 'money-in' }, h('span', { class: 'cur', 'aria-hidden': 'true' }, '$'), input),
+      read: function () { return G.optNum(String(input.value == null ? '' : input.value).trim()); } };
+  }
+  function openCpaStock(artist, year, back) {
+    var off = offTourOf(artist), y = G.cpaYearOf(off ? getTour(off) : null, year), busy = false;
+    var a = cpaMoneyBox('cpa-stock-a', 'Merch on hand January 1, ' + year, y.stockStart, 'cpa-stock-b');
+    var b = cpaMoneyBox('cpa-stock-b', 'Merch on hand December 31, ' + year, y.stockEnd, null);
+    var again = function () { if (back) setTimeout(back, 260); };
+    openSheet(function () {
+      var save = async function (e) {
+        e.preventDefault();
+        blurActive();
+        if (busy) return;
+        var s = a.read(), en = b.read();
+        if ((s !== null && !(s >= 0)) || (en !== null && !(en >= 0))) { toast('Type an amount of $0 or more'); return; }
+        s = s === null ? null : Math.round(s * 100) / 100;
+        en = en === null ? null : Math.round(en * 100) / 100;
+        if (s === y.stockStart && en === y.stockEnd) { closeSheet(); again(); return; }
+        busy = true;
+        var id = await cpaOffBook(artist), yp = {};
+        yp[String(year)] = { stockStart: s, stockEnd: en, stockAt: Date.now() };
+        var ok = id ? await api.update(id, { cpa: { years: yp } }) : false;
+        busy = false;
+        if (!ok) return;
+        toast('Saved for your CPA');
+        closeSheet();
+        render(true);
+        again();
+      };
+      return [
+        h('h2', { class: 'sh-title' }, 'Merch on hand'),
+        h('p', { class: 'sh-sub' }, artist + ' · ' + year + ' · what the merch you had cost you'),
+        h('form', { class: 'sh-form', novalidate: true, onsubmit: save },
+          field('January 1, ' + year, a.node), field('December 31, ' + year, b.node),
+          h('div', { class: 'stack' },
+            h('button', { class: 'btn primary block', type: 'submit' }, 'Save'),
+            h('button', { class: 'btn ghost block', type: 'button', onclick: function () { closeSheet(); again(); } }, 'Cancel')))
+      ];
+    }, { label: 'Merch on hand', cls: 'cat-sheet cpa-sheet' });
+  }
+  function cpaGot1099List(artist, year, reopen) {
+    var off = offTourOf(artist), list = G.cpaYearOf(off ? getTour(off) : null, year).got1099;
+    var may = off ? cpaMayMark(off) : ownsBand(artist);
+    var del = function (x) {
+      confirmSheet({
+        title: 'Take this 1099 off?', body: x.payer + ' · ' + G.cpa1099Label(x.form) + ' · ' + G.moneyCents(x.amount),
+        action: 'Take it off', danger: true,
+        onConfirm: async function () {
+          var g = {}; g[x.id] = null;
+          var yp = {}; yp[String(year)] = { got1099: g };
+          var ok = await api.update(off, { cpa: { years: yp } });
+          if (ok) toast('Taken off');
+          return ok;
+        },
+        onClose: function () { if (reopen) setTimeout(function () { if (!sheet) reopen(); }, 260); }
+      });
+    };
+    var rowOf = function (x) {
+      var line = h('div', { class: 'row' },
+        h('div', { class: 'row-label' }, x.payer || 'No payer', h('span', { class: 'hint' }, G.cpa1099Label(x.form))),
+        h('span', { class: 'amt num' }, G.moneyCents(x.amount)));
+      return may ? swipeRow(line, [h('button', { class: 'sw-undo', type: 'button', 'aria-label': 'Take off the 1099 from ' + (x.payer || 'this payer'),
+        onclick: function () { del(x); } }, icon('trash', 16), 'Delete')]) : line;
+    };
+    return [
+      list.length ? h('div', { class: 'ledger logged' }, list.map(rowOf)) : h('p', { class: 'note' }, 'None added yet.'),
+      may ? h('div', { class: 'stack' }, h('button', { class: 'btn quiet block', type: 'button', onclick: function () { openCpaGot1099(artist, year, reopen); } },
+        icon('plus', 18), 'Add a 1099')) : null
+    ];
+  }
+  function openCpaGot1099(artist, year, back) {
+    var f = { payer: '', form: 'NEC', amount: 0 }, busy = false;
+    var forms = G.CPA_1099_FORMS;
+    var again = function () { if (back) setTimeout(back, 260); };
+    openSheet(function () {
+      var payerI = h('input', { class: 'input', type: 'text', maxlength: G.CPA_PAYER_MAX, autocomplete: 'off', autofocus: true,
+        placeholder: 'The promoter, agency or app that sent it', 'aria-label': 'Who sent it', enterkeyhint: 'next',
+        oninput: function (e) { f.payer = e.target.value; } });
+      var save = async function (e) {
+        e.preventDefault();
+        blurActive();
+        if (busy) return;
+        var payer = String(f.payer || '').replace(/\s+/g, ' ').trim().slice(0, G.CPA_PAYER_MAX);
+        if (!payer) { toast('Add who sent it'); payerI.focus(); return; }
+        if (!(f.amount > 0)) { toast('Enter the amount on the 1099'); return; }
+        busy = true;
+        var id = await cpaOffBook(artist), g = {}, yp = {};
+        g[newId()] = { payer: payer, form: f.form, amount: Math.round(f.amount * 100) / 100, at: Date.now() };
+        yp[String(year)] = { got1099: g };
+        var ok = id ? await api.update(id, { cpa: { years: yp } }) : false;
+        busy = false;
+        if (!ok) return;
+        toast('Added for your CPA');
+        closeSheet();
+        render(true);
+        again();
+      };
+      return [
+        h('h2', { class: 'sh-title' }, 'Add a 1099'),
+        h('p', { class: 'sh-sub' }, artist + ' · ' + year),
+        h('form', { class: 'sh-form', novalidate: true, onsubmit: save },
+          field('Who sent it', payerI),
+          cpaAsk('Form', chipRow(forms.map(function (x) { return x.label; }), G.cpa1099Label(f.form), function (label) {
+            f.form = (forms.filter(function (x) { return x.label === label; })[0] || {}).key || 'other';
+          })),
+          field('Amount', moneyInput({ id: 'cpa-1099-amt', value: f.amount, label: 'Amount on the 1099', last: true,
+            onValue: function (v) { f.amount = v; } })),
+          h('div', { class: 'stack' },
+            h('button', { class: 'btn primary block', type: 'submit' }, 'Add'),
+            h('button', { class: 'btn ghost block', type: 'button', onclick: function () { closeSheet(); again(); } }, 'Cancel')))
+      ];
+    }, { label: 'Add a 1099', cls: 'cat-sheet cpa-sheet' });
   }
   function openFiledInfo(id, key, r, back) {
     var t = getTour(id) || {};
@@ -14787,19 +16632,19 @@
         if (!(st.amount > 0)) { toast('Enter how much you paid'); return; }
         if (!G.parseDay(st.date)) { toast('Pick the day it was paid'); return; }
         if (st.how === 'cash' && st.merch == null) { toast('Deduct from the Merch Cash Log? Tick Yes or No'); return; }
-        var label = (p.name || 'Crew') + ' \u2014 pay', patch;
+        var label = (p.name || 'Crew') + ' \u2014 pay', patch, line = newId();
         if (st.how === 'cash' && st.merch) {
           patch = { cashLog: {} };
-          patch.cashLog[newId()] = { date: st.date, amount: st.amount, label: label, category: 'crew', crewId: pid, createdAt: Date.now() };
+          patch.cashLog[line] = { date: st.date, amount: st.amount, label: label, category: 'crew', crewId: pid, createdAt: Date.now() };
         } else {
           patch = { charges: {} };
-          patch.charges[newId()] = { date: st.date, merchant: label, amount: st.amount, category: 'crew', accounted: false,
+          patch.charges[line] = { date: st.date, merchant: label, amount: st.amount, category: 'crew', accounted: false,
             manual: true, paid: st.how !== 'spent', cash: st.how === 'cash', crewId: pid, createdAt: Date.now() };
         }
         if (await api.update(id, patch)) {
           delete S.drafts['exp:' + id];
           toast(money(st.amount) + ' paid to ' + (p.name || 'crew'));
-          notifyCrewPaid(id, p, st.amount);
+          notifyCrewPaid(id, p, line);
           st.amount = null; st.merch = null;
           render(true); again();
         }
@@ -15153,11 +16998,14 @@
   function tourBand(t, id, view, center) {
     return h('div', { class: 'headband slim' }, tourTopbar(t, id, view, center));
   }
-  function bookStrip(id, current, to) {
+  function bookStrip(id, current, to, pick) {
     return h('div', { class: 'vp-tabs pt-tabs bk-tabs three', role: 'tablist' }, BOOK_STRIP.map(function (t) {
       var v = t.view, on = v === current;
       return h('button', { class: 'vp-tab pt-tab' + (on ? ' on' : ''), type: 'button', role: 'tab', 'aria-selected': on ? 'true' : 'false',
-        onclick: function () { if (!on || S.route.view !== v) go(to ? to(v) : { name: 'tour', id: id, view: v }); } },
+        onclick: function () {
+          if (pick) { if (!on) pick(v); return; }
+          if (!on || S.route.view !== v) go(to ? to(v) : { name: 'tour', id: id, view: v });
+        } },
         icon(t.icon, 20), h('span', null, t.label));
     }));
   }
@@ -15200,24 +17048,33 @@
         c.info = G.isObj(got[0]) ? got[0] : { crew: null, payments: [], tour: {} };
         c.book = G.isObj(got[1]) ? got[1] : {};
         c.failed = false; c.at = Date.now(); c.asking = false; render(true);
+        var filing = function () { return !!(S.myPayFiling && S.myPayFiling[id]); };
+        if (Object.keys(myPayFixes(id)).length && !filing()) setTimeout(function () { if (!filing()) myPayRefile(id, [], true); }, 0);
+        if (isOffTour(getTour(id))) setTimeout(function () { offMoveSettle(id); }, 0);
       }, function () { c.failed = true; c.at = Date.now(); c.asking = false; render(true); });
     }
     return c;
   }
-  function saveMyPayBook(id, change) {
+  function saveMyPayBook(id, change, o) {
+    o = o || {};
     var B = window.GR_BACKEND;
     S.myPay = S.myPay || {};
     var c = S.myPay[id] || (S.myPay[id] = { info: null, book: {}, at: Date.now(), asking: false, failed: false, none: false });
+    var failed = function (e) { if (o.err) o.err(e); if (!o.quiet) saveFailed('pay', e); return false; };
     var step = function () {
       var base = G.isObj(c.book) ? c.book : {};
       var next = JSON.parse(JSON.stringify(base));
       next = change(next) || next;
-      var save = B.patchMyPayBook ? B.patchMyPayBook(id, myPayBookPatch(base, next), next)
+      var patch = myPayBookPatch(base, next);
+      if (o.fresh && !patch.set.length && !patch.unset.length) return true;
+      var save = B.patchMyPayBook ? B.patchMyPayBook(id, patch, next)
         : B.saveMyPayBook(id, next).then(function () { return next; });
-      return save.then(function (doc) { c.book = G.isObj(doc) ? doc : next; render(true); return true; },
-        function (e) { saveFailed('pay', e); return false; });
+      return save.then(function (doc) { c.book = G.isObj(doc) ? doc : next; render(true); return true; }, failed);
     };
-    c.saving = (c.saving || Promise.resolve()).then(step, step);
+    var go = !o.fresh ? step : function () {
+      return B.myPayBook(id).then(function (doc) { if (G.isObj(doc)) c.book = doc; return step(); }, failed);
+    };
+    c.saving = (c.saving || Promise.resolve()).then(go, go);
     return c.saving;
   }
   function myPayBookPatch(base, next) {
@@ -15244,106 +17101,124 @@
     return h('div', { class: 'page tour has-tabs exp-page pay-page' },
       tourBand(t, id, 'mypay'),
       payTabs(id, t, 'mypay'),
+      myPayTop(id),
       dbBanner(),
-      myPayBody(id, t),
+      myPayBody(id, t, { lead: myPayOwnLink(id, t) }),
       tourTabs(id, 'mypay'));
   }
-  function myPayBody(id, t) {
+  function myPayTop(id) {
+    return myPayInfo(id).none ? null : myPayStrip(id);
+  }
+  function myPayOwnLink(id, t) {
+    var artist = artistOf(t), own = t && !isOffTour(t) && artist ? offPayOf(artist) : null;
+    if (!own) return null;
+    return h('p', { class: 'hist-who', style: 'margin-top:0' }, 'Your book for ' + (t.name || 'this tour') + ' \u00b7 ', h('button', { class: 'linkbtn rb-link', type: 'button',
+      onclick: function () { go(Object.assign(offRoute(artist, 'mypay', id), { list: (S.route && S.route.list) || null })); } }, 'Open your own book between tours \u203a'));
+  }
+  function myPayTab(id) {
+    var k = S.payTab && S.payTab[id];
+    return k === 'cards' ? 'cards' : k === 'income' || k === 'buyouts' ? 'income' : 'expenses';
+  }
+  function myPayStrip(id) {
+    var tab = myPayTab(id);
+    return bookStrip(id, tab === 'cards' ? 'cards' : tab === 'income' ? 'money' : 'costs', null, function (v) {
+      S.payTab = S.payTab || {};
+      S.payTab[id] = v === 'cards' ? 'cards' : v === 'money' ? 'income' : 'expenses';
+      render(true);
+    });
+  }
+  function myPayBody(id, t, o) {
+    o = o || {};
     var c = myPayInfo(id);
-    if (c.none) return emptyState('MY PAY is for a signed-in tour', 'Once you\u2019re signed in, your pay and your own spending for this tour live here.');
+    if (c.none) return emptyState('MY PAY is for a signed-in tour', 'Once you’re signed in, your pay and your own spending for this tour live here.');
+    var tab = myPayTab(id), lead = o.lead || null;
+    if (tab === 'cards') return [lead, myPayCardsNode(id)];
     if (c.failed && !c.info) {
-      return h('div', { class: 'stack' }, h('p', { class: 'note' }, 'Couldn\u2019t load your pay just now.'),
-        h('button', { class: 'btn ghost block', type: 'button', onclick: function () { myPayInfo(id, true); render(true); } }, 'Try again'));
+      return [lead, h('div', { class: 'stack' }, h('p', { class: 'note' }, 'Couldn’t load your pay just now.'),
+        h('button', { class: 'btn ghost block', type: 'button', onclick: function () { myPayInfo(id, true); render(true); } }, 'Try again'))];
     }
-    if (!c.info) return h('p', { class: 'note pay-note' }, 'Loading\u2026');
-    var st = G.payStanding(c.info), book = G.payBook(c.book), inc = G.payIncome(c.book, c.info.payments);
-    S.payTab = S.payTab || {};
-    var boOn = buyoutsOn();
-    var tab = S.payTab[id] === 'income' ? 'income' : boOn && S.payTab[id] === 'buyouts' ? 'buyouts' : 'expenses';
-    var B = window.GR_BACKEND, me = B && B.uid ? B.uid() : null, meCard = me ? cardOf(me).card : null;
-    var sumTab = function (key, label, amount) {
-      var on = tab === key;
-      return h('button', { class: 'pay-sum-tab' + (on ? ' on' : ''), type: 'button', role: 'tab', 'aria-selected': on ? 'true' : 'false',
-        onclick: function () { S.payTab[id] = key; render(true); } },
-        h('span', { class: 'pay-sum-k' }, label), h('strong', { class: 'pay-sum-v num' }, money(amount)));
-    };
-    var bo = boOn ? myBuyoutDays(id, t) : null;
-    var boTab = null;
-    if (bo) {
-      var boSel = tab === 'buyouts';
-      boTab = h('button', { class: 'pay-sum-tab' + (boSel ? ' on' : ''), type: 'button', role: 'tab', 'aria-selected': boSel ? 'true' : 'false',
-        onclick: function () { S.payTab[id] = 'buyouts'; render(true); } },
-        h('span', { class: 'pay-sum-k' }, 'BUYOUTS'),
-        h('strong', { class: 'pay-sum-v num' }, !bo.shows.length ? '\u2014' : bo.loading ? '\u2026' : bo.got + ' of ' + bo.shows.length));
-    }
-    var head = h('div', { class: 'pay-top' },
-      h('div', { class: 'pay-photo' }, meCard ? personPhoto(meCard, 'sm') : null),
-      h('div', { class: 'pay-sum-tabs', role: 'tablist' }, sumTab('income', 'INCOME', inc.gross), sumTab('expenses', 'EXPENSES', book.spent), boTab));
-    if (tab === 'buyouts' && bo) {
-      var boBody = !bo.shows.length
-        ? h('p', { class: 'note pay-note' }, 'No buyout days yet. Each show day shows up here, Received or Not yet.')
-        : bo.loading ? h('p', { class: 'note pay-note' }, 'Loading…')
-        : h('div', { class: 'ledger' }, bo.shows.map(function (sh) {
-            var got = !!bo.mine[sh.id];
-            return h('div', { class: 'row' },
-              h('div', { class: 'row-label' }, (String(sh.city || '').split(',')[0] || 'Show') + ' · ' + dayMD(sh.date)),
-              h('span', { class: 'bus-word' + (got ? ' on' : '') }, got ? 'Received' : 'Not yet'));
-          }));
-      return [head,
-        h('h3', { class: 'mn-h mn-over' }, 'My buyouts'),
-        boBody];
-    }
+    if (!c.info) return [lead, h('p', { class: 'note pay-note' }, 'Loading…')];
+    var st = G.payStanding(c.info), book = G.payBook(c.book, { names: myPayNames(id) }), inc = G.payIncome(c.book, c.info.payments);
+    var off = isOffTour(t);
     var inCls = { tour: 'guar', weekly: 'merch', perdiem: 'inother', buyout: 'guar', bonus: 'merch', other: 'inother' };
-    var exCls = { food: 'crew', lodging: 'bus', travel: 'lcard', gear: 'mbill', other: 'other' };
+    var exBy = {}, exName = {};
+    book.lines.forEach(function (l) { if (l.total > 0) { exBy[l.key] = l.total; exName[l.key] = bookPartName(l.key, l.label); } });
     var chart = expenseSummary({ income: inc.gross, incomeBy: {},
         incParts: inc.lines.filter(function (l) { return l.total > 0; }).map(function (l) { return { label: l.label, v: l.total, cls: inCls[l.key] || 'inother' }; }) },
-      book.lines.filter(function (l) { return l.total > 0; }).map(function (l) { return { label: l.label, v: l.total, cls: exCls[l.key] || 'other' }; }), false)
-      || h('p', { class: 'note pay-note' }, 'Nothing logged yet. Log your pay under INCOME and what you spend under EXPENSES, and the picture draws itself.');
+      bookParts(exBy, exName), false)
+      || h('p', { class: 'note pay-note' }, 'Nothing logged yet. Log your pay under Income and what you spend under Expenses, and the picture draws itself.');
     var net = Math.round((inc.gross - book.spent) * 100) / 100;
-    var netLine = h('p', { class: 'pay-sum' }, 'Gross ', h('strong', { class: 'num' }, money(inc.gross)), ' \u00b7 spent ', h('strong', { class: 'num' }, money(book.spent)),
-      ' \u00b7 net ', h('strong', { class: 'num' + (net < 0 ? ' neg' : '') }, money(net)));
+    var netLine = h('p', { class: 'pay-sum' }, 'Gross ', h('strong', { class: 'num' }, money(inc.gross)), ' · spent ', h('strong', { class: 'num' }, money(book.spent)),
+      ' · net ', h('strong', { class: 'num' + (net < 0 ? ' neg' : '') }, money(net)));
     var pays = Array.isArray(c.info.payments) ? c.info.payments : [];
     var series = G.payBalanceSeries(c.book, c.info.payments, G.tourToday());
     var climb = series.length > 1 ? h('div', { class: 'chart-wrap pay-chart', role: 'img',
       'aria-label': 'Money in against what you spent, from ' + dayLong(series[0].date) + ' to ' + dayLong(series[series.length - 1].date) + '. Now ' +
         money(series[series.length - 1].income) + ' in and ' + money(series[series.length - 1].spent) + ' spent.' }) : null;
     if (climb) climb.__data = { series: series, nights: [], tourId: null };
-    climb = climb || h('p', { class: 'note pay-note' }, 'The graph draws itself once there\u2019s a payment or an entry to show.');
+    climb = climb || h('p', { class: 'note pay-note' }, 'The graph draws itself once there’s a payment or an entry to show.');
     if (tab === 'income') {
-      var incRows = inc.lines.map(function (l) {
+      var incRows = inc.lines.filter(function (l) { return !(off && l.key === 'tour'); }).map(function (l) {
         var tourLine = l.key === 'tour';
         return h('button', { class: 'row rowbtn ex-row', type: 'button', onclick: function () { if (tourLine) openMyPayments(c.info); else openMyPayIncome(id, l.key); } },
           h('div', { class: 'row-label' }, l.label, h('span', { class: 'hint' }, tourLine ? (pays.length ? plural(pays.length, 'payment') + ' logged by the tour manager' : 'none logged by the tour manager yet')
             : (l.n ? plural(l.n, 'entry') : ''))),
-          h('span', { class: 'amt num' + (l.total > 0 ? ' glow' : '') }, l.total > 0 ? money(l.total) : '\u2014'), icon('chevron', 18));
+          h('span', { class: 'amt num' + (l.total > 0 ? ' glow' : '') }, l.total > 0 ? money(l.total) : '—'), icon('chevron', 18));
       });
-      return [head, chart, netLine,
-        st.onCrew ? h('p', { class: 'note pay-note' }, 'Pay plan: ' + money(st.total) + ' for the tour \u00b7 ' + money(st.paid) + ' logged as paid \u00b7 ' + money(st.owed) + ' still owed')
-          : h('p', { class: 'note pay-note' }, 'You\u2019re not on this tour\u2019s crew list yet, so there is no pay plan here. The tour manager adds you under Crew with your email.'),
+      return [lead, chart, netLine,
+        off ? null : st.onCrew ? h('p', { class: 'note pay-note' }, 'Pay plan: ' + money(st.total) + ' for the tour · ' + money(st.paid) + ' logged as paid · ' + money(st.owed) + ' still owed')
+          : h('p', { class: 'note pay-note' }, 'You’re not on this tour’s crew list yet, so there is no pay plan here. The tour manager adds you under Crew with your email.'),
         h('h3', { class: 'mn-h mn-over' }, 'My income'),
         h('div', { class: 'ledger' }, incRows),
+        off ? null : myPayBuyouts(id, t),
         myPaySetupRow(id),
         myPayBottom(id, h('button', { class: 'btn quiet sm glow', type: 'button', onclick: function () { openMyPayIncome(id, null); } }, icon('plus', 14), 'Log income'))];
     }
+    myPayUnfileKnown();
     var colHead = h('div', { class: 'row ex-head', 'aria-hidden': 'true' },
       h('span', null, ''), h('span', { class: 'ex-proj' }, 'Projected'), h('span', { class: 'ex-paid' }, 'Credit'),
       h('span', { class: 'ex-done' }, 'Debit'), h('span', { class: 'ex-cash' }, 'Cash'), h('span', { class: 'ex-chev', 'aria-hidden': 'true' }));
     var cell = function (v, cls, label) {
-      return h('span', { class: 'amt num ' + cls, 'aria-label': label + ' ' + money(v) }, v > 0.004 ? money(v) : '\u2014');
+      return h('span', { class: 'amt num ' + cls, 'aria-label': label + ' ' + money(v) }, v > 0.004 ? money(v) : '—');
     };
     var lines = book.lines.map(function (l) {
-      return h('button', { class: 'row rowbtn ex-row', type: 'button', onclick: function () { openMyPayCat(id, l.key); } },
+      return h('button', { class: 'row rowbtn ex-row ex-fit', type: 'button', onclick: function () { openMyPayCat(id, l.key); } },
         h('div', { class: 'row-label' }, l.label, l.n ? h('span', { class: 'hint' }, plural(l.n, 'expense')) : null),
-        h('span', { class: 'amt num glow ex-proj', 'aria-label': 'Projected ' + (l.projected == null ? 'not set' : money(l.projected)) },
-          l.projected == null ? '\u2014' : money(l.projected)),
+        exNums(h('span', { class: 'amt num glow ex-proj', 'aria-label': 'Projected ' + (l.projected == null ? 'not set' : money(l.projected)) },
+          l.projected == null ? '—' : money(l.projected)),
         cell(l.credit, 'ex-paid', 'Credit'), cell(l.debit, 'ex-done', 'Debit'), cell(l.cash, 'ex-cash', 'Cash'),
-        icon('chevron', 18));
+        icon('chevron', 18)));
     });
-    return [head, climb, netLine,
+    return [lead, climb, netLine,
       h('h3', { class: 'mn-h mn-over' }, 'My expenses'),
       h('div', { class: 'ledger' }, colHead, lines),
       myPaySetupRow(id),
       myPayBottom(id, h('button', { class: 'btn quiet sm glow', type: 'button', onclick: function () { openMyPayCat(id, null); } }, icon('plus', 14), 'Add expense'))];
+  }
+  function myPayBuyouts(id, t) {
+    var bo = buyoutsOn() ? myBuyoutDays(id, t) : null;
+    if (!bo) return null;
+    var body = !bo.shows.length
+      ? h('p', { class: 'note pay-note' }, 'No buyout days yet. Each show day shows up here, Received or Not yet.')
+      : bo.loading ? h('p', { class: 'note pay-note' }, 'Loading…')
+      : h('div', { class: 'ledger' }, bo.shows.map(function (sh) {
+          var got = !!bo.mine[sh.id];
+          return h('div', { class: 'row' },
+            h('div', { class: 'row-label' }, (String(sh.city || '').split(',')[0] || 'Show') + ' · ' + dayMD(sh.date)),
+            h('span', { class: 'bus-word' + (got ? ' on' : '') }, got ? 'Received' : 'Not yet'));
+        }));
+    return [h('h3', { class: 'mn-h mn-over' }, 'My buyouts'), body];
+  }
+  function myPayCardsNode(id) {
+    var c = myPayCardsInfo();
+    if (c.none) return h('p', { class: 'note pay-note' }, 'Your own cards show up here once you’re signed in.');
+    if (!c.asideAsked) { c.asideAsked = true; myPayAsideLoad(); myPayPutBackKnown(); }
+    var t = id ? getTour(id) : null, between = !!t && isOffTour(t), into = t && !between ? (t.name || '') : '';
+    var just = !!S.myPayJustLinked && Date.now() - S.myPayJustLinked < 120000;
+    return h('div', { class: 'feed-body mp-cards' },
+      h('p', { class: 'note' }, 'Only you see these cards. What lands on them goes into your own book' + (into ? ' for ' + into : '') +
+        (between ? ', never the band’s book.' : ', never the tour’s book or the band’s book.')),
+      myPayFeedEntry(id, just), myPayCardList(id, c));
   }
   function openMyPayIncome(id, key, keep) {
     var c = myPayInfo(id);
@@ -15404,7 +17279,23 @@
     if (typeof back !== 'function') return;
     setTimeout(function () { if (!sheet) { try { back(); } catch (e) {   } } }, 0);
   }
-  function myPayToCards(id) { return function () { openMyPayCards(id); }; }
+  function myPayToCards(id) {
+    return function () {
+      if (myPayOnPage(id)) {
+        var was = myPayTab(id);
+        S.payTab = S.payTab || {}; S.payTab[id] = 'cards';
+        if (sheet) closeSheet();
+        if (was !== 'cards') render(true);
+        return;
+      }
+      openMyPayCards(id);
+    };
+  }
+  function myPayOnPage(id) {
+    var r = S.route || {};
+    return !!id && ((r.name === 'tour' && r.id === id && (r.view === 'mypay' || (r.view === 'costs' && !canSeeMoney(id)))) ||
+      (r.name === 'offtour' && r.view === 'mypay'));
+  }
   function myPayPutBackKnown() {
     var B = window.GR_BACKEND, c = myPayCardsInfo();
     if (c.unskip !== true && !c.unskipBusy && B && B.myPayUnskip && (c.unskip === undefined || Date.now() - (c.unskipAt || 0) > 300e3)) {
@@ -15419,16 +17310,66 @@
     if (n === 1) return back ? 'Set aside. It is listed under Left out and set aside, where you can put it back.' : 'Set aside.';
     return n + ' charges set aside.' + (back ? ' They are listed under Left out and set aside, where you can put them back.' : '');
   }
+  function myPayUnfileKnown(wait) {
+    var B = window.GR_BACKEND, c = myPayCardsInfo(), now = Date.now();
+    var due = (c.unfile === undefined || now - (c.unfileAt || 0) > 300e3) && !(c.unfileFailed && now - c.unfileFailed < 60e3);
+    if (c.unfile !== true && !c.unfileAsk && B && B.myPayUnfile && due) {
+      c.unfileAsk = B.myPayUnfile('').then(function (p) { c.unfile = !!(p && p.ok); c.unfileAt = Date.now(); c.unfileFailed = 0; },
+        function () { c.unfileFailed = Date.now(); })
+        .then(function () { c.unfileAsk = null; return c.unfile; });
+    }
+    return wait ? (c.unfileAsk || Promise.resolve(c.unfile)) : c.unfile;
+  }
+  function myPayUnfileCan(l, accountId) {
+    var c = myPayCardsInfo(), id = accountId != null ? accountId : l && l.account_id;
+    var a = (Array.isArray(c.accounts) ? c.accounts : []).filter(function (x) { return x && id != null && x.account_id === id; })[0] || null;
+    var day = function (s) { s = String(s == null ? '' : s).slice(0, 10); return G.parseDay(s) ? s : ''; };
+    var since = a ? day(a.since) : '', on = l ? day(l.date) : '';
+    return !!(l && l.kind === 'charge' && l.status === 'filed' && a && a.asked === true && a.mode != null && a.mode !== 'off' &&
+      since && on && on >= since);
+  }
+  async function myPayUnfile(bookId, lineId, label) {
+    var B = window.GR_BACKEND, r = null, err = null;
+    try { r = await B.myPayUnfile(lineId); } catch (e) { err = e || {}; }
+    if (!r || r.ok === false) {
+      toast(err ? (err.code === 'offline' || err.error === 'offline' ? NO_SIGNAL : 'Couldn’t undo that. Try again.')
+        : r && r.why === 'missing' ? 'Sending one back isn’t ready yet. Try again soon.'
+        : r && r.why === 'card' ? 'That charge was not sent back: its card is not logging it any more.'
+        : 'That charge isn’t filed in your MY PAY any more. Nothing was changed.', 5200);
+      return false;
+    }
+    var key = 'b' + String(lineId).replace(/-/g, '');
+    Object.keys(S.myPay || {}).forEach(function (tid) {
+      var bk = S.myPay[tid] && S.myPay[tid].book;
+      if (G.isObj(bk) && G.isObj(bk.entries) && G.isObj(bk.entries[key]) && bk.entries[key].bank === lineId) delete bk.entries[key];
+      var fix = myPayFixes(tid);
+      if (fix[key] !== undefined) { delete fix[key]; myPayFixesPut(tid, fix); }
+    });
+    var all = S.myPayAll && S.myPayAll.books;
+    if (G.isObj(all)) Object.keys(all).forEach(function (tid) { var en = all[tid] && all[tid].entries; if (G.isObj(en) && G.isObj(en[key])) delete en[key]; });
+    delete myPayGoing[lineId];
+    toast((label || 'The charge') + ' is back in new charges');
+    if (bookId) myPayInfo(bookId, true);
+    myPayCardsInfo(true);
+    render(true);
+    return true;
+  }
   async function myPayLinked(trip, r) {
     var id = trip.tourId && getTour(trip.tourId) ? trip.tourId : null;
     var c = await myPayCardsLoad(true);
-    if (id && !(S.route && S.route.name === 'tour' && S.route.id === id && S.route.view === 'mypay')) go({ name: 'tour', id: id, view: 'mypay' });
+    if (id) {
+      S.payTab = S.payTab || {}; S.payTab[id] = 'cards'; S.myPayJustLinked = Date.now();
+      var bk = getTour(id);
+      if (isOffTour(bk)) { if (!(S.route && S.route.name === 'offtour' && S.route.view === 'mypay')) go(offRoute(artistOf(bk), 'mypay')); }
+      else if (!(S.route && S.route.name === 'tour' && S.route.id === id && S.route.view === 'mypay')) go({ name: 'tour', id: id, view: 'mypay' });
+    }
     var fresh = (r && Array.isArray(r.accounts) ? r.accounts : []).map(function (a) { return String(a.id); });
     var list = myPayUnset(c.accounts).sort(function (a, b) {
       return (fresh.indexOf(b.account_id) >= 0 ? 1 : 0) - (fresh.indexOf(a.account_id) >= 0 ? 1 : 0);
     });
     if (list.length) openMyPayCardSetup(id, list, 0, myPayToCards(id));
-    else openMyPayCards(id, true);
+    else if (!id) openMyPayCards(id, true);
+    else render(true);
   }
   function myPayCardsLoad(fresh) {
     var c = myPayCardsInfo(fresh);
@@ -15633,15 +17574,6 @@
     if (Array.isArray(st.accounts)) out.accounts = st.accounts.filter(function (a) { return !(a && (isMyPayAccount(a.id) || isMyPayBank(a.bank))); });
     if (Array.isArray(st.banks)) out.banks = st.banks.filter(function (b) { return !(b && isMyPayBank(b.id)); });
     return out;
-  }
-  function myPayCardsBtn(id) {
-    var c = myPayCardsInfo();
-    if (c.none) return null;
-    var n = c.inbox.length, k = c.accounts.length;
-    return h('button', { class: 'btn quiet sm glow', type: 'button',
-      'aria-label': 'Your cards' + (k ? ', ' + plural(k, 'account') + ' connected' : '') + (n ? ', ' + n + ' new' : ''),
-      onclick: function () { openMyPayCards(id); } },
-      icon('card', 14), 'Your cards', n ? h('span', { class: 'dm-dot' }, n) : null);
   }
   function connectsOwnCards() {
     if (S.mode !== 'db') return true;
@@ -15960,7 +17892,7 @@
       var trouble = bk.status && bk.status !== 'ok';
       var mine = accts.filter(function (a) { return a.item_id && a.item_id === bk.id; });
       mine.forEach(function (a) { used[a.account_id] = true; });
-      out.push(lcBankCard({ name: bk.name || 'Bank', synced: trouble ? '' : bk.last_ok || '', trouble: trouble ? bankNote(bk.status) : '',
+      out.push(lcBankCard({ name: bk.name || 'Bank', logo: bk.logo, synced: trouble ? '' : bk.last_ok || '', trouble: trouble ? bankNote(bk.status) : '',
         reconnect: trouble ? function () { closeSheet(); connectCards(id, bk.id, { myPay: true }); } : null,
         rows: mine.map(row),
         unlink: function () {
@@ -15982,17 +17914,19 @@
   }
   function openMyPayCardCharges(id, r, back) {
     var B = window.GR_BACKEND;
-    var st = { rows: null, failed: false };
+    var st = { rows: null, failed: false, undo: false, busy: null };
     var host = h('div');
     var label = {};
-    G.MY_PAY_CATS.concat(G.MY_PAY_INCOME).forEach(function (x) { if (!label[x.key]) label[x.key] = x.label; });
+    G.MY_PAY_INCOME.forEach(function (x) { if (!label[x.key]) label[x.key] = x.label; });
     var filedAs = function (l) {
-      var key = 'b' + String(l.id).replace(/-/g, ''), hit = null;
+      var key = 'b' + String(l.id).replace(/-/g, ''), said = '';
       Object.keys(S.myPay || {}).forEach(function (tid) {
         var bk = S.myPay[tid] && S.myPay[tid].book;
-        if (G.isObj(bk) && !hit) hit = (G.isObj(bk.entries) && bk.entries[key]) || (G.isObj(bk.income) && bk.income[key]) || null;
+        if (!G.isObj(bk) || said) return;
+        if (G.isObj(bk.entries) && G.isObj(bk.entries[key])) said = myPayCatName(tid, bk.entries[key].category);
+        else if (G.isObj(bk.income) && G.isObj(bk.income[key])) said = label[bk.income[key].category] || '';
       });
-      return hit && label[hit.category] ? 'Filed under ' + label[hit.category] : 'Filed';
+      return said ? 'Filed under ' + said : 'Filed';
     };
     function draw() {
       if (st.failed) { fillEl(host, h('p', { class: 'note' }, 'Couldn’t read this card’s lines just now. Try again in a moment.')); return; }
@@ -16000,25 +17934,41 @@
       var list = st.rows;
       var counted = list.filter(function (l) { return l.status !== 'skipped'; });
       var total = counted.reduce(function (n, l) { return n + (l.kind === 'deposit' ? -G.num(l.amount) : G.num(l.amount)); }, 0);
+      var slides = function (l) { return st.undo && myPayUnfileCan(l, r.id); };
       fillEl(host, [
         h('p', { class: 'sh-sub' }, (r.kind === 'debit' ? 'Debit card' : 'Credit card') + ' · ' + plural(counted.length, 'line') + ' · ' + G.moneyCents(total)),
+        list.some(slides) ? h('p', { class: 'note sw-hint' }, 'Logged one wrong? Swipe it left to fix it.') : null,
         list.length ? h('div', { class: 'ledger logged' }, list.map(function (l) {
           var word = l.status === 'new' ? 'Waiting for you' : l.status === 'skipped' ? 'Set aside' : filedAs(l);
-          return h('div', { class: 'row' },
-            h('div', { class: 'row-label' }, l.merchant || (l.kind === 'deposit' ? 'Deposit' : 'Charge'),
+          var name = l.merchant || (l.kind === 'deposit' ? 'Deposit' : 'Charge');
+          var line = h('div', { class: 'row' },
+            h('div', { class: 'row-label' }, name,
               h('span', { class: 'hint' }, [l.date ? dayMD(l.date) : '', l.kind === 'deposit' && !/^deposit$/i.test(String(l.merchant || '').trim()) ? 'Deposit' : '', word].filter(Boolean).join(' · '))),
             h('span', { class: 'amt num' + (l.status === 'skipped' ? ' quiet' : '') }, G.moneyCents(G.num(l.amount))));
+          if (!slides(l)) return line;
+          return swipeRow(line, [h('button', { class: 'sw-undo', type: 'button', 'aria-label': 'Undo ' + name + ', back to new charges',
+            disabled: st.busy != null ? true : null, onclick: function () { undo(l, name); } }, icon('back', 16), 'Undo')]);
         })) : h('p', { class: 'note' }, 'Nothing from this card yet.')
       ]);
     }
+    async function undo(l, name) {
+      if (st.busy != null) return;
+      st.busy = l.id;
+      var ok = await myPayUnfile(l.tour_id || id, l.id, name);
+      st.busy = null;
+      if (ok) await load();
+      else draw();
+    }
+    async function load() {
+      var got = null;
+      try { got = await Promise.all([B.myPayLinesFor(r.id), myPayUnfileKnown(true)]); } catch (e) { got = null; }
+      st.rows = got && Array.isArray(got[0]) ? got[0] : null; st.failed = !st.rows;
+      st.undo = !!got && got[1] === true;
+      draw();
+    }
     openSheet(function () {
       draw();
-      (async function () {
-        var got = null;
-        try { got = await B.myPayLinesFor(r.id); } catch (e) { got = null; }
-        st.rows = Array.isArray(got) ? got : null; st.failed = !Array.isArray(got);
-        draw();
-      })();
+      load();
       return [h('h2', { class: 'sh-title' }, r.label), host];
     }, { label: r.label, cls: 'cat-sheet', onClose: function () { sheetBack(back); } });
   }
@@ -16043,7 +17993,7 @@
       var rows = st.rows, waiting = myPayWaiting().length + myPayDepositsWaiting().length;
       var total = rows.reduce(function (n, l) { return n + Math.abs(G.num(l.amount)); }, 0);
       var kids = [h('p', { class: 'rb-sums' }, 'Lines from your cards: ' + waiting + ' waiting, ' + rows.length + ' set aside.'),
-        h('p', { class: 'note' }, 'Nothing here is counted in your MY PAY.' + (st.may === false ? '' : ' Put a line back and it waits under Your cards to sort.'))];
+        h('p', { class: 'note' }, 'Nothing here is counted in your MY PAY.' + (st.may === false ? '' : ' Put a line back and it waits under Cards/Links to sort.'))];
       if (!rows.length) kids.push(h('p', { class: 'note rb-clear' }, 'Nothing is set aside.'));
       else {
         var fold = [h('button', { class: 'row rowbtn', type: 'button', 'aria-expanded': st.open ? 'true' : 'false',
@@ -16098,6 +18048,108 @@
     }, { label: 'Left out and set aside', cls: 'cat-sheet rb-sheet', onClose: function () { sheetBack(back); } });
     if (sheet) sheet.myPayDraw = draw;
   }
+  function myPayAllLoad(fresh) {
+    var B = window.GR_BACKEND;
+    var c = S.myPayAll || (S.myPayAll = { books: {}, at: 0, asking: false });
+    if (S.mode !== 'db' || !B || !B.myPayBooks || c.asking) return c;
+    if (fresh || !c.at || Date.now() - c.at > 60000) {
+      c.asking = true;
+      c.wait = B.myPayBooks().then(function (list) {
+        var books = {};
+        (Array.isArray(list) ? list : []).forEach(function (r) { if (r && r.tour_id && G.isObj(r.doc)) books[r.tour_id] = r.doc; });
+        c.books = books; c.at = Date.now(); c.asking = false; c.failed = false;
+        if (sheet && typeof sheet.myPayCats === 'function') { try { sheet.myPayCats(); } catch (e) {   } }
+      }, function () { c.at = Date.now(); c.asking = false; c.failed = true; });
+    }
+    return c;
+  }
+  function myPayBooksHeld() {
+    var out = {}, all = S.myPayAll && S.myPayAll.books;
+    if (G.isObj(all)) Object.keys(all).forEach(function (tid) { if (G.isObj(all[tid])) out[tid] = all[tid]; });
+    Object.keys(S.myPay || {}).forEach(function (tid) { var bk = S.myPay[tid] && S.myPay[tid].book; if (G.isObj(bk)) out[tid] = bk; });
+    return out;
+  }
+  function myPayNames(id) {
+    var books = myPayBooksHeld(), out = {};
+    var take = function (bk) { var n = G.extraCatNames(bk); Object.keys(n).forEach(function (k) { if (!out[k]) out[k] = n[k]; }); };
+    if (books[id]) take(books[id]);
+    Object.keys(books).forEach(function (tid) { if (tid !== id) take(books[tid]); });
+    return out;
+  }
+  function myPayCats(id) {
+    var c = S.myPay && S.myPay[id], names = myPayNames(id), t = getTour(id);
+    var more = Object.keys(names).map(function (k) { return { key: k, label: names[k] }; });
+    if (t && canSeeMoney(id)) more = more.concat(chargeCats(t).filter(function (x) { return !G.isDerived(x.key) && x.key !== 'offdebt'; }));
+    return G.payCategories(c && c.book, { more: more, names: names });
+  }
+  function myPayCatName(id, key) {
+    var k = G.payCatOf(key), hit = myPayCats(id).filter(function (x) { return x.key === k; })[0];
+    return hit ? hit.label : k.indexOf('x-') === 0 ? G.extraCatLabel(k) : k;
+  }
+  function myPayLearned() {
+    var books = myPayBooksHeld(), seen = {};
+    Object.keys(books).forEach(function (tid) {
+      G.rows(books[tid].entries).forEach(function (e) {
+        if (e.bank && e.note && G.payLearnable(e.category)) GRS.learnLabel(seen, e.note, G.payCatOf(e.category));
+      });
+    });
+    return function (merchant) { return GRS.learnedCategory(seen, String(merchant || '').slice(0, 60)) || ''; };
+  }
+  function myPaySaveCat(id, key, label) {
+    return saveMyPayBook(id, function (next) {
+      next.extraCats = G.isObj(next.extraCats) ? next.extraCats : {};
+      next.extraCats[key] = label;
+    });
+  }
+  function myPayCatMade(label) { return '“' + label + '” is a category now, in every MY PAY of yours.'; }
+  function myPayFixKey() { var B = window.GR_BACKEND, me = B && B.uid ? B.uid() : ''; return 'gr.myPayFix.' + (me || 'local'); }
+  function myPayFixes(id) {
+    if (!S.myPayFix || S.myPayFix.who !== myPayFixKey()) {
+      var got = null;
+      try { got = JSON.parse(lsGet(myPayFixKey()) || 'null'); } catch (e) { got = null; }
+      S.myPayFix = { who: myPayFixKey(), books: G.isObj(got) ? got : {} };
+    }
+    return G.isObj(S.myPayFix.books[id]) ? Object.assign({}, S.myPayFix.books[id]) : {};
+  }
+  function myPayFixesPut(id, want) {
+    myPayFixes(id);
+    if (Object.keys(want).length) S.myPayFix.books[id] = want; else delete S.myPayFix.books[id];
+    lsSet(myPayFixKey(), JSON.stringify(S.myPayFix.books));
+  }
+  function myPayFixesWant(id, picks) {
+    var want = myPayFixes(id), was = JSON.stringify(want);
+    (picks || []).forEach(function (p) {
+      if (!p || p.feedId == null || !p.category) return;
+      var k = 'b' + String(p.feedId).replace(/-/g, '');
+      if (G.payFileKept(p.category)) delete want[k]; else want[k] = p.category;
+    });
+    if (JSON.stringify(want) !== was) myPayFixesPut(id, want);
+    return want;
+  }
+  async function myPayRefile(id, picks, quiet) {
+    var want = myPayFixesWant(id, picks);
+    if (!Object.keys(want).length) return true;
+    var named = {};
+    myPayCats(id).forEach(function (x) { named[x.key] = x.label; });
+    var ok = await saveMyPayBook(id, function (next) {
+      var e = G.isObj(next.entries) ? next.entries : {};
+      var still = myPayFixes(id);
+      Object.keys(want).forEach(function (k) {
+        var cat = want[k];
+        if (!G.isObj(e[k]) || still[k] !== cat) return;
+        if (e[k].category !== cat) e[k] = Object.assign({}, e[k], { category: cat });
+        if (cat.indexOf('x-') === 0 && !G.extraCatNames(next)[cat]) {
+          next.extraCats = G.isObj(next.extraCats) ? next.extraCats : {};
+          next.extraCats[cat] = named[cat] || G.extraCatLabel(cat);
+        }
+      });
+    }, { fresh: true, quiet: true });
+    var left = myPayFixes(id);
+    if (ok) Object.keys(want).forEach(function (k) { if (left[k] === want[k]) delete left[k]; });
+    myPayFixesPut(id, left);
+    if (!ok && !quiet) toast('Added. Its category will be set once the connection is back.', 5200);
+    return !!ok;
+  }
   function openMyPayReview(id, done, only, after, back) {
     var cards = [];
     var key = function (l) { return l.account_id || ('n:' + String(l.account || '')); };
@@ -16124,13 +18176,21 @@
   }
   function myPayReviewSheet(id, items, opts) {
     var B = window.GR_BACKEND;
-    var cats = G.MY_PAY_CATS.map(function (x) { return { key: x.key, label: x.label }; });
-    var offered = {};
-    cats.forEach(function (x) { offered[x.key] = true; });
+    var catList = null;
+    function sheetCats(fresh) {
+      if (fresh) catList = null;
+      return catList || (catList = myPayCats(id));
+    }
+    var offered = function (k) { return !!k && sheetCats().some(function (c) { return c.key === k; }); };
+    myPayAllLoad();
+    var learned = myPayLearned();
     var rows = items.map(function (it, k) {
-      var amt = G.num(it.amount), hint = it.hint && it.hint !== 'other' && offered[it.hint] ? it.hint : '';
+      var amt = G.num(it.amount);
+      var mine = learned(it.merchant), guess = G.payHintCat(it.hint);
+      mine = offered(mine) ? mine : ''; guess = offered(guess) ? guess : '';
       return { feedId: it.id, date: it.date, merchant: String(it.merchant || '').trim() || 'Charge', amount: amt, account: it.account || '',
-        card: it.card === 'credit' ? 'credit' : 'debit', why: amt < 0 ? 'Refund' : '', category: hint, source: hint ? 'suggested' : null, pick: false, ord: k };
+        card: it.card === 'credit' ? 'credit' : 'debit', why: amt < 0 ? 'Refund' : '', category: mine || guess,
+        source: mine ? 'learned' : guess ? 'suggested' : null, pick: false, ord: k };
     });
     var live = rows.slice();
     var here = function (r) { return live.indexOf(r) >= 0; };
@@ -16176,10 +18236,22 @@
       draw();
       toast(plural(picked.length, 'charge') + ' → ' + label);
     };
-    chips.replaceChildren.apply(chips, cats.map(function (c) {
-      return h('button', { class: 'rv-chip', type: 'button', 'data-key': c.key, 'aria-pressed': 'false',
-        onclick: function () { applyCat(c.key, c.label); } }, c.label);
-    }));
+    var chipBar = catChips(chips, {
+      list: function () { return sheetCats(true); },
+      all: function () { return sheetCats(true); },
+      pick: function (key, label) { applyCat(key, label); },
+      mark: function () { markChips(); },
+      saveNew: function (key, label) { return myPaySaveCat(id, key, label); },
+      after: function (key, label, made) {
+        if (ticked().length) applyCat(key, label);
+        else {
+          draw();
+          toast((made ? myPayCatMade(label) : '\u201c' + label + '\u201d is already a category.') + ' Check charges, then tap it.', 4200);
+        }
+      }
+    });
+    function buildChips() { chipBar.build(); }
+    buildChips();
     var tools = h('div', { class: 'rv-tools' },
       live.length > 1 ? h('div', { class: 'rv-find' }, icon('search', 16), search) : null,
       found,
@@ -16206,7 +18278,7 @@
         title.append(h('span', { class: 'rv-out', role: 'status' }, ' · saving ' + away));
       }
     }
-    function infoCats() { return cats; }
+    function infoCats() { return sheetCats().map(function (c) { return { key: c.key, label: c.label }; }); }
     function lineKey(r) { return 'mypay:' + r.feedId; }
     function suggestCats() {
       if (closed || !S.sample) return;
@@ -16297,14 +18369,21 @@
     }
     async function save(list, keep, quick) {
       var done = [], failed = [], total = 0, lastErr = null;
-      for (var k = 0; k < list.length; k++) {
-        var r = list[k];
-        try {
-          if (keep) await B.myPayFile(id, r.feedId, r.category, r.card);
-          else await B.myPaySkip(r.feedId);
-          done.push(r); total += G.num(r.amount);
-        } catch (e) { failed.push(r); lastErr = e; }
-      }
+      var pickOf = function (r) { return { feedId: r.feedId, category: r.category }; };
+      if (keep) myPayFixesWant(id, list.map(pickOf));
+      S.myPayFiling = S.myPayFiling || {};
+      S.myPayFiling[id] = (S.myPayFiling[id] || 0) + 1;
+      try {
+        for (var k = 0; k < list.length; k++) {
+          var r = list[k];
+          try {
+            if (keep) await B.myPayFile(id, r.feedId, G.payFileKey(r.category), r.card);
+            else await B.myPaySkip(r.feedId);
+            done.push(r); total += G.num(r.amount);
+          } catch (e) { failed.push(r); lastErr = e; }
+        }
+      } finally { S.myPayFiling[id] -= 1; }
+      if (keep && done.length) await myPayRefile(id, done.map(pickOf));
       var c = myPayCardsInfo();
       var gone = {};
       done.forEach(function (r) { gone[r.feedId] = true; });
@@ -16340,29 +18419,59 @@
         picked: function () { return r.category || ''; },
         onUse: function (k) { if (!here(r)) return; r.category = k; r.source = 'suggested'; r.catSaid = true; draw(); }
       });
-      var sel = h('select', { class: 'input sm', 'aria-label': 'Category for ' + r.merchant,
-        onchange: function (e) {
+      var catO = {
+        value: r.category || '', aria: 'Category for ' + r.merchant, cats: sheetCats, all: function () { return sheetCats(true); },
+        saveNew: function (key, label) { return myPaySaveCat(id, key, label); }, madeWords: myPayCatMade,
+        onPick: function (v) {
           if (!here(r)) return;
           r.catSaid = true;
-          r.category = e.target.value; r.source = e.target.value ? 'chosen' : null;
+          r.category = v || ''; r.source = v ? 'chosen' : null;
+          var f = wrap.querySelector('.rv-flag.learned'); if (f && f.textContent === 'Learned') f.remove();
           var sg = wrap.querySelector('.rv-flag.ci-sug'); if (sg) sg.remove();
           if (info) info.paint();
-        } },
-        h('option', { value: '' }, 'Pick a category'),
-        cats.slice().sort(function (a, b) { return a.label.localeCompare(b.label); }).map(function (c) { return h('option', { value: c.key }, c.label); }));
-      sel.value = r.category || '';
-      r.reCat = function () { sel.value = r.category || ''; };
+        },
+        onNew: function () {
+          buildChips();
+          live.forEach(function (x) { if (x !== r && x.reCat) x.reCat(); });
+        }
+      };
+      var sel = categorySelect(id, catO);
+      r.reCat = function () { catO.value = r.category || ''; catO.rebuild(); };
       r.sugCat = function (k) {
-        if (!here(r) || r.category || r.catSaid || !k || !offered[k]) return;
-        if (document.activeElement === sel) return;
+        if (!here(r) || r.category || r.catSaid || !k || !offered(k) || catO.naming()) return;
+        var s = sel.querySelector('select');
+        if (s && document.activeElement === s) return;
         r.category = k; r.source = 'suggested';
         r.reCat();
         var sub = wrap.querySelector('.rv-sub');
         if (sub && !wrap.querySelector('.rv-flag.ci-sug')) sub.insertBefore(h('span', { class: 'rv-flag ci-sug' }, 'Suggested'), info ? info.link : null);
         if (info) info.paint();
       };
+      var picking = function () { var s = sel.querySelector('select'); return catO.naming() || !!(s && document.activeElement === s); };
+      r.learnCat = function (k) {
+        if (!here(r) || r.catSaid || !k || !offered(k) || r.category === k || (r.category && r.source !== 'suggested') || picking()) return;
+        r.category = k; r.source = 'learned';
+        r.reCat();
+        var sg = wrap.querySelector('.rv-flag.ci-sug'); if (sg) sg.remove();
+        var sub = wrap.querySelector('.rv-sub');
+        if (sub && !r.why && !wrap.querySelector('.rv-flag.learned')) sub.insertBefore(h('span', { class: 'rv-flag learned' }, 'Learned'), info ? info.link : null);
+        if (info) info.paint();
+      };
+      r.relist = function () {
+        if (catO.naming()) return;
+        var s = sel.querySelector('select');
+        if (s && document.activeElement === s) {
+          var once = false;
+          s.addEventListener('blur', function () { if (once) return; once = true; if (here(r) && !catO.naming()) r.reCat(); });
+          return;
+        }
+        r.reCat();
+      };
       var add = h('button', { class: 'btn sm primary rv-add1', type: 'button' }, 'Add');
-      pressable(add, function () { file([r], true, true); });
+      pressable(add, function () {
+        if (catO.naming()) { catO.finish().then(function (ok) { if (ok) file([r], true, true); }); return; }
+        file([r], true, true);
+      });
       var aside = h('button', { class: 'linkbtn rv-aside', type: 'button', onclick: function () {
         if (!here(r)) return;
         if (myPayPutBackKnown() !== true && !r.armed) { r.armed = true; aside.textContent = 'Set it aside for good?'; return; }
@@ -16374,14 +18483,16 @@
           h('span', { class: 'amt num' }, G.moneyCents(r.amount))),
         h('div', { class: 'rv-sub' }, dayMD(r.date),
           r.why ? h('span', { class: 'rv-flag' + (r.why === 'Refund' ? ' learned' : '') }, r.why) : null,
+          (r.source === 'learned' && !r.why) ? h('span', { class: 'rv-flag learned' }, 'Learned') : null,
           r.source === 'suggested' ? h('span', { class: 'rv-flag ci-sug' }, 'Suggested') : null,
           info ? info.link : null),
         info ? info.box : null,
-        h('div', { class: 'rv-act' }, h('span', { class: 'catpick' }, sel), add),
+        h('div', { class: 'rv-act' }, sel, add),
         aside));
       return wrap;
     }
     function draw() {
+      catList = null;
       var main = live.filter(shown);
       listHost.replaceChildren(h('div', { class: 'review' }, main.map(chargeRow)));
       refreshBar();
@@ -16406,6 +18517,21 @@
       if (catCtl) { try { catCtl.abort(); } catch (e) {   } }
       if (!stepping && opts && opts.back) sheetBack(opts.back);
     } });
+    if (sheet) sheet.myPayCats = function () {
+      if (closed) return;
+      catList = null;
+      if (!chipBar.naming()) buildChips();
+      var learnt = myPayLearned();
+      live.forEach(function (x) {
+        var was = x.category;
+        if (x.learnCat) x.learnCat(learnt(x.merchant));
+        else if (!x.catSaid && (!x.category || x.source === 'suggested')) {
+          var k = learnt(x.merchant);
+          if (k && offered(k)) { x.category = k; x.source = 'learned'; }
+        }
+        if (x.category === was && x.relist) x.relist();
+      });
+    };
     suggestCats();
   }
   function openMyPayIncomeReview(id, back) {
@@ -16513,16 +18639,34 @@
   }
   function openMyPayCat(id, key, keep) {
     var c = myPayInfo(id);
-    var st = keep || { key: key || 'food', amount: null, how: 'debit', date: G.ymd(new Date()), note: '', closed: false };
+    var st = keep || { key: G.payCatOf(key || 'food'), amount: null, how: 'debit', date: G.ymd(new Date()), note: '', closed: false };
     st.closed = false;
     var again = function () { if (!st.closed) openMyPayCat(id, st.key, st); };
     openSheet(function () {
       var book = G.isObj(c.book) ? c.book : {};
-      var cats = G.MY_PAY_CATS;
-      var idx = Math.max(0, cats.map(function (x) { return x.key; }).indexOf(st.key));
-      var entries = G.rows(book.entries).filter(function (e) { return (e.category || 'other') === st.key; })
+      var cur = myPayCats(id).filter(function (x) { return x.key === st.key; })[0] || { key: st.key, label: myPayCatName(id, st.key) };
+      var catO = {
+        value: st.key, aria: 'Category', cls: 'input', cats: function () { return myPayCats(id); }, all: function () { return myPayCats(id); },
+        saveNew: function (k, label) { return myPaySaveCat(id, k, label); }, madeWords: myPayCatMade,
+        onPick: function (v) { if (v) st.key = v; again(); }
+      };
+      var picker = categorySelect(id, catO);
+      var entries = G.rows(book.entries).filter(function (e) { return G.payCatOf(e.category) === st.key; })
         .sort(function (a, b) { return String(b.date).localeCompare(String(a.date)); });
-      var proj = G.isObj(book.projected) ? book.projected : {};
+      var undoOn = myPayUnfileKnown() === true, B = window.GR_BACKEND;
+      st.lines = st.lines || {}; st.asked = st.asked || {};
+      var want = !undoOn || !B || !B.myPayLinesById ? []
+        : entries.filter(function (e) { return e.bank && !st.asked[String(e.bank)]; }).map(function (e) { return String(e.bank); });
+      if (want.length) {
+        want.forEach(function (x) { st.asked[x] = true; });
+        st.wait = (st.wait || Promise.resolve()).then(function () { return B.myPayLinesById(want); }).then(function (rows) {
+          (Array.isArray(rows) ? rows : []).forEach(function (l) { if (l && l.id != null) st.lines[String(l.id)] = l; });
+        }, function () {   });
+      }
+      var drawn = st.drawn = (st.drawn || 0) + 1;
+      var canUndo = function (e) { return undoOn && !!e.bank && myPayUnfileCan(st.lines[String(e.bank)] || null); };
+      var line = G.payBook(book, { names: myPayNames(id) }).lines.filter(function (l) { return l.key === st.key; })[0];
+      var projNow = line ? line.projected : null;
       var amount = h('input', { class: 'input', type: 'number', inputmode: 'decimal', step: '0.01', min: '0', placeholder: '0.00',
         'aria-label': 'Amount', value: st.amount == null ? '' : st.amount,
         oninput: function (e) { st.amount = e.target.value === '' ? null : Number(e.target.value); } });
@@ -16530,23 +18674,31 @@
       var note = h('input', { class: 'input', type: 'text', maxlength: 60, placeholder: 'What for (optional)', 'aria-label': 'Note', value: st.note,
         oninput: function (e) { st.note = e.target.value; } });
       var projIn = h('input', { class: 'input', type: 'number', inputmode: 'decimal', step: '1', min: '0', placeholder: 'Not set',
-        'aria-label': 'Projected for this category', value: proj[st.key] == null ? '' : proj[st.key],
+        'aria-label': 'Projected for this category', value: projNow == null ? '' : projNow,
         onchange: async function (e) {
           var v = e.target.value;
           if (await saveMyPayBook(id, function (next) {
             next.projected = G.isObj(next.projected) ? next.projected : {};
             if (v === '') delete next.projected[st.key]; else next.projected[st.key] = Math.max(0, Number(v) || 0);
+            Object.keys(G.MY_PAY_WAS).forEach(function (old) { if (G.MY_PAY_WAS[old] === st.key) delete next.projected[old]; });
           })) toast('Projected saved');
         } });
       var add = async function (e) {
         e.preventDefault(); blurActive();
         if (st.saving) return;
+        if (catO.naming() && !(await catO.finish())) return;
         if (!(st.amount > 0) || !isFinite(st.amount) || st.amount > 1e7) { toast('Enter the amount'); return; }
         if (!G.parseDay(st.date)) { toast('Pick the day'); return; }
         var amount = Math.round(st.amount * 100) / 100, entry = { date: st.date, amount: amount, how: st.how, category: st.key,
           note: String(st.note || '').trim().slice(0, 60), createdAt: Date.now() };
         st.saving = true;
-        var ok = await saveMyPayBook(id, function (next) { next.entries = G.isObj(next.entries) ? next.entries : {}; next.entries[newId()] = entry; });
+        var ok = await saveMyPayBook(id, function (next) {
+          next.entries = G.isObj(next.entries) ? next.entries : {}; next.entries[newId()] = entry;
+          if (st.key.indexOf('x-') === 0 && !G.extraCatNames(next)[st.key]) {
+            next.extraCats = G.isObj(next.extraCats) ? next.extraCats : {};
+            next.extraCats[st.key] = myPayCatName(id, st.key);
+          }
+        });
         st.saving = false;
         if (ok) { toast(money(amount) + ' added'); st.amount = null; st.note = ''; again(); }
       };
@@ -16561,23 +18713,142 @@
       };
       return [
         h('h2', { class: 'sh-title' }, 'My expenses'),
-        segmented(cats.map(function (x) { return x.label; }), idx, function (i) { st.key = cats[i].key; again(); }, 'Category'),
+        h('div', { class: 'field' }, h('span', { class: 'field-label' }, 'Category'), picker),
         h('form', { class: 'stack', onsubmit: add },
           h('div', { class: 'pt-two' }, amount, date),
           note,
           segmented(['Credit', 'Debit', 'Cash'], ['credit', 'debit', 'cash'].indexOf(st.how), function (i) { st.how = ['credit', 'debit', 'cash'][i]; }, 'How it was paid'),
           h('button', { class: 'btn primary block', type: 'submit' }, 'Add')),
-        h('label', { class: 'field' }, h('span', { class: 'field-label' }, 'Projected for ' + cats[idx].label.toLowerCase()), projIn),
+        h('label', { class: 'field' }, h('span', { class: 'field-label' }, 'Projected for ' + cur.label.toLowerCase()), projIn),
+        entries.length ? h('p', { class: 'note sw-hint' }, 'Logged one wrong? Swipe it left to fix it.' +
+          (entries.some(function (e) { return offMoveBackOk(id, e); }) ? ' One moved from Off Tour goes back the same way.' : '')) : null,
         entries.length ? h('div', { class: 'ledger' }, entries.map(function (e) {
-          return h('div', { class: 'row ex-row' },
-            h('div', { class: 'row-label' }, e.note || cats[idx].label,
-              h('span', { class: 'hint' }, [e.date ? dayMD(e.date) : '', e.how === 'cash' ? 'Cash' : e.how === 'debit' ? 'Debit' : 'Credit'].filter(Boolean).join(' \u00b7 '))),
+          var line = h('div', { class: 'row ex-row' },
+            h('div', { class: 'row-label' }, e.note || cur.label,
+              h('span', { class: 'hint' }, [e.date ? dayMD(e.date) : '', e.how === 'cash' ? 'Cash' : e.how === 'debit' ? 'Debit' : 'Credit',
+                G.isObj(e.moved) ? 'Moved from Off Tour' : '',
+                G.isObj(e.moved) && offMovedAgain(id, e) ? 'logged on Off Tour again' : ''].filter(Boolean).join(' \u00b7 '))),
             h('span', { class: 'amt num' }, money(G.num(e.amount))),
-            h('button', { class: 'pay-entry-x', type: 'button', 'aria-label': 'Remove this expense', onclick: drop(e.id) }, '\u00d7'));
-        })) : h('p', { class: 'note' }, 'Nothing under ' + cats[idx].label.toLowerCase() + ' yet.'),
+            h('button', { class: 'pay-entry-x', type: 'button', 'aria-label': 'Remove this expense',
+              onclick: G.isObj(e.moved) ? function () { if (!st.saving) offMoveDropAsk(id, e, function () { openMyPayCat(id, st.key, st); }); } : drop(e.id) }, '\u00d7'));
+          var tray = [h('button', { class: 'sw-edit', type: 'button', 'aria-label': 'Edit ' + (e.note || cur.label),
+            onclick: function () { openMyPayEdit(id, e, function () { openMyPayCat(id, st.key, st); }); } }, icon('edit', 16), 'Edit')];
+          var undoBtn = function () {
+            return h('button', { class: 'sw-undo', type: 'button', 'aria-label': 'Undo ' + (e.note || cur.label) + ', back to new charges',
+              onclick: async function () {
+                if (st.saving || st.undoing) return;
+                st.undoing = true;
+                var ok = await myPayUnfile(id, e.bank, e.note || cur.label);
+                st.undoing = false;
+                if (ok) again();
+              } }, icon('back', 16), 'Undo');
+          };
+          if (canUndo(e)) tray.push(undoBtn());
+          if (offMoveBackOk(id, e)) {
+            tray.push(h('button', { class: 'sw-edit', type: 'button', style: 'width:104px', 'aria-label': 'Move ' + (e.note || cur.label) + ' back to Off Tour',
+              onclick: function () { if (st.saving) return; offMoveBackAsk(id, e, function () { openMyPayCat(id, st.key, st); }); } }, icon('back', 16), 'Move back to Off Tour'));
+          }
+          var row = swipeRow(line, tray, { noTapOpen: true });
+          if (undoOn && e.bank && !st.lines[String(e.bank)] && st.wait) {
+            st.wait.then(function () {
+              if (st.drawn !== drawn || st.closed || !canUndo(e)) return;
+              var t = row.querySelector('.sw-acts');
+              if (t && !t.querySelector('.sw-undo')) t.append(undoBtn());
+            });
+          }
+          return row;
+        })) : h('p', { class: 'note' }, 'Nothing under ' + cur.label.toLowerCase() + ' yet.'),
         h('button', { class: 'btn ghost block', type: 'button', onclick: function () { closeSheet(); } }, 'Done')
       ];
     }, { label: 'My expenses', onClose: function () { st.closed = true; } });
+    st.closed = false;
+  }
+  function openMyPayEdit(id, e, back) {
+    var hand = !e.bank && !(G.isObj(e.moved) && e.moved.feed);
+    var f = { category: G.payCatOf(e.category), saving: false,
+      amount: hand ? G.num(e.amount) : null, date: hand ? String(e.date || '') : '', note: hand ? String(e.note || '') : '' };
+    var again = function () { setTimeout(back, 260); };
+    openSheet(function () {
+      var catO = {
+        value: f.category, aria: 'Category', cls: 'input', cats: function () { return myPayCats(id); }, all: function () { return myPayCats(id); },
+        saveNew: function (k, label) { return myPaySaveCat(id, k, label); }, madeWords: myPayCatMade,
+        onPick: function (v) { f.category = v || ''; }
+      };
+      var picker = categorySelect(id, catO);
+      var fix = !hand ? null : h('div', { class: 'stack', style: 'margin-bottom:14px' },
+        h('div', { class: 'pt-two' },
+          h('input', { class: 'input', type: 'number', inputmode: 'decimal', step: '0.01', min: '0', placeholder: '0.00',
+            'aria-label': 'Amount', value: f.amount == null ? '' : f.amount,
+            oninput: function (ev) { f.amount = ev.target.value === '' ? null : Number(ev.target.value); } }),
+          h('input', { class: 'input', type: 'date', 'aria-label': 'Day', value: f.date, oninput: function (ev) { f.date = ev.target.value; } })),
+        h('input', { class: 'input', type: 'text', maxlength: 60, placeholder: 'What for (optional)', 'aria-label': 'Note', value: f.note,
+          oninput: function (ev) { f.note = ev.target.value; } }));
+      var submit = async function (ev) {
+        ev.preventDefault(); blurActive();
+        if (f.saving) return;
+        if (catO.naming() && !(await catO.finish())) return;
+        if (!f.category) { toast('Pick a category'); return; }
+        var moved = f.category !== G.payCatOf(e.category) ? f.category : null, more = null;
+        if (hand) {
+          more = {};
+          if (f.amount !== G.num(e.amount)) {
+            if (!(f.amount > 0) || !isFinite(f.amount) || f.amount > 1e7) { toast('Enter the amount'); return; }
+            more.amount = Math.round(f.amount * 100) / 100;
+          }
+          if (f.date !== String(e.date || '')) {
+            if (!G.parseDay(f.date)) { toast('Pick the day'); return; }
+            more.date = f.date;
+          }
+          var said = String(f.note || '').trim().slice(0, 60);
+          if (said !== String(e.note || '').trim().slice(0, 60)) more.note = said;
+        }
+        f.saving = true;
+        var got = await myPayMove(id, e.id, moved, moved ? myPayCatName(id, moved) : '', more);
+        f.saving = false;
+        if (got === 'gone') { toast('That entry isn’t there anymore.'); closeSheet(); again(); return; }
+        if (got) { toast('Saved'); closeSheet(); again(); }
+      };
+      return [
+        h('h2', { class: 'sh-title' }, 'Edit this entry'),
+        h('p', { class: 'sh-sub' }, hand ? (G.isObj(e.moved) ? 'Moved from Off Tour.' : 'Added by hand.') : [e.note || '', money(G.num(e.amount)), e.date ? dayMD(e.date) : ''].filter(Boolean).join(' · ') +
+          (G.isObj(e.moved) ? '. From the bank, moved from Off Tour.' : '. From your card.')),
+        h('form', { class: 'sh-form', novalidate: true, onsubmit: submit },
+          fix,
+          h('div', { class: 'field' }, h('span', { class: 'field-label' }, 'Category'), picker),
+          h('div', { class: 'stack' },
+            h('button', { class: 'btn primary block', type: 'submit' }, 'Save'),
+            h('button', { class: 'btn ghost block', type: 'button', onclick: function () { closeSheet(); again(); } }, 'Cancel')))
+      ];
+    }, { label: 'Edit this entry', cls: 'cat-sheet' });
+  }
+  async function myPayMove(id, eid, cat, label, more) {
+    var fix = myPayFixes(id);
+    if (fix[eid] !== undefined) { delete fix[eid]; myPayFixesPut(id, fix); }
+    var there = true;
+    var has = function (k) { return G.isObj(more) && Object.prototype.hasOwnProperty.call(more, k); };
+    var ok = await saveMyPayBook(id, function (next) {
+      var en = G.isObj(next.entries) ? next.entries : {};
+      if (!G.isObj(en[eid])) { there = false; return; }
+      if (cat != null && en[eid].category !== cat) en[eid] = Object.assign({}, en[eid], { category: cat });
+      if (G.isObj(more) && !en[eid].bank && !(G.isObj(en[eid].moved) && en[eid].moved.feed)) {
+        var was = en[eid], now = {};
+        if (has('amount') && G.num(was.amount) !== more.amount) now.amount = more.amount;
+        if (has('date') && String(was.date || '') !== more.date) now.date = more.date;
+        if (has('note') && String(was.note || '') !== more.note) now.note = more.note;
+        if ((now.amount !== undefined || now.date !== undefined) && G.isObj(was.moved) && G.isObj(was.moved.was)) {
+          var kept = Object.assign({}, was.moved.was);
+          if (now.date !== undefined && kept.date === undefined) kept.date = String(was.date || '');
+          if (now.amount !== undefined && kept.amount === undefined) kept.amount = G.num(was.amount);
+          now.moved = Object.assign({}, was.moved, { was: kept });
+        }
+        if (Object.keys(now).length) en[eid] = Object.assign({}, was, now);
+      }
+      if (cat != null && cat.indexOf('x-') === 0 && !G.extraCatNames(next)[cat]) {
+        next.extraCats = G.isObj(next.extraCats) ? next.extraCats : {};
+        next.extraCats[cat] = label || G.extraCatLabel(cat);
+      }
+    }, { fresh: true });
+    return !ok ? false : there ? true : 'gone';
   }
   function reimbOn() {
     var B = window.GR_BACKEND;
@@ -16650,7 +18921,7 @@
   function myPayBottom(id, first) {
     var back = myPayBackRow(id);
     return h('div', { class: 'mp-bottom' },
-      h('div', { class: 'cal-open cal-grid' }, first, myPayCardsBtn(id), back.btn),
+      h('div', { class: 'cal-open cal-grid' }, first, back.btn),
       back.hint);
   }
   function reimbStateText(r) {
@@ -17365,6 +19636,7 @@
               toast('Sending\u2026');
               sendNotify(tourId, 'alert', { message: msg }).then(function (n) {
                 toast(n == null ? 'Posted in the chat. The ping may not have gone out \u2014 try again.'
+                  : n === 'too_many' ? 'Posted in the chat. No ping this time: that\u2019s the most alerts one person can send in an hour.'
                   : n === 0 ? 'Posted in the chat. Nobody on the tour has alerts on yet.'
                   : 'Alert sent to ' + plural(n, 'phone'));
               });
@@ -17537,7 +19809,7 @@
         socialBar(''));
     }
     if (isOffTour(t)) {
-      if (mayOpenOff(artistOf(t))) S.route = offRoute(artistOf(t), ['cards', 'money'].indexOf(view) >= 0 ? view : 'costs');
+      if (mayOpenOff(artistOf(t))) S.route = offRoute(artistOf(t), ['cards', 'money', 'mypay'].indexOf(view) >= 0 ? view : 'costs');
       else S.route = { name: 'offtour', view: 'details' };
       return viewOffFrame();
     }
@@ -18219,6 +20491,7 @@
     if (restDay) {
       var kind = isRehearsalDay(t, today) ? 'Rehearsal' : 'Day off';
       var offCity = String((off && off.city) || '').trim(), hotel = String((off && off.hotel) || '').trim();
+      var hotelAddr = String((off && off.hotelAddress) || '').trim();
       when = offCity && kind !== 'Day off' ? kind : 'Today';
     }
     return [
@@ -18232,6 +20505,7 @@
           h('span', null, dayLong(today))),
         offCity || kind !== 'Day off' ? h('div', { class: 'ov-city' }, offCity || kind) : null,
         hotel ? h('div', { class: 'ov-venue' }, hotel) : null,
+        hotelAddr ? h('a', { class: 'ov-addr', href: mapsHref(hotelAddr), target: '_blank', rel: 'noopener' }, hotelAddr) : null,
         h('p', { class: 'pt-next' }, 'Next show: ' + dayMD(next.date) + ' · ' +
           [next.city, next.venue].map(function (x) { return String(x || '').trim(); }).filter(Boolean).join(' · ')))
       : h('div', { class: 'ov-today' },
@@ -18829,8 +21103,9 @@
               'aria-label': 'Call ' + title }, icon('phone', 17))
               : h('span', { class: 'crew-call empty', 'aria-hidden': 'true' }))));
     }
-    var showing = null;
+    var showing = null, leave = leaveTourLink(tourId, owns);
     function paint() {
+      if (leave) leave.leaveFill();
       var c = S.crewCache && S.crewCache[tourId];
       var rows = c ? c.rows : (S.crewShown && S.crewShown[tourId]) || null;
       var miss = S.crewMiss && S.crewMiss[tourId];
@@ -18873,8 +21148,41 @@
       manages ? h('div', { style: 'display:flex;justify-content:center;margin-top:14px' },
         h('button', { class: 'crew-invite', type: 'button',
           onclick: function () { openInviteSheet(tourId); } },
-          h('span', { class: 'plus', 'aria-hidden': 'true' }, '+'), 'Invite crew')) : null
+          h('span', { class: 'plus', 'aria-hidden': 'true' }, '+'), 'Invite crew')) : null,
+      leave
     ];
+  }
+  function leaveTourLink(tourId, owns) {
+    var B = window.GR_BACKEND, t = getTour(tourId);
+    if (owns || S.mode !== 'db' || !B || typeof B.leaveTour !== 'function' || !t || isOffTour(t)) return null;
+    var row = h('p', { class: 'pf-rb-row', style: 'display:none' });
+    row.leaveFill = function () {
+      var on = typeof B.leaveTourOn === 'function' && !!B.leaveTourOn();
+      if (on === !!row.firstChild) return;
+      row.replaceChildren.apply(row, on ? [h('button', { class: 'linkbtn pf-rb', type: 'button',
+        onclick: function () { openLeaveTour(tourId); } }, 'Leave tour')] : []);
+      row.style.display = on ? '' : 'none';
+    };
+    row.leaveFill();
+    return row;
+  }
+  function openLeaveTour(tourId) {
+    var B = window.GR_BACKEND, t = getTour(tourId), name = (t && t.name) || 'this tour';
+    confirmSheet({
+      title: 'Leave ' + name + '?',
+      body: 'You come off its crew list and the tour leaves your phone: its day sheets, chat, alerts and your pay on it. ' +
+        'Its people can invite you again, and you’d get a Join.',
+      action: 'Leave tour', danger: true, cancel: 'Stay',
+      onConfirm: async function () {
+        var r = null;
+        try { r = await B.leaveTour(tourId); } catch (e) { toast('Couldn’t do that. Try again.'); return false; }
+        if (r && r.ok === false && r.why === 'owner') { toast('You made this tour: it’s yours to delete, not to leave.'); return false; }
+        forgetCrew(tourId);
+        toast((r && r.ok === false) ? 'You’re not on ' + name + ' any more.' : 'You left ' + name + '.');
+        go(PF_HOME);
+        return true;
+      }
+    });
   }
   function seenKey() {
     var B = window.GR_BACKEND;
@@ -20214,11 +22522,11 @@
     list.style.setProperty('--crew-name-w', Math.ceil(Math.min(name, room)) + 'px');
     list.classList.add('sized');
   }
-  function dateBlock(ds) {
+  function dateBlock(ds, o) {
     var d = G.parseDay(ds);
     return h('div', { class: 'date', 'aria-hidden': 'true' },
       h('div', { class: 'm' }, d ? F.mon.format(d) : '?'),
-      h('div', { class: 'd num' }, d ? String(d.getDate()) : '?'),
+      h('div', { class: 'd num' }, d ? (o && o.pad ? ('0' + d.getDate()).slice(-2) : String(d.getDate())) : '?'),
       h('div', { class: 'w' }, d ? F.wd.format(d) : ''));
   }
   function whereBlock(s) {
@@ -21458,6 +23766,7 @@
   function daySheetNodes(s, off, o) {
     var lines = s ? sheetLinesShown(s) : G.offDayLines(off || {});
     if (o && o.onlySet && s) lines = lines.filter(function (x) { return !/^(Address|Venue phone): /.test(x); });
+    if (o && o.onlySet && !s) lines = lines.filter(function (x) { return !/^Hotel address: /.test(x); });
     if (!lines.length) return null;
     var d = s && G.isObj(s.daySheet) ? s.daySheet : {};
     off = off || {};
@@ -21558,10 +23867,12 @@
           h('span', { class: 'ds-val' }, String(v).trim())));
       };
       if (String(off.hotel || '').trim()) {
+        var offAddr = String(off.hotelAddress || '').trim();
         offRows.push(h('div', { class: 'row ds-row' },
           h('span', { class: 'row-label' }, 'Hotel'),
           h('a', { class: 'ds-val ds-link', target: '_blank', rel: 'noopener',
-            href: mapsHref(String(off.hotel).trim() + (off.city ? ', ' + off.city : '')) }, String(off.hotel).trim())));
+            href: mapsHref(String(off.hotel).trim() + (offAddr ? ', ' + offAddr : off.city ? ', ' + off.city : '')) },
+            String(off.hotel).trim())));
       }
       offRow('Wifi', off.wifi);
       offRow('Wifi password', off.wifiPass);
@@ -21629,7 +23940,11 @@
           var ad = s ? String((G.isObj(s.daySheet) ? s.daySheet : {}).venueAddress || '').trim() : '';
           return ad ? h('a', { class: 'vh-addr', href: mapsHref(ad), target: '_blank', rel: 'noopener' }, ad) : null;
         })(),
-        !s && off.hotel ? h('div', { class: 'vh-venue' }, off.hotel) : null),
+        !s && off.hotel ? h('div', { class: 'vh-venue' }, off.hotel) : null,
+        (function () {
+          var ad = s ? '' : String(off.hotelAddress || '').trim();
+          return ad ? h('a', { class: 'vh-addr', href: mapsHref(ad), target: '_blank', rel: 'noopener' }, ad) : null;
+        })()),
       h('button', { class: 'iconbtn vh-arrow', type: 'button', 'aria-label': 'Next day',
         disabled: S.dsIndex >= days.length - 1,
         onclick: function () { S.dsIndex += 1; render(true); } }, icon('chevron', 22)));
@@ -21711,9 +24026,12 @@
     var editBtn = canEditTour(id) ? h('button', {
       class: 'iconbtn sm ds-pencil', type: 'button', 'aria-label': lines.length ? 'Edit this day sheet' : 'Fill in this day sheet',
       onclick: function () { if (s) openDaySheetEditor(id, s.id); else openOffDaySheet(id, entry.date); } }, icon('edit', 18)) : null;
-    var dsAddr = s ? String((G.isObj(s.daySheet) ? s.daySheet : {}).venueAddress || '').trim() : '';
-    var placeEl = placeName || trashBtn || editBtn ? h('div', { class: 'ds-venue-row' },
-      editBtn, placeName ? h('div', { class: 'ds-venue glow' }, h('span', { class: 'ds-venue-name' }, placeName),
+    var dsAddr = s ? String((G.isObj(s.daySheet) ? s.daySheet : {}).venueAddress || '').trim()
+      : String((off && off.hotelAddress) || '').trim();
+    var offAddrOnly = !s && !placeName && !!dsAddr;
+    var placeEl = placeName || offAddrOnly || trashBtn || editBtn ? h('div', { class: 'ds-venue-row' },
+      editBtn, placeName || offAddrOnly ? h('div', { class: 'ds-venue glow' },
+        placeName ? h('span', { class: 'ds-venue-name' }, placeName) : null,
         dsAddr ? h('a', { class: 'vh-addr', href: mapsHref(dsAddr), target: '_blank', rel: 'noopener' }, dsAddr) : null,
         s && entry.date === today ? venueHistLine(id, s, true) : null) : null,
       trashBtn) : null;
@@ -21745,7 +24063,7 @@
         } else {
           patch = { offDays: {} };
           patch.offDays[date] = String(off.city || '').trim()
-            ? { city: off.city, hotel: '', wifi: '', wifiPass: '', rooms: '', notes: '', plans: [] } : null;
+            ? { city: off.city, hotel: '', hotelAddress: '', wifi: '', wifiPass: '', rooms: '', notes: '', plans: [] } : null;
         }
         var ok = await api.update(tourId, patch);
         if (ok) { toast('Day sheet cleared'); sendNotify(tourId, 'alarms', {}); }
@@ -21792,14 +24110,37 @@
     var f = {
       city: d0.city || '', hotel: d0.hotel || '', wifi: d0.wifi || '', wifiPass: d0.wifiPass || '',
       rooms: d0.rooms || '', notes: d0.notes || '', busCall: d0.busCall || '',
+      hotelAddress: d0.hotelAddress || '',
       plans: (Array.isArray(d0.plans) ? d0.plans : []).map(function (r) {
         return { label: r.label || '', time: r.time || '' }; })
     };
+    var headName = h('p', { class: 'ds-ed-venue' }, '');
+    var headAddr = h('span', { class: 'ds-ed-addr-t' }, '');
+    var headWhere = h('div', { class: 'ds-ed-addr' }, icon('tabmap', 16), headAddr);
+    var headDated = !!G.parseDay(date);
+    var headRow = h('div', { class: 'ds-ed-when' },
+      headDated ? [h('span', { class: 'sr' }, dayLong(date)), dateBlock(date, { pad: true })] : null,
+      headWhere);
+    var headSay = function () {
+      var hotel = String(f.hotel || '').trim(), city = String(f.city || '').trim();
+      var cut = /^([^,]*[^,\s])\s*,\s*(\d.*)$/.exec(hotel);
+      var name = cut ? cut[1] : hotel;
+      var say = String(f.hotelAddress || '').trim() || (cut ? cut[2] : name ? city : '');
+      headName.textContent = name || city || 'Day off';
+      headAddr.textContent = say;
+      headWhere.hidden = !say;
+      headRow.hidden = !headDated && !say;
+    };
+    headSay();
+    var head = h('div', { class: 'ds-ed-head' }, headName, headRow);
     openSheet(function () {
       function textIn(key, ph) {
         return h('input', { class: 'input', type: 'text', value: f[key], maxlength: 120,
           autocomplete: 'off', placeholder: ph || '',
-          oninput: function (e) { f[key] = e.target.value; } });
+          oninput: function (e) {
+            f[key] = e.target.value;
+            if (key === 'city' || key === 'hotel' || key === 'hotelAddress') headSay();
+          } });
       }
       var plansHost = h('div', null);
       function buildPlans() {
@@ -21823,8 +24164,8 @@
         e.preventDefault();
         blurActive();
         var sheet = {
-          city: f.city.trim(), hotel: f.hotel.trim(), wifi: f.wifi.trim(), wifiPass: f.wifiPass.trim(),
-          rooms: f.rooms.trim(), notes: f.notes.trim(), busCall: String(f.busCall || '').trim(),
+          city: f.city.trim(), hotel: f.hotel.trim(), hotelAddress: f.hotelAddress.trim(), wifi: f.wifi.trim(),
+          wifiPass: f.wifiPass.trim(), rooms: f.rooms.trim(), notes: f.notes.trim(), busCall: String(f.busCall || '').trim(),
           plans: f.plans.filter(function (r) { return r.label.trim() || r.time.trim(); })
             .map(function (r) { return { label: r.label.trim(), time: r.time.trim() }; })
         };
@@ -21837,11 +24178,13 @@
       };
       buildPlans();
       return [
-        h('h2', { class: 'sh-title' }, 'Off day \u2014 ' + dayLong(date)),
-        h('p', { class: 'sh-sub' }, 'Where the day lands, where everyone sleeps, and what\u2019s planned. Blank fields just don\u2019t show.'),
-        h('form', { class: 'sh-form', onsubmit: submit, novalidate: true },
+        h('h2', { class: 'sh-title clean' }, 'Off day'),
+        head,
+        h('p', { class: 'sh-sub clean' }, 'Where the day lands, where everyone sleeps, and what\u2019s planned. Blank fields just don\u2019t show.'),
+        h('form', { class: 'sh-form ds-editor', onsubmit: submit, novalidate: true },
           field('City', textIn('city', 'Salt Lake City, UT')),
-          field('Hotel', textIn('hotel', 'Hotel name and address')),
+          field('Hotel', textIn('hotel', 'Hotel name')),
+          field('Hotel address', textIn('hotelAddress', '250 W 600 S, Salt Lake City, UT')),
           h('div', { class: 'field-row' },
             field('Wifi', textIn('wifi', 'Network name')),
             field('Rooms', textIn('rooms', 'Under D. Oliver'))),
@@ -21857,7 +24200,7 @@
             h('button', { class: 'btn ghost block', type: 'button',
               onclick: function () { closeSheet(); } }, 'Cancel')))
       ];
-    }, { label: 'Off day' });
+    }, { label: 'Off day', cls: 'ds-ed-sheet' });
   }
   function openLineupPrompt(tourId) {
     var count = 3;
@@ -22722,7 +25065,7 @@
       if (headRow) headRow.hidden = !headDated && !say;
     };
     headRow = h('div', { class: 'ds-ed-when' },
-      headDated ? [h('span', { class: 'sr' }, dayLong(s.date)), dateBlock(s.date)] : null,
+      headDated ? [h('span', { class: 'sr' }, dayLong(s.date)), dateBlock(s.date, { pad: true })] : null,
       headWhere);
     headSay();
     var head = h('div', { class: 'ds-ed-head' },
@@ -24612,10 +26955,11 @@
       date: s ? s.date : suggestDate(t),
       city: s ? s.city || '' : '',
       venue: s ? s.venue || '' : '',
-      soldOut: !!(s && s.soldOut)
+      soldOut: !!(s && s.soldOut),
+      state: s ? G.cpaStateOf(s) : ''
     };
     openSheet(function () {
-      var venueI;
+      var venueI, stateI = null, stateTyped = false, follows = !G.cpaStateClean(s && s.state);
       var dateI = h('input', {
         class: 'input', type: 'date', value: f.date, 'aria-label': 'Date',
         oninput: function (e) { f.date = e.target.value; }
@@ -24623,7 +26967,10 @@
       var cityI = h('input', {
         class: 'input', type: 'text', value: f.city, maxlength: 80, autocomplete: 'off',
         placeholder: 'Detroit, MI', autofocus: !s, enterkeyhint: 'next',
-        oninput: function (e) { f.city = e.target.value; },
+        oninput: function (e) {
+          f.city = e.target.value;
+          if (stateI && follows && !stateTyped) { f.state = G.cpaCityState(f.city); stateI.value = f.state; }
+        },
         onkeydown: function (e) { if (e.key === 'Enter' && venueI) { e.preventDefault(); venueI.focus(); } }
       });
       venueI = h('input', {
@@ -24631,6 +26978,13 @@
         placeholder: 'Optional', enterkeyhint: 'done',
         oninput: function (e) { f.venue = e.target.value; }
       });
+      if (s) {
+        stateI = h('input', {
+          class: 'input', type: 'text', value: f.state, maxlength: G.CPA_STATE_MAX, autocomplete: 'off',
+          placeholder: 'Optional', enterkeyhint: 'done', 'aria-label': 'State',
+          oninput: function (e) { f.state = e.target.value; stateTyped = true; }
+        });
+      }
       var submit = async function (e) {
         e.preventDefault();
         var city = f.city.trim();
@@ -24639,6 +26993,9 @@
         var patch = {};
         if (s) {
           patch[showId] = { date: f.date, city: city, venue: f.venue.trim(), soldOut: f.soldOut };
+          var typedState = G.cpaStateClean(f.state), cityState = G.cpaCityState(city);
+          var wantState = typedState && typedState !== cityState ? typedState : null;
+          if (stateTyped && wantState !== (G.cpaStateClean(s.state) || null)) patch[showId].state = wantState;
           if (await api.update(id, { shows: patch })) {
             closeSheet(); toast('Show saved'); render(true);
             if (f.soldOut && !s.soldOut) sendNotify(id, 'soldout', { city: city, date: f.date });
@@ -24669,6 +27026,7 @@
           : null,
         h('form', { class: 'sh-form', onsubmit: submit, novalidate: true },
           field('Date', dateI), field('City', cityI), field('Venue', venueI),
+          stateI ? field('State', stateI) : null,
           s ? h('div', { class: 'ds-yn', style: 'margin-bottom:14px' },
             h('span', { class: 'field-label', style: 'margin:0' }, 'Sold out'),
             segmented(['\u2014', 'Yes'], f.soldOut ? 1 : 0, function (i) { f.soldOut = i === 1; },
@@ -25147,6 +27505,11 @@
     if (code === 'too-many') { toast('That’s the limit for today. The rest can go tomorrow.', 6000); return true; }
     return false;
   }
+  function inviteOkSay(who) {
+    return who
+      ? 'If ' + who + ' already uses Greenroom, there’s no email: they’ll see a Join on their profile the next time they open it. If not, they can also sign up with this address.'
+      : 'Anyone who already uses Greenroom gets no email: they’ll see a Join on their profile the next time they open it. The rest can also sign up with their address.';
+  }
   function peopleSection(tourId, o) {
     o = o || {};
     var B = window.GR_BACKEND;
@@ -25221,7 +27584,7 @@
         };
         goBtn.onclick = async function () {
           if (busy) return;
-          var todo = left.filter(function (p) { return pick[p.email].on; }), sent = [], nomail = [], failed = null, why = null;
+          var todo = left.filter(function (p) { return pick[p.email].on; }), sent = [], nomail = [], failed = null, why = null, oneWord = false;
           if (!todo.length) return;
           busy = true; goBtn.disabled = true;
           for (var i = 0; i < todo.length; i++) {
@@ -25229,21 +27592,23 @@
             try {
               var status = await inviteOne(todo[i], asLevel(todo[i], pick[todo[i].email].mgr));
               sent.push(todo[i].name || todo[i].email);
-              if (status !== 'sent' && status !== 'existing') nomail.push(todo[i].name || todo[i].email);
+              if (status === 'ok') oneWord = true;
+              else if (status !== 'sent' && status !== 'existing') nomail.push(todo[i].name || todo[i].email);
             }
             catch (e) { failed = todo[i].name || todo[i].email; why = e; break; }
           }
           busy = false;
           if (failed && inviteRefused(why)) {   }
           else if (failed) toast('Couldn’t invite ' + failed + (sent.length ? '. The ' + sent.length + ' before them are in.' : '.') + ' Try again in a bit.');
-          else if (nomail.length) toast('On the tour, but the email didn’t go out to ' + nomail.join(', ') + '. They can still sign up with that address.');
+          else if (nomail.length) toast('Invited, but the email didn’t go out to ' + nomail.join(', ') + '. They can still sign up with that address.');
+          else if (oneWord) setTimeout(function () { toast(inviteOkSay(sent.length === 1 ? sent[0] : ''), 6500); }, 1700);
           if (sent.length) { forgetCrew(tourId); inviteSplash(sent.length === 1 ? sent[0] : sent.length + ' people'); }
           refresh();
         };
         past.replaceChildren(
           h('h3', { class: 'sh-h3', style: 'margin-top:14px' }, 'Past crew'),
           h('p', { class: 'sh-sub', style: 'margin-top:-2px' }, 'Tick who’s coming' + (owns ? ', and tap CREW to make someone a Manager' : '') +
-            '. Invite emails each of them and puts them on this tour.'),
+            '. Invite emails each of them; each is on this tour once they tap Join.'),
           h('div', { class: 'ledger' }, left.map(function (p) {
             var who = p.name || p.email, st = pick[p.email];
             var lvl = owns ? h('button', { class: 'role-tag wz-lvl' + (st.mgr ? ' aa' : ''), type: 'button', 'aria-pressed': st.mgr ? 'true' : 'false',
@@ -25275,7 +27640,8 @@
               try {
                 var status = await inviteOne(p, asLevel(p));
                 invited(who);
-                if (status === 'existing') setTimeout(function () { toast(who + ' already has an account. The tour shows up the next time they open Greenroom.'); }, 1700);
+                if (status === 'existing') setTimeout(function () { toast(who + ' already has an account. They\u2019ll see a Join on their profile the next time they open Greenroom.'); }, 1700);
+                else if (status === 'ok') setTimeout(function () { toast(inviteOkSay(who), 6500); }, 1700);
               } catch (e) { addBtn.disabled = false; if (!inviteRefused(e)) toast('Couldn’t invite them. Try again.'); }
             } }, 'Invite');
           return h('div', { class: 'row people-row past-row' },
@@ -25352,7 +27718,8 @@
               { first: first, last: last, tourRole: tourRole, ridesBus: ridesBus });
             await addToCrewExpenses(tourId, name, tourRole, email, asMember, ridesBus);
             invited(name);
-            if (status === 'existing') setTimeout(function () { toast(first + ' already has an account. The tour shows up the next time they open Greenroom.'); }, 1700);
+            if (status === 'existing') setTimeout(function () { toast(first + ' already has an account. They\u2019ll see a Join on their profile the next time they open Greenroom.'); }, 1700);
+            else if (status === 'ok') setTimeout(function () { toast(inviteOkSay(first), 6500); }, 1700);
             else if (status !== 'sent') setTimeout(function () { toast('The email didn’t go out, but ' + first + ' can still sign up in Greenroom with ' + email); }, 1700);
           } catch (e2) { sendBtn.disabled = false; if (!inviteRefused(e2)) toast('Couldn’t send that invite. Try again.'); }
         }
@@ -25505,7 +27872,7 @@
     }
     return Promise.resolve(null);
   }
-  function notifyCrewPaid(tourId, p, amount) {
+  function notifyCrewPaid(tourId, p, line) {
     var B = window.GR_BACKEND;
     if (!(S.mode === 'db' && B && B.crew && B.notify)) return;
     var cached = S.crewCache && S.crewCache[tourId] && S.crewCache[tourId].rows;
@@ -25518,7 +27885,7 @@
         var rn = String(r.name || r.username || '').trim().toLowerCase();
         return nm && rn === nm;
       })[0];
-      if (hit && hit.userId) sendNotify(tourId, 'payment', { to: hit.userId, amount: G.num(amount) });
+      if (hit && hit.userId) sendNotify(tourId, 'payment', { to: hit.userId, id: String(line || '') });
     }).catch(function () {   });
   }
   function alertsBell(tourId) {
@@ -25616,6 +27983,9 @@
     out.group = out.loadin && artistish ? 'all' : artistish ? 'artist' : 'crew';
     return out;
   }
+  function notifSeesMoney(tourId) {
+    return tourId ? canSeeMoney(tourId) : allTourEntries().some(function (e) { return canSeeMoney(e[0]); });
+  }
   function openNotifications(tourId) {
     var B = window.GR_BACKEND;
     if (!B || S.mode !== 'db') {
@@ -25634,7 +28004,7 @@
     B.pushState().then(function (state) {
       var on = state.on;
       var saved = state.prefs || {};
-      var seesMoney = tourId ? canSeeMoney(tourId) : allTourEntries().some(function (e) { return canSeeMoney(e[0]); });
+      var seesMoney = notifSeesMoney(tourId);
       var st = {};
       NOTIF_GROUPS.forEach(function (grp) {
         grp[1].forEach(function (k) { st[k[0]] = notifStart(k[0], k[3], saved); });
@@ -25705,14 +28075,18 @@
     });
   }
   function cardMenuItem(id, asRow) {
+    var c = cardMenuTap(id);
+    if (!c) return null;
+    if (asRow) return stRow(c.ic, c.label, c.tap);
+    return h('button', { class: 'btn ghost block', type: 'button', onclick: c.tap }, icon(c.ic, 18), c.label);
+  }
+  function cardMenuTap(id) {
     var B = window.GR_BACKEND;
     if (S.mode !== 'db' || !createdTour(id) || !S.feed || !B || !B.feedCall) return null;
     var unsure = !!S.feed.failed;
     var ready = unsure || (!S.feed.connectOnly && !!(S.feed.row && S.feed.row.switched_on));
-    var tap = function () { if (S.feed.connectOnly && !unsure) connectCards(id); else openFeedSheet(id); };
-    if (asRow) return stRow(ready ? 'gear' : 'card', ready ? 'Card settings' : 'Add card info', tap);
-    return h('button', { class: 'btn ghost block', type: 'button', onclick: tap },
-      icon(ready ? 'gear' : 'card', 18), ready ? 'Card settings' : 'Add card info');
+    return { ic: ready ? 'gear' : 'card', label: ready ? 'Card settings' : 'Add card info',
+      tap: function () { if (S.feed.connectOnly && !unsure) connectCards(id); else openFeedSheet(id); } };
   }
   function fileControl(o) {
     var input = h('input', {
@@ -25750,6 +28124,7 @@
     var messages = {
       image_rejected: 'That file couldn’t be read. Try a JPG or PNG.',
       rate_limited: 'Too many requests right now. Try again in a minute.',
+      daily_limit: 'That’s today’s reading used up. It comes back tomorrow.',
       session_expired: 'Sign in to Claude again, then try once more.',
       prompt_too_large: 'That file is too big to read in one go. Try splitting it up.',
       refused: 'That file couldn’t be read. Try a clearer copy.',
@@ -27075,7 +29450,7 @@
         var key = G.slugCategory(label);
         if (!label || !key) { build(); return true; }
         var t = getTour(tourId), made = false;
-        var clash = chargeCats(t).filter(function (c) {
+        var clash = (o.all ? o.all() : chargeCats(t)).filter(function (c) {
           return c.key === key || c.label.toLowerCase() === label.toLowerCase() || (c.key === 'crew' && payName(label));
         })[0];
         if (clash && skip[clash.key]) {
@@ -27085,12 +29460,16 @@
         }
         if (clash) key = clash.key;
         else {
-          var patch = { extraCats: {} };
-          patch.extraCats[key] = label;
-          var ok = await api.update(tourId, patch);
+          var ok;
+          if (o.saveNew) ok = await o.saveNew(key, label);
+          else {
+            var patch = { extraCats: {} };
+            patch.extraCats[key] = label;
+            ok = await api.update(tourId, patch);
+          }
           if (!ok) { build(); return false; }
           made = true;
-          toast(catMadeWords(t, label), 4200);
+          toast(o.madeWords ? o.madeWords(label) : catMadeWords(t, label), 4200);
         }
         o.value = key;
         build(made);
@@ -27105,6 +29484,53 @@
     }
     build();
     return holder;
+  }
+  function catChips(chips, o) {
+    var naming = false;
+    function build() {
+      naming = false;
+      chips.replaceChildren.apply(chips, [h('button', { class: 'rv-chip rv-plus', type: 'button', 'aria-label': 'Add a category',
+        onclick: grow }, '+')].concat(o.list().map(function (c) {
+        return h('button', { class: 'rv-chip', type: 'button', 'data-key': c.key, 'aria-pressed': 'false',
+          onclick: function () { o.pick(c.key, c.label); } }, c.label);
+      })));
+      if (o.mark) o.mark();
+    }
+    function grow() {
+      var saving = false;
+      naming = true;
+      var inp = h('input', { class: 'input sm rv-newcat', type: 'text', maxlength: 30, autocomplete: 'off',
+        placeholder: 'New category, e.g. Security', 'aria-label': 'New category name',
+        onkeydown: function (e) {
+          if (e.key === 'Enter') { e.preventDefault(); commit(); }
+          if (e.key === 'Escape') build();
+        } });
+      async function commit() {
+        if (saving) return;
+        var label = String(inp.value || '').trim();
+        var key = G.slugCategory(label);
+        if (!label || !key) { build(); return; }
+        var made = false;
+        var clash = o.all().filter(function (c) {
+          return c.key === key || c.label.toLowerCase() === label.toLowerCase() || (c.key === 'crew' && payName(label));
+        })[0];
+        if (clash) { key = clash.key; label = clash.label; }
+        else {
+          saving = true;
+          var ok = await o.saveNew(key, label);
+          saving = false;
+          if (!ok) { build(); return; }
+          made = true;
+        }
+        build();
+        o.after(key, label, made);
+      }
+      chips.replaceChildren(h('div', { class: 'rv-newrow' }, inp,
+        h('button', { class: 'btn sm primary', type: 'button', onclick: commit }, 'Add'),
+        h('button', { class: 'iconbtn sm', type: 'button', 'aria-label': 'Cancel', onclick: build }, icon('close', 16))));
+      setTimeout(function () { inp.focus(); }, 30);
+    }
+    return { build: build, naming: function () { return naming; } };
   }
   function openImportReview(tourId, rows, source, opts) {
     var importId = newId();
@@ -27728,54 +30154,25 @@
       if (fresh) catList = null;
       return catList || (catList = chargeCats(getTour(tourId) || base));
     }
-    function buildChips() {
-      var list = sheetCats(true).filter(function (c) { return !G.isDerived(c.key) && c.key !== 'offdebt'; });
-      chips.replaceChildren.apply(chips, [h('button', { class: 'rv-chip rv-plus', type: 'button', 'aria-label': 'Add a category',
-        onclick: growChip }, '+')].concat(list.map(function (c) {
-        return h('button', { class: 'rv-chip', type: 'button', 'data-key': c.key, 'aria-pressed': 'false',
-          onclick: function () { applyCat(c.key, c.label); } }, c.label);
-      })));
-      markChips();
-    }
-    function growChip() {
-      var saving = false;
-      var inp = h('input', { class: 'input sm rv-newcat', type: 'text', maxlength: 30, autocomplete: 'off',
-        placeholder: 'New category, e.g. Security', 'aria-label': 'New category name',
-        onkeydown: function (e) {
-          if (e.key === 'Enter') { e.preventDefault(); commit(); }
-          if (e.key === 'Escape') buildChips();
-        } });
-      async function commit() {
-        if (saving) return;
-        var label = String(inp.value || '').trim();
-        var key = G.slugCategory(label);
-        if (!label || !key) { buildChips(); return; }
-        var t = getTour(tourId), made = false;
-        var clash = chargeCats(t).filter(function (c) {
-          return c.key === key || c.label.toLowerCase() === label.toLowerCase() || (c.key === 'crew' && payName(label));
-        })[0];
-        if (clash) { key = clash.key; label = clash.label; }
-        else {
-          var patch = { extraCats: {} };
-          patch.extraCats[key] = label;
-          saving = true;
-          var ok = await api.update(tourId, patch);
-          saving = false;
-          if (!ok) { buildChips(); return; }
-          made = true;
-        }
-        buildChips();
+    var chipBar = catChips(chips, {
+      list: function () { return sheetCats(true).filter(function (c) { return !G.isDerived(c.key) && c.key !== 'offdebt'; }); },
+      all: function () { return chargeCats(getTour(tourId)); },
+      pick: function (key, label) { applyCat(key, label); },
+      mark: function () { markChips(); },
+      saveNew: function (key, label) {
+        var patch = { extraCats: {} };
+        patch.extraCats[key] = label;
+        return api.update(tourId, patch);
+      },
+      after: function (key, label, made) {
         if (ticked().length) applyCat(key, label);
         else {
           draw();
-          toast((made ? catMadeWords(t, label) : '\u201c' + label + '\u201d is already a category.') + ' Check charges, then tap it.', 4200);
+          toast((made ? catMadeWords(getTour(tourId), label) : '\u201c' + label + '\u201d is already a category.') + ' Check charges, then tap it.', 4200);
         }
       }
-      chips.replaceChildren(h('div', { class: 'rv-newrow' }, inp,
-        h('button', { class: 'btn sm primary', type: 'button', onclick: commit }, 'Add'),
-        h('button', { class: 'iconbtn sm', type: 'button', 'aria-label': 'Cancel', onclick: buildChips }, icon('close', 16))));
-      setTimeout(function () { inp.focus(); }, 30);
-    }
+    });
+    function buildChips() { chipBar.build(); }
     buildChips();
     var tools = h('div', { class: 'rv-tools' },
       live.length > 1 ? h('div', { class: 'rv-find' }, icon('search', 16), search) : null,
@@ -28395,7 +30792,8 @@
   }
   var ALARM_DAYS_AHEAD = 6;
   var ALARM_MAX = 32;
-  var ALARM_WORDS = { stage: '30 MIN UNTIL STAGE TIME', bus: 'BUS CALL', lastcall: 'GUEST LIST LAST CALL' };
+  var ALARM_SOON_HOURS = 36;
+  var ALARM_WORDS = { stage: '30 MIN UNTIL STAGE TIME', bus: 'BUS CALL', lastcall: 'GUEST LIST LAST CALL', bus20: 'BUS CALL - 20MIN WARNING' };
   var alarms = { sig: '', at: 0, soon: null, asked: false, told: '', telling: '', tellAt: 0, last: null };
   function alarmsPlugin() {
     if (!IN_SHELL) return null;
@@ -28454,6 +30852,7 @@
         var place = [String(s.venue || '').trim(), String(s.city || '').trim()].filter(Boolean).join(' · ').slice(0, 80);
         if (plan.stage) add('stage', plan.stage.at, s.id, place);
         if (plan.bus && rider) add('bus', plan.bus.at, s.id, place);
+        if (plan.bus20 && rider) add('bus20', plan.bus20.at, s.id, place);
         if (plan.lastcall && !muted) add('lastcall', plan.lastcall.at, s.id, place);
       });
       if (!rider) return;
@@ -28461,18 +30860,21 @@
         var off = offDayFor(t, d);
         var plan = G.showAlarms({ id: 'off:' + d, date: d, city: off.city, daySheet: { busCall: off.busCall } }, { tz: alarmTz(off.city, '') });
         if (plan.bus) add('bus', plan.bus.at, 'off:' + d, String(off.city || '').trim().slice(0, 80));
+        if (plan.bus20) add('bus20', plan.bus20.at, 'off:' + d, String(off.city || '').trim().slice(0, 80));
       });
     });
     var soonest = function (a, b) { return a.at - b.at || (a.id < b.id ? -1 : 1); };
-    var first = out.filter(function (x) { return x.kind !== 'lastcall'; }).sort(soonest);
-    var then = out.filter(function (x) { return x.kind === 'lastcall'; }).sort(soonest);
+    var near = Math.floor(t0 / 1000) + ALARM_SOON_HOURS * 3600;
+    var later = function (x) { return x.kind === 'lastcall' && x.at > near; };
+    var first = out.filter(function (x) { return !later(x); }).sort(soonest);
+    var then = out.filter(later).sort(soonest);
     return first.concat(then).slice(0, ALARM_MAX).sort(soonest);
   }
   function alarmFallback() {
     var uid = appPushUid(), mem = uid ? appPushMem(uid) : null;
     var prefs = mem && !mem.off && mem.prefs ? mem.prefs : null;
     return { stage: !(prefs && notifStart('stage30', 'artistish', prefs)), bus: !(prefs && notifStart('buscall', 'off', prefs)),
-      lastcall: true };
+      lastcall: true, bus20: true };
   }
   function alarmBusCreds() {
     var B = window.GR_BACKEND, d = dayBarDevice();
@@ -28515,10 +30917,11 @@
     alarmTellServer();
     var now = Date.now();
     var on = { stage: alarmOn('stage'), bus: alarmOn('bus'), lastcall: alarmOn('lastcall') };
+    on.bus20 = on.bus;
     var items = alarmItems(now);
     var fb = alarmFallback();
     var payload = { uid: uid, stage: on.stage, bus: on.bus, lastcall: on.lastcall, fbStage: fb.stage, fbBus: fb.bus,
-      fbLastcall: fb.lastcall, items: items, busAnswer: alarmBusCreds() };
+      fbLastcall: fb.lastcall, fbBus20: fb.bus20, items: items, busAnswer: alarmBusCreds() };
     var sig = JSON.stringify(payload);
     var ask = alarmAskOk(items, on, closing);
     if (!force && !ask && sig === alarms.sig && now - alarms.at < 10 * 60e3) return;
@@ -28866,7 +31269,7 @@
             segmented(['Off', 'On'], alStage ? 1 : 0, function (i) { alStage = i === 1; }, 'Stage alarm')) : null,
           AL ? h('div', { class: 'ds-yn', style: 'min-height:48px' },
             h('div', { class: 'row-label', style: 'flex:1' }, 'Bus call alarm',
-              h('span', { class: 'hint' }, 'At bus call, with an I’m on the bus button on the alarm')),
+              h('span', { class: 'hint' }, 'At bus call, with an I’m on the bus button on the alarm, and a 20 minute warning before it')),
             segmented(['Off', 'On'], alBus ? 1 : 0, function (i) { alBus = i === 1; }, 'Bus call alarm')) : null,
           AL ? h('div', { class: 'ds-yn', style: 'min-height:48px' },
             h('div', { class: 'row-label', style: 'flex:1' }, 'Guest list last call alarm',
@@ -29302,6 +31705,20 @@
     var own = to ? to.id : (allTourEntries(false).filter(function (e) { return createdTour(e[0]); })[0] || [])[0];
     if (own) go({ name: 'tour', id: own, view: 'cards' }); else openFeedSheet(null);
   }
+  function offHeldFeeds() {
+    var B = window.GR_BACKEND;
+    if (S.mode !== 'db' || !B || !B.myPayBooks) return { ids: {}, known: true, failed: false };
+    var all = myPayAllLoad(), books = myPayBooksHeld(), ids = {};
+    Object.keys(books).forEach(function (tid) {
+      var en = G.isObj(books[tid].entries) ? books[tid].entries : {}, t = getTour(tid);
+      if (t && !isOffTour(t)) return;
+      Object.keys(en).forEach(function (k) {
+        var m = G.isObj(en[k]) ? en[k].moved : null;
+        if (G.isObj(m) && m.book === tid && m.feed) ids[String(m.feed)] = true;
+      });
+    });
+    return { ids: ids, known: !!all.at && !all.failed && !all.asking, failed: !!all.failed && !all.asking };
+  }
   var LEFT_OUT = [
     ['card_payment', 'Card payments', 'Paying a credit card, or the payment arriving on the card. The charges on the card are what count.'],
     ['own_move', 'Moved to savings or investments', 'Money moved to your own savings or investments.'],
@@ -29351,7 +31768,7 @@
       if (G.isObj(got)) st.look = got; else st.lookFailed = true;
       draw();
     }
-    function orphanRows() {
+    function orphanRows(mv) {
       var filed = st.look && Array.isArray(st.look.filed) ? st.look.filed : [];
       var held = function (id) {
         var hit = false;
@@ -29363,9 +31780,11 @@
         return hit;
       };
       var justNow = Date.now() - 120e3;
-      return filed.filter(function (r) {
+      var none = filed.filter(function (r) {
         return G.isObj(r) && r.id != null && !(r.decided_at && rbStamp(r.decided_at) > justNow) && !held(r.id);
       });
+      var mine = function (r) { return !!(mv && mv.ids[String(r.id)]); };
+      return { rows: none.filter(function (r) { return !mine(r); }), moved: none.filter(mine).length };
     }
     async function bring(key, r) {
       if (st.busy != null) return;
@@ -29477,12 +31896,13 @@
         var left = count - shown;
         return left > 0 ? h('div', { class: 'row' }, h('span', { class: 'hint' }, 'and ' + left + ' more')) : null;
       };
+      var mv = offHeldFeeds();
       var gone = (st.look.gone || []).filter(function (r) { return G.isObj(r); });
       if (gone.length) kids.push(h('div', { class: 'ledger rb-list' },
         head('The bank took back a line you had already dealt with', 'Nothing on a tour was changed. Check whether it should still be counted.'),
         gone.map(function (r) {
           var tour = r.tour_id ? getTour(r.tour_id) : null;
-          var whereIs = r.status === 'skipped' ? 'Set aside' : r.status === 'mypay' ? 'In MY PAY'
+          var whereIs = r.status === 'skipped' ? 'Set aside' : r.status === 'mypay' || (r.status === 'filed' && mv.ids[String(r.id)]) ? 'In MY PAY'
             : tour ? (isOffTour(tour) ? 'On Off Tour' : 'On ' + (tour.name || 'a tour')) : 'On a tour';
           return lineRow('gone', r, null, whereIs + (r.gone_on ? ' · taken back ' + dayMD(r.gone_on) : ''));
         }),
@@ -29492,17 +31912,25 @@
         head('The bank changed the amount', 'Nothing on a tour was changed. The amount on the right is the one Greenroom has.'),
         changed.map(function (r) { return lineRow('changed', r, null, 'The bank now says ' + G.moneyCents(r.bank_amount)); }),
         andMore(nChanged, changed.length)));
-      if (nNone > 0) {
-        var orphans = orphanRows(), listed = Math.min(orphans.length, LO_PAGE);
+      if (nNone > 0 && !mv.known) {
         kids.push(h('div', { class: 'ledger rb-list' },
+          head('Filed but on no tour', 'Marked as added to a tour, but no tour has it. Put it back and it waits in your card charges.'),
+          mv.failed ? h('div', { class: 'row' }, h('div', { class: 'row-label' }, h('span', { class: 'hint over' }, 'Couldn’t list these just now.')),
+            h('button', { class: 'linkbtn rb-link', type: 'button', onclick: function () { var a = myPayAllLoad(true); draw(); if (a.wait) a.wait.then(draw, draw); } }, 'Try again'))
+            : h('div', { class: 'row' }, h('span', { class: 'hint' }, 'Loading…'))));
+      } else if (nNone > 0) {
+        var orphanSet = orphanRows(mv), orphans = orphanSet.rows;
+        var nLost = typeof look.my_pay_moved === 'number' ? nNone : Math.max(0, nNone - orphanSet.moved);
+        var listed = Math.min(orphans.length, LO_PAGE);
+        if (nLost > 0 || orphans.length) kids.push(h('div', { class: 'ledger rb-list' },
           head('Filed but on no tour', 'Marked as added to a tour, but no tour has it. Put it back and it waits in your card charges.'),
           orphans.length ? orphans.slice(0, LO_PAGE).map(function (r) {
             return r.gone_on ? lineRow('look', r, null, 'The bank took this back on ' + dayMD(r.gone_on) + '.') : lineRow('look', r, 'back');
           })
             : h('div', { class: 'row' }, h('span', { class: 'hint' }, Array.isArray(st.look.filed)
-                ? plural(nNone, 'line') + ' could not be listed here. Tell Greenroom.'
+                ? plural(nLost, 'line') + ' could not be listed here. Tell Greenroom.'
                 : 'Couldn’t list these just now.')),
-          listed ? andMore(Math.max(orphans.length, nNone), listed) : null));
+          listed ? andMore(Math.max(orphans.length, nLost), listed) : null));
       }
       return kids.length > 1 ? h('section', { class: 'wn-sec' }, kids) : null;
     }
@@ -29567,6 +31995,8 @@
     }, { label: 'Left out and set aside', cls: 'cat-sheet rb-sheet', onClose: function () { here = false; if (acctLive === draw) acctLive = null; render(true); sheetBack(back); } });
     acctLive = draw;
     if (!S.acctBusy) loadAcct().then(function () { render(); acctRedraw(); });
+    var mvRead = myPayAllLoad(true);
+    if (mvRead.wait) mvRead.wait.then(function () { if (here) draw(); }, function () { if (here) draw(); });
   }
   function catchUpWords(r, pile) {
     var f = (r && r.found) || {};
@@ -31145,6 +33575,20 @@
     var words = String(name || '').replace(/[^A-Za-z0-9 ]+/g, ' ').split(/\s+/).filter(function (w) { return w && !/^(of|the|and)$/i.test(w); });
     return words.slice(0, 2).map(function (w) { return w.charAt(0).toUpperCase(); }).join('') || '?';
   }
+  function lcLogoSrc(logo) {
+    var s = typeof logo === 'string' ? logo.replace(/\s+/g, '') : '';
+    return s && s.length <= 60000 && s.indexOf('iVBORw0KGgo') === 0 && /^[A-Za-z0-9+/]+={0,2}$/.test(s) ? 'data:image/png;base64,' + s : null;
+  }
+  function lcLogo(name, logo) {
+    var src = lcLogoSrc(logo);
+    if (!src) return h('span', { class: 'lc-logo', 'aria-hidden': 'true' }, lcInitials(name));
+    var box = h('span', { class: 'lc-logo pic', 'aria-hidden': 'true' });
+    box.append(h('img', { src: src, alt: '', onerror: function () {
+      box.classList.remove('pic');
+      fillEl(box, lcInitials(name));
+    } }));
+    return box;
+  }
   function lcAcctLine(mask, kind) {
     return (mask ? '\u2022\u2022\u2022' + mask + ' | ' : '') + kind;
   }
@@ -31164,7 +33608,7 @@
     var said = o.name + (o.tag ? ' (' + o.tag + ')' : '');
     return h('section', { class: 'lc-card', 'aria-label': said },
       h('div', { class: 'lc-bank' },
-        h('span', { class: 'lc-logo', 'aria-hidden': 'true' }, lcInitials(o.name)),
+        lcLogo(o.name, o.logo),
         h('span', { class: 'lc-bank-t' },
           h('span', { class: 'lc-bank-name' }, o.name),
           o.trouble ? h('span', { class: 'lc-sync over' }, o.trouble)
@@ -31234,7 +33678,7 @@
       var trouble = bk.status && bk.status !== 'ok';
       var mine = accts.filter(function (a) { return a.bank && a.bank === bk.id; });
       mine.forEach(function (a) { used[a.id] = true; });
-      return lcBankCard({ name: bk.name || 'Bank', synced: trouble ? '' : feedBankSynced(bk, st), trouble: trouble ? bankNote(bk.status) : '',
+      return lcBankCard({ name: bk.name || 'Bank', logo: bk.logo, synced: trouble ? '' : feedBankSynced(bk, st), trouble: trouble ? bankNote(bk.status) : '',
         reconnect: trouble ? function () { closeSheet(); connectCards(tourId, bk.id); } : null,
         rows: mine.map(row),
         unlink: function () {
@@ -31344,6 +33788,7 @@
       try { await myPayCardsLoad(false); } catch (e) {   }
       try { st = tourStatusOnly(await B.feedCall('status')); } catch (e) { st = { error: 'unavailable' }; }
       draw();
+      if (!tourId && st && st.ok && G.num(st.logosNew) > 0) myPayCardsLoad(true).then(redraw, function () {});
       if (acctOn() && !S.acctBusy && (!S.acct || S.acctStale || S.acct.failed || Date.now() - S.acct.at > 120e3)) {
         loadAcct().then(function () { redraw(); });
       }
@@ -31502,12 +33947,30 @@
     }
   }
   function linkedMoreOn() { return S.mode === 'local' || allTourEntries().some(function (e) { return canEditTour(e[0]); }); }
+  function linkedMoreLabels() { return linkedMoreOn() ? ['Card statement history', 'Learned labels'] : []; }
   function linkedMoreNode(back, lead) {
-    var rows = (lead || []).filter(Boolean);
-    if (linkedMoreOn()) rows.push(
-      lcRow('Card statement history', 'Statements brought into your tours, and a way to undo one', function () { openStatementHistory(back); }),
-      lcRow('Learned labels', 'The category Greenroom fills in for each merchant', function () { openLabelsSheet(back); }));
+    var rows = (lead || []).filter(Boolean), more = linkedMoreLabels();
+    if (more.length) rows.push(
+      lcRow(more[0], 'Statements brought into your tours, and a way to undo one', function () { openStatementHistory(back); }),
+      lcRow(more[1], 'The category Greenroom fills in for each merchant', function () { openLabelsSheet(back); }));
     return rows.length ? h('div', { class: 'lc-group' }, rows) : null;
+  }
+  function linkedCardsItems(kind) {
+    if (!kind || kind === 'connect') return [];
+    var c = S.myPayCards, mine = c && !c.none ? myPayBankNames(c) : [];
+    var connect = kind === 'local' || (kind === 'mypay' && !connectsOwnCards()) ? [] : ['Connect a bank or card'];
+    var lead = kind === 'feed' ? ['Card dates'].concat(acctOn() ? ['Bank lines'] : []) : [];
+    return connect.concat(mine, lead, linkedMoreLabels(), ['How Linked Cards work']);
+  }
+  function myPayBankNames(c) {
+    var banks = Array.isArray(c.banks) ? c.banks : [], accts = Array.isArray(c.accounts) ? c.accounts : [], out = [];
+    banks.forEach(function (bk) { out.push(bk.name || 'Bank'); });
+    accts.forEach(function (a) {
+      if (banks.some(function (bk) { return a.item_id && a.item_id === bk.id; })) return;
+      var k = String(a.institution || '').trim() || 'Other accounts';
+      if (out.indexOf(k) < 0) out.push(k);
+    });
+    return out;
   }
   function openLinkedStart(o) {
     o = o || {};

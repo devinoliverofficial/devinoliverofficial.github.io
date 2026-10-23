@@ -41,6 +41,7 @@
   var sizeKnown = null, sizeProbing = false, sizeAt = 0;
   var flyerCache = {}, flyerAsk = {}, flyerGen = {}, flyerKnown = null, flyerProbing = false;
   var FLYER_FRESH = 300e3;
+  var ownFlyers = { ids: null, at: 0, asking: false };
   var supplyCache = {}, supplyAsk = {}, supplyGen = {}, supplyKnown = null, supplyProbing = false;
   var favCache = {}, favAsk = {}, favGen = {}, favKnown = null, favProbing = false;
   var modKnown = null, modProbing = false, modBlocks = [], modEnded = false, modUser = '';
@@ -49,6 +50,7 @@
   var vhCache = {}, vhAsk = {}, vhKnown = null, vhProbing = false;
   var srKnown = null, srProbing = false;
   var ssKnown = null;
+  var ctKnown = null;
   var VH_FRESH = 600e3, VH_RETRY = 60e3;
   var fsCache = Object.create(null), fsAsk = Object.create(null), fsKnown = null, fsProbing = false;
   var FS_FRESH = 600e3, FS_RETRY = 60e3;
@@ -135,12 +137,13 @@
     emit('tours'); emit('labels');
     legalFlush();
   }
+  var reimbReadOnce = false;
   async function loadReimbursements() {
     try {
       var rb = await sb.from('reimbursements')
         .select('id, tour_id, user_id, requester_name, amount, what, spent_on, status, paid_at, paid_by, paid_by_name, paid_how, feed_id, closed_by_name, closed_at, created_at')
         .order('created_at', { ascending: false }).limit(1000);
-      if (!rb.error && Array.isArray(rb.data)) { cache.reimb = rb.data; return true; }
+      if (!rb.error && Array.isArray(rb.data)) { cache.reimb = rb.data; reimbReadOnce = true; return true; }
     } catch (e) {   }
     return false;
   }
@@ -250,6 +253,7 @@
     if (/cant_send/.test(msg)) return err('cant-send');
     if (/^filtered$/.test(msg)) return err('filtered');
     if (e && e.code === '23505' && /show_ratings/.test(msg)) return err('already-rated');
+    if (/my_pay_books_doc_small/.test(msg)) return err('full');
     if (/permission|policy|denied|42501/i.test(msg)) return err('permission');
     if (/network|fetch|load failed|connection/i.test(msg)) return err('offline');
     return err('unavailable');
@@ -651,6 +655,12 @@
             updated_at: new Date().toISOString() })
         : await sb.from('tour_flyers').delete().eq('tour_id', tourId);
       if (q.error) throw mapError(q.error);
+      if (ownFlyers.ids) { if (dataUrl) ownFlyers.ids[tourId] = true; else delete ownFlyers.ids[tourId]; emit('tours'); }
+    },
+    tourFlyerHas: function (tourId) {
+      if (!session) return null;
+      if (Date.now() - ownFlyers.at > (ownFlyers.ids ? FLYER_FRESH : 30e3)) loadOwnFlyers();
+      return ownFlyers.ids ? !!ownFlyers.ids[tourId] : null;
     },
     searchSuggestions: async function () {
       var q = await sb.rpc('search_suggestions');
@@ -915,11 +925,27 @@
       if (q.error) { if (fnMissing(q.error)) return { ok: false, why: 'missing' }; throw mapError(q.error); }
       return isObj(q.data) ? q.data : { ok: true, n: 0 };
     },
+    myPayUnfile: async function (itemId) {
+      var q = await sb.rpc('my_pay_unfile', { item_id: itemId == null ? '' : String(itemId) });
+      if (q.error) { if (fnMissing(q.error)) return { ok: false, why: 'missing' }; throw mapError(q.error); }
+      return isObj(q.data) ? q.data : { ok: false };
+    },
     myPayLinesFor: async function (accountId) {
       var q = await sb.from('my_pay_feed').select('id, kind, date, merchant, amount, status, tour_id')
         .eq('user_id', session.user.id).eq('account_id', String(accountId)).order('date', { ascending: false }).limit(200);
       if (q.error) { if (columnMissing(q.error) || tableMissing(q.error)) return null; throw mapError(q.error); }
       return q.data || [];
+    },
+    myPayLinesById: async function (ids) {
+      var list = [], out = [];
+      (Array.isArray(ids) ? ids : []).forEach(function (x) { var s = x == null ? '' : String(x); if (s && list.indexOf(s) < 0) list.push(s); });
+      for (var i = 0; i < list.length && i < 500; i += 50) {
+        var q = await sb.from('my_pay_feed').select('id, kind, date, status, account_id')
+          .eq('user_id', session.user.id).in('id', list.slice(i, i + 50));
+        if (q.error) { if (columnMissing(q.error) || tableMissing(q.error)) return null; throw mapError(q.error); }
+        out = out.concat(q.data || []);
+      }
+      return out;
     },
     myPay: async function (tourId) {
       var q = await sb.rpc('my_pay', { t_id: tourId });
@@ -930,6 +956,11 @@
       var q = await sb.from('my_pay_books').select('doc').eq('tour_id', tourId).eq('user_id', session.user.id).maybeSingle();
       if (q.error) throw mapError(q.error);
       return q.data && q.data.doc ? q.data.doc : {};
+    },
+    myPayBooks: async function () {
+      var q = await sb.from('my_pay_books').select('tour_id, doc').eq('user_id', session.user.id).limit(200);
+      if (q.error) throw mapError(q.error);
+      return q.data || [];
     },
     saveMyPayBook: async function (tourId, doc) {
       var q = await sb.from('my_pay_books').upsert({ tour_id: tourId, user_id: session.user.id, doc: doc || {}, updated_at: new Date().toISOString() },
@@ -1110,6 +1141,17 @@
       if (q.error) throw mapError(q.error);
       return isObj(q.data) ? q.data : { ok: false };
     },
+    artistYesSeats: async function (artistId, userId, why) {
+      var q = await sb.rpc('artist_yes_seats', { a_id: artistId, u_id: userId, why: String(why || 'request') });
+      if (q.error && fnMissing(q.error)) return null;
+      if (q.error) throw mapError(q.error);
+      return isObj(q.data) ? q.data : null;
+    },
+    artistSeatsOff: async function (artistId, userId) {
+      var q = await sb.rpc('artist_seats_off', { a_id: artistId, u_id: userId });
+      if (q.error) throw mapError(q.error);
+      return isObj(q.data) ? q.data : { ok: false };
+    },
     unclaimedJoins: async function (artistId) {
       var q = await sb.rpc('unclaimed_join_queue', { a_id: artistId || null });
       if (q.error) throw mapError(q.error);
@@ -1118,6 +1160,28 @@
     answerUnclaimedJoin: async function (artistId, userId, keep) {
       var q = await sb.rpc('answer_unclaimed_join', { a_id: artistId, u_id: userId, keep: !!keep });
       if (q.error) throw mapError(q.error);
+      return isObj(q.data) ? q.data : { ok: false };
+    },
+    myInvites: async function () {
+      if (!sb || !session) return [];
+      var q = await sb.rpc('my_invites');
+      if (q.error) { if (fnMissing(q.error)) return []; throw mapError(q.error); }
+      return Array.isArray(q.data) ? q.data : [];
+    },
+    acceptInvite: async function (tourId) {
+      var q = await sb.rpc('accept_invite', { t_id: String(tourId || '') });
+      if (q.error) throw mapError(q.error);
+      var out = isObj(q.data) ? q.data : { ok: false };
+      if (out.ok) { refetchTries = 0; scheduleRefetch(); }
+      return out;
+    },
+    leaveTourOn: function () {
+      return ctKnown === true;
+    },
+    leaveTour: async function (tourId) {
+      var q = await sb.rpc('leave_tour', { t_id: String(tourId || '') });
+      if (q.error) throw mapError(q.error);
+      refetchTries = 0; scheduleRefetch();
       return isObj(q.data) ? q.data : { ok: false };
     },
     fanNights: async function (artistId, tourName) {
@@ -1280,6 +1344,12 @@
       var q = await ask('id, date, amount, atvenu, watch, how, payer');
       if (q.error) q = await ask('id, date, amount, atvenu, watch, how');
       if (q.error) q = await ask('id, date, amount, atvenu, watch');
+      if (q.error) throw mapError(q.error);
+      return q.data || [];
+    },
+    depositsMatched: async function () {
+      var q = await sb.from('merch_deposits').select('id, date, amount, tour_id, show_ids').eq('matched', true)
+        .order('date', { ascending: false }).limit(1000);
       if (q.error) throw mapError(q.error);
       return q.data || [];
     },
@@ -1457,6 +1527,41 @@
       if (q.error && /former_member/.test(String(q.error.message || ''))) throw err('former_member');
       if (q.error) throw mapError(q.error);
     },
+    askToList: async function (artistId, userId, kind) {
+      var k = kind === 'crew' ? 'crew' : 'band';
+      var q = await sb.rpc('ask_to_list', { a_id: artistId, u_id: userId, k: k });
+      if (q.error && fnMissing(q.error)) {
+        var u = await sb.from('artist_members').upsert({ artist_id: artistId, user_id: userId, kind: k }, { onConflict: 'artist_id,user_id' });
+        if (u.error && /former_member/.test(String(u.error.message || ''))) return { ok: false, why: 'former_member' };
+        if (u.error) throw mapError(u.error);
+        return { ok: true, listed: true, kind: k };
+      }
+      if (q.error && /former_member/.test(String(q.error.message || ''))) return { ok: false, why: 'former_member' };
+      if (q.error) throw mapError(q.error);
+      return isObj(q.data) ? q.data : { ok: false };
+    },
+    listAsksSent: async function (artistId) {
+      var q = await sb.rpc('list_asks_sent', { a_id: artistId });
+      if (q.error && fnMissing(q.error)) return [];
+      if (q.error) throw mapError(q.error);
+      return Array.isArray(q.data) ? q.data : [];
+    },
+    withdrawListAsk: async function (artistId, userId) {
+      var q = await sb.rpc('withdraw_list_ask', { a_id: artistId, u_id: userId });
+      if (q.error) throw mapError(q.error);
+      return isObj(q.data) ? q.data : { ok: false };
+    },
+    myListAsks: async function () {
+      var q = await sb.rpc('my_list_asks');
+      if (q.error && fnMissing(q.error)) return [];
+      if (q.error) throw mapError(q.error);
+      return Array.isArray(q.data) ? q.data : [];
+    },
+    answerListAsk: async function (artistId, yes) {
+      var q = await sb.rpc('answer_list_ask', { a_id: artistId, accept: !!yes });
+      if (q.error) throw mapError(q.error);
+      return isObj(q.data) ? q.data : { ok: false };
+    },
     removeArtistMember: async function (id, userId) {
       var q = await sb.rpc('end_artist_member', { a_id: id, u_id: userId, on_day: localDay() });
       if (q.error) throw mapError(q.error);
@@ -1615,6 +1720,16 @@
       return isObj(q.data) ? q.data : { ok: false };
     },
     contactOf: async function (userId) {
+      if (ctKnown !== false) {
+        var c = await sb.rpc('contact_of', { u: userId });
+        if (!c.error) {
+          ctKnown = true;
+          var d = isObj(c.data) ? c.data : {};
+          return { phone: String(d.phone || ''), email: String(d.email || '') };
+        }
+        if (!fnMissing(c.error)) throw mapError(c.error);
+        ctKnown = false;
+      }
       var q = await sb.from('profiles').select('phone, email').eq('user_id', userId).maybeSingle();
       if (q.error) throw mapError(q.error);
       return { phone: q.data ? String(q.data.phone || '') : '', email: q.data ? String(q.data.email || '') : '' };
@@ -1623,6 +1738,8 @@
       if (!session) throw err('unavailable');
       var sinceP = ssKnown === false ? Promise.resolve(null)
         : Promise.resolve(sb.rpc('seats_since', { t_id: tourId })).catch(function () { return null; });
+      var contactsP = ctKnown === false ? Promise.resolve(null)
+        : Promise.resolve(sb.rpc('crew_contacts', { t_id: tourId })).catch(function () { return null; });
       var mq = await sb.from('members')
         .select('invited_email, role, user_id, display_name, phone, tour_role, overrides, manager, created_at')
         .eq('tour_id', tourId).order('created_at');
@@ -1641,21 +1758,25 @@
       var since = {}, sq = await sinceP;
       if (sq && sq.error) { if (fnMissing(sq.error)) ssKnown = false; }
       else if (sq && isObj(sq.data)) { ssKnown = true; since = sq.data; }
+      var contacts = {}, cq = await contactsP;
+      if (cq && cq.error) { if (fnMissing(cq.error)) ctKnown = false; }
+      else if (cq && isObj(cq.data)) { ctKnown = true; contacts = cq.data; }
+      var reach = function (id) { return id && isObj(contacts[id]) ? contacts[id] : {}; };
       var out = [];
       if (ownerId) {
-        var op = byId[ownerId] || {};
+        var op = byId[ownerId] || {}, oc = reach(ownerId);
         out.push({
           owner: true, role: 'owner', userId: ownerId,
           name: op.full_name || '', username: op.username || '',
-          email: op.email || (ownerId === (session && session.user && session.user.id) ? session.user.email : ''),
-          phone: op.phone || '', tourRole: roleName(op.tour_role), joined: true
+          email: oc.email || op.email || (ownerId === (session && session.user && session.user.id) ? session.user.email : ''),
+          phone: oc.phone || op.phone || '', tourRole: roleName(op.tour_role), joined: true
         });
       }
       rows.forEach(function (r) {
-        var pr = byId[r.user_id] || {};
+        var pr = byId[r.user_id] || {}, pc = reach(r.user_id);
         var base = {
-          email: pr.email || r.invited_email,
-          phone: pr.phone || r.phone || '',
+          email: pc.email || pr.email || r.invited_email,
+          phone: pc.phone || pr.phone || r.phone || '',
           tourRole: roleName(pr.tour_role || r.tour_role)
         };
         var ov = isObj(r.overrides) ? r.overrides : {};
@@ -1761,7 +1882,7 @@
         delete row.rides_bus;
         q = await sb.from('members').upsert(row);
       }
-      if (q.error) throw mapError(q.error);
+      if (q.error) throw knownError(q.error);
       try {
         await sb.from('past_crew').upsert({
           owner_id: session.user.id, email: addr,
@@ -2521,6 +2642,43 @@
       };
       ask(false);
     },
+    placeFind: function (q, near) {
+      var qk = String(q || '').toLowerCase().replace(/\s+/g, ' ').trim();
+      var nv = String(near || '').replace(/\s+/g, ' ').trim().slice(0, 80);
+      var ck = qk + '|' + nv.toLowerCase();
+      if (!session || qk.length < 2 || qk.length > 80 || placeKnown !== true) return Promise.resolve([]);
+      if (placeCache[ck]) return Promise.resolve(placeCache[ck]);
+      return new Promise(function (done) {
+        var keep = function (rows) {
+          rows = (Array.isArray(rows) ? rows : []).filter(isObj).slice(0, 8);
+          placeCache[ck] = rows;
+          done(rows);
+        };
+        var took = function (a, tries) {
+          if (!isObj(a)) { done([]); return; }
+          if (Array.isArray(a.places)) { keep(a.places); return; }
+          if (a.wait != null && tries < 8) {
+            setTimeout(function () {
+              sb.rpc('place_search_take', { req_id: a.wait, q: qk, near: nv }).then(function (r) {
+                if (r.error) { if (fnMissing(r.error)) placeKnown = false; done([]); return; }
+                took(r.data, tries + 1);
+              }, function () { done([]); });
+            }, tries < 2 ? 350 : 700);
+            return;
+          }
+          done([]);
+        };
+        var ask = function (again) {
+          sb.rpc('place_search_ask', { q: qk, near: nv }).then(function (r) {
+            if (r.error) { if (fnMissing(r.error)) placeKnown = false; done([]); return; }
+            var a = isObj(r.data) ? r.data : null;
+            if (a && a.busy && !again) { setTimeout(function () { ask(true); }, 900); return; }
+            took(a && a.busy ? null : a, 0);
+          }, function () { done([]); });
+        };
+        ask(false);
+      });
+    },
     flowersFor: function (tourId, fresh) {
       var c = flowerCache[tourId];
       if (!c || c.stale || fresh || Date.now() - c.at > FLOWERS_FRESH) loadFlowers(tourId);
@@ -2590,6 +2748,7 @@
             closedBy: r.closed_by_name || '', closedAt: r.closed_at || null, createdAt: r.created_at || null };
         }).sort(function (a, b) { return String(a.createdAt || '').localeCompare(String(b.createdAt || '')); });
     },
+    reimbursementsRead: function () { return reimbReadOnce; },
     reimburseAsk: async function (tourId, ask) {
       var a = isObj(ask) ? ask : {};
       var given = a.id != null && a.id !== '';
@@ -2648,8 +2807,8 @@
       return callFn('notify', {
         method: 'POST',
         body: JSON.stringify(say)
-      }).then(function (r) { return r.ok ? r.json() : null; })
-        .then(function (out) { return out && typeof out.sent === 'number' ? out.sent : null; })
+      }).then(function (r) { return r.ok ? r.json() : r.status === 429 ? { tooMany: true } : null; })
+        .then(function (out) { return out && out.tooMany ? 'too_many' : out && typeof out.sent === 'number' ? out.sent : null; })
         .catch(function () { return null; });
     },
     dayBarDevice: async function (device, secret, on) {
@@ -3264,6 +3423,19 @@
     var s = String(gk);
     return fnv32(s, 0x811c9dc5) + fnv32(s.split('').reverse().join(''), 0x811c9dc5) + s.length.toString(36);
   }
+  function loadOwnFlyers() {
+    if (ownFlyers.asking || !session) return;
+    ownFlyers.asking = true;
+    sb.from('tour_flyers').select('tour_id').then(function (q) {
+      ownFlyers.asking = false; ownFlyers.at = Date.now();
+      if (q.error) return;
+      var ids = {};
+      (q.data || []).forEach(function (r) { if (r && r.tour_id) ids[r.tour_id] = true; });
+      var was = Object.keys(ownFlyers.ids || {}).sort().join(',');
+      ownFlyers.ids = ids;
+      if (Object.keys(ids).sort().join(',') !== was) emit('tours');
+    }, function () { ownFlyers.asking = false; ownFlyers.at = Date.now(); });
+  }
   function loadFlyers(artistId) {
     var gen = flyerGen[artistId] || 0, ask = flyerAsk[artistId];
     if (ask && ask.gen === gen) return ask;
@@ -3356,7 +3528,7 @@
   function favProbe() {
     if (favProbing || !session) return;
     favProbing = true;
-    sb.from('fan_favorites').select('user_id').limit(1).then(function (q) {
+    sb.from('fan_favorites').select('user_id').eq('user_id', session.user.id).limit(1).then(function (q) {
       favProbing = false;
       if (!q.error) { favKnown = true; emit('tours'); }
       else if (tableMissing(q.error)) favKnown = false;
@@ -4970,6 +5142,11 @@
             kind === 'signup_disabled' || kind === 'email_provider_disabled') {
           ui.say(SG_OFF);
         } else if (/sending .*mail|email rate limit|only request this after/i.test(msg) || kind === 'over_email_send_rate_limit') {
+          if (a.tried === email && /only request this after/i.test(msg)) {
+            a.made = email; a.madePass = a.triedPass; a.tried = ''; a.triedPass = '';
+            askConfirm();
+            return;
+          }
           ui.say(SG_MAIL);
         } else if (/rate limit|too many/i.test(msg)) {
           ui.say(SG_SLOW);
@@ -5556,15 +5733,11 @@
     sb.channel('greenroom')
       .on('postgres_changes', { event: '*', schema: 'public', table: 'tours' }, scheduleRefetch)
       .on('postgres_changes', { event: '*', schema: 'public', table: 'tour_public' }, scheduleRefetch)
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'day_polls' }, scheduleRefetch)
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'day_votes' }, scheduleRefetch)
       .on('postgres_changes', { event: '*', schema: 'public', table: 'day_requests' }, scheduleRefetch)
       .on('postgres_changes', { event: '*', schema: 'public', table: 'flowers' }, flowersChanged)
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'labels' }, scheduleRefetch)
       .on('postgres_changes', { event: '*', schema: 'public', table: 'guests' }, scheduleRefetch)
       .on('postgres_changes', { event: '*', schema: 'public', table: 'notes' }, scheduleRefetch)
       .on('postgres_changes', { event: '*', schema: 'public', table: 'ari_asks' }, scheduleRefetch)
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'feed_items' }, feedChanged)
       .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'dms' }, dmChanged)
       .subscribe(function (status) {
         if (status !== 'SUBSCRIBED') return;
