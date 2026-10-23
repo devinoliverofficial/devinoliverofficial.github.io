@@ -1,0 +1,243 @@
+# Builds the Greenroom iPhone app on a Mac in GitHub's cloud and (optionally) sends it to TestFlight.
+# Plain-words guide: ios-app/README.md
+#
+# This repository holds only what is already handed to everyone: the finished website (greenroom/, served at
+# devinoliverofficial.github.io/greenroom/) and the iPhone shell (ios-app/). The website's source is kept private;
+# each release is published here already built, with its comments taken out.
+#
+# RUN BY HAND ONLY (Actions tab > "iOS TestFlight build" > Run workflow). This repository is
+# public, so this file deliberately has no pull_request, push or schedule trigger: nothing
+# outside a person with write access can start it, and the Apple keys stay in GitHub's
+# locked "Secrets" box (never in a file, never printed).
+name: iOS TestFlight build
+
+on:
+  # AUTO-BUILD (Devin, 2026-10-19): every time a change to the app's screens or to this build lands on
+  # main, the cloud Mac builds it and sends it to TestFlight by itself. Only people with write access
+  # can push to main, so this is as safe as the run-by-hand button. Never pull_request.
+  push:
+    branches: [main]
+    paths:
+      - 'greenroom/**'
+      - 'ios-app/**'
+      - '.github/workflows/ios-testflight.yml'
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: "check = prove the app builds (uses NO Apple keys).  testflight = sign it and send it to TestFlight."
+        type: choice
+        options:
+          - check
+          - testflight
+        default: check
+      create_signing:
+        description: "testflight mode, FIRST run only: let fastlane match make the signing certificate and profile. Leave off after that."
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ios-testflight
+  cancel-in-progress: false
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  ios:
+    runs-on: macos-26
+    timeout-minutes: 60
+    env:
+      MARKETING_VERSION: "1.0.0"
+      # The lock-screen day bar's server pushes (Devin, Oct 22: "turn on the bar pushes"): 1 = the app carries Apple's
+      # push permission and the signing step switches Push Notifications on for the app's bundle ID (ios-app/README.md,
+      # "The day bar's pushes"). It comes from the GitHub variable DAYBAR_PUSH (set to 1 on Oct 22); unset is 0.
+      DAYBAR_PUSH: ${{ vars.DAYBAR_PUSH || '0' }}
+      CREATE_SIGNING: ${{ github.event_name == 'workflow_dispatch' && inputs.create_signing || false }}
+      FASTLANE_SKIP_UPDATE_CHECK: "1"
+      FASTLANE_OPT_OUT_USAGE: "YES"
+      FASTLANE_HIDE_TIMESTAMP: "true"
+      NPM_CONFIG_AUDIT: "false"
+      NPM_CONFIG_FUND: "false"
+
+    steps:
+      # The three GitHub-made actions are pinned to an exact commit (the version is in the comment).
+      - name: Fetch the repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Use the newest Xcode 26 (Apple only accepts uploads built with Xcode 26 or later)
+        run: |
+          set -euo pipefail
+          pick=""
+          for app in $(ls -d /Applications/Xcode_26*.app 2>/dev/null | grep -v -i -E 'beta|rc|release_candidate' | sort -V); do pick="$app"; done
+          if [ -n "$pick" ]; then sudo xcode-select -s "$pick/Contents/Developer"; fi
+          xcodebuild -version
+          v="$(xcodebuild -version | awk 'NR==1{print $2}')"
+          case "$v" in
+            26|26.*) ;;
+            *) echo "Xcode $v is older than 26, which Apple no longer accepts for uploads."; exit 1 ;;
+          esac
+
+      - name: Use Node 22 (Capacitor 8 needs 22 or newer)
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: "22"
+
+      - name: Try the preparation recipe on a made-up project first
+        # (env -u GITHUB_ENV: the self-test must never write its sample numbers into this real build's settings)
+        run: env -u GITHUB_ENV bash ios-app/selftest.sh
+
+      - name: Use the published website (this runner only; nothing is pushed anywhere)
+        run: |
+          set -euo pipefail
+          rm -rf docs
+          cp -R greenroom docs
+          test -f docs/index.html
+
+      # Build numbers keep climbing past the ones made before this repository (the last was 125).
+      - name: Number this build
+        run: echo "BUILD_NUMBER=$(( GITHUB_RUN_NUMBER + 200 ))" >> "$GITHUB_ENV"
+
+      # The app's names come from optional GitHub "Variables" (Settings > Secrets and variables >
+      # Actions > Variables). Left empty, the defaults in ios-app/prepare.sh apply:
+      # com.greenroomtour.app, "Greenroom Live" (name under the icon: Greenroom).
+      # This is the one step that reads the variables; it hands the settled values to every later step.
+      - name: Settle the app's names and numbers
+        env:
+          APP_ID: ${{ vars.APP_ID }}
+          APP_NAME: ${{ vars.APP_NAME }}
+          APP_DISPLAY_NAME: ${{ vars.APP_DISPLAY_NAME }}
+        run: bash ios-app/prepare.sh names
+
+      - name: Copy the website into the app
+        run: bash ios-app/prepare.sh web
+
+      - name: Install Capacitor
+        working-directory: ios-app
+        run: |
+          set -euo pipefail
+          node --version
+          if [ -f package-lock.json ]; then
+            npm ci
+          else
+            # No lock file is committed yet (it needs Node to make). Install the exact pinned
+            # versions, and keep the lock file the install makes (see the next step).
+            echo "LOCK_NEW=1" >> "$GITHUB_ENV"
+            npm install
+          fi
+
+      - name: Make the Xcode project
+        working-directory: ios-app
+        run: |
+          set -euo pipefail
+          npx cap add ios
+          npx cap sync ios
+
+      - name: Customise the Xcode project (icon, launch screen, permissions, privacy manifest, lock-screen day bar)
+        run: |
+          set -euo pipefail
+          bash ios-app/prepare.sh ios
+          bash ios-app/prepare.sh check
+
+      - name: Keep the lock file this run made
+        if: env.LOCK_NEW == '1'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: package-lock
+          path: ios-app/package-lock.json
+          retention-days: 14
+
+      # ---- mode "check": build the app without signing, to prove it compiles ----------------
+      - name: Build the app without signing (check mode)
+        if: github.event_name == 'workflow_dispatch' && inputs.mode == 'check'
+        working-directory: ios-app/ios/App
+        run: |
+          set -euo pipefail
+          LOG="$RUNNER_TEMP/archive.log"
+          ARCHIVE="$RUNNER_TEMP/Greenroom.xcarchive"
+          if ! xcodebuild -project App.xcodeproj -scheme App -configuration Release \
+                 -destination 'generic/platform=iOS' -archivePath "$ARCHIVE" \
+                 CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY="" \
+                 archive > "$LOG" 2>&1; then
+            echo "The build failed. The last part of the log:"
+            tail -n 200 "$LOG"
+            exit 1
+          fi
+          tail -n 5 "$LOG"
+          APP="$ARCHIVE/Products/Applications/App.app"
+          test -d "$APP"
+          echo "--- what ended up inside the app"
+          for f in PrivacyInfo.xcprivacy public/index.html public/app.js Assets.car; do
+            if [ -e "$APP/$f" ]; then echo "  found   $f"; else echo "  MISSING $f"; exit 1; fi
+          done
+          if [ -e "$APP/public/sw.js" ]; then echo "  a service worker file is inside the app"; exit 1; fi
+          PB=/usr/libexec/PlistBuddy
+          echo "  bundle id  $($PB -c 'Print :CFBundleIdentifier' "$APP/Info.plist")"
+          echo "  version    $($PB -c 'Print :CFBundleShortVersionString' "$APP/Info.plist") ($($PB -c 'Print :CFBundleVersion' "$APP/Info.plist"))"
+          echo "  name       $($PB -c 'Print :CFBundleDisplayName' "$APP/Info.plist")"
+          # The lock-screen day bar: the widget extension inside the app, with the app's version and build number.
+          EXT="$APP/PlugIns/DayBar.appex"
+          if [ ! -f "$EXT/Info.plist" ] || [ ! -f "$EXT/DayBar" ]; then echo "  MISSING the DayBar extension (PlugIns/DayBar.appex)"; exit 1; fi
+          echo "  day bar    $($PB -c 'Print :CFBundleIdentifier' "$EXT/Info.plist"), $($PB -c 'Print :NSExtension:NSExtensionPointIdentifier' "$EXT/Info.plist")"
+          for k in CFBundleShortVersionString CFBundleVersion; do
+            if [ "$($PB -c "Print :$k" "$EXT/Info.plist")" != "$($PB -c "Print :$k" "$APP/Info.plist")" ]; then echo "  the day bar's $k differs from the app's"; exit 1; fi
+          done
+          [ "$($PB -c 'Print :CFBundleIdentifier' "$EXT/Info.plist")" = "$($PB -c 'Print :CFBundleIdentifier' "$APP/Info.plist").DayBar" ] || { echo "  the day bar's bundle id is not the app's plus .DayBar"; exit 1; }
+          [ "$($PB -c 'Print :NSSupportsLiveActivities' "$APP/Info.plist")" = "true" ] || { echo "  the app does not allow Live Activities"; exit 1; }
+          # The alarms (Devin, Oct 22): iOS's alarm question has its words, the app may be woken by the server's quiet
+          # hand-over, and AlarmKit (iOS 26), AppIntents (iOS 16) and ActivityKit (iOS 16.1) are linked weakly, so the app
+          # still opens on an older iPhone (it runs from iOS 15). The App Intents (I'm on the bus, On bus / Off bus) are
+          # listed for iOS in each bundle's Metadata.appintents.
+          [ -n "$($PB -c 'Print :NSAlarmKitUsageDescription' "$APP/Info.plist" 2>/dev/null || true)" ] || { echo "  the app has no words for the alarm question"; exit 1; }
+          [ "$($PB -c 'Print :UIBackgroundModes:0' "$APP/Info.plist" 2>/dev/null || true)" = "remote-notification" ] || { echo "  the app cannot be woken by a quiet push"; exit 1; }
+          echo "  alarm words $($PB -c 'Print :NSAlarmKitUsageDescription' "$APP/Info.plist")"
+          LOADS="$(otool -l "$APP/App" || true)"
+          for fw in AlarmKit AppIntents ActivityKit; do
+            how="$(echo "$LOADS" | grep -B3 "/$fw.framework/$fw " | awk '/ cmd LC_/{print $2}' | tail -1 || true)"
+            echo "  $fw linked: ${how:-(not linked)}"
+            if [ "$how" = "LC_LOAD_DYLIB" ]; then echo "  $fw is linked strongly: the app would not open on an older iPhone"; exit 1; fi
+          done
+          for b in "$APP" "$EXT"; do
+            if [ -d "$b/Metadata.appintents" ]; then echo "  App Intents listed in $(basename "$b"): $(ls "$b/Metadata.appintents" | tr '\n' ' ')"; else echo "  (no Metadata.appintents in $(basename "$b"))"; fi
+          done
+          echo "The app builds. (Nothing was signed or uploaded: that is testflight mode.)"
+
+      # ---- mode "testflight": sign it and send it to TestFlight ---------------------------
+      - name: Check the secrets are all there (names only, never values)
+        if: github.event_name == 'push' || inputs.mode == 'testflight'
+        env:
+          APP_STORE_CONNECT_KEY_ID: ${{ secrets.APP_STORE_CONNECT_KEY_ID }}
+          APP_STORE_CONNECT_ISSUER_ID: ${{ secrets.APP_STORE_CONNECT_ISSUER_ID }}
+          APP_STORE_CONNECT_KEY: ${{ secrets.APP_STORE_CONNECT_KEY }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          MATCH_PASSWORD: ${{ secrets.MATCH_PASSWORD }}
+          MATCH_GIT_URL: ${{ secrets.MATCH_GIT_URL }}
+          MATCH_GIT_PRIVATE_KEY: ${{ secrets.MATCH_GIT_PRIVATE_KEY }}
+        run: |
+          set +x
+          missing=0
+          for name in APP_STORE_CONNECT_KEY_ID APP_STORE_CONNECT_ISSUER_ID APP_STORE_CONNECT_KEY APPLE_TEAM_ID MATCH_PASSWORD MATCH_GIT_URL MATCH_GIT_PRIVATE_KEY; do
+            if [ -z "${!name:-}" ]; then echo "MISSING secret: $name"; missing=1; else echo "present: $name"; fi
+          done
+          [ "$missing" = 0 ] || { echo "Add the missing secrets (ios-app/README.md lists each one), then run again."; exit 1; }
+
+      - name: Sign the app and send it to TestFlight
+        if: github.event_name == 'push' || inputs.mode == 'testflight'
+        working-directory: ios-app
+        env:
+          APP_STORE_CONNECT_KEY_ID: ${{ secrets.APP_STORE_CONNECT_KEY_ID }}
+          APP_STORE_CONNECT_ISSUER_ID: ${{ secrets.APP_STORE_CONNECT_ISSUER_ID }}
+          APP_STORE_CONNECT_KEY: ${{ secrets.APP_STORE_CONNECT_KEY }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          MATCH_PASSWORD: ${{ secrets.MATCH_PASSWORD }}
+          MATCH_GIT_URL: ${{ secrets.MATCH_GIT_URL }}
+          MATCH_GIT_PRIVATE_KEY: ${{ secrets.MATCH_GIT_PRIVATE_KEY }}
+        run: |
+          set +x
+          fastlane --version
+          fastlane beta
