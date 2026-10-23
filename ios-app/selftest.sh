@@ -578,7 +578,10 @@ grep -q '^    push_capability.call(app_id) if pushes$' "$F" && ! grep -q 'push_c
 # ---- one check that is not the phone's (0216): every migration file says who may run or read what it makes ------
 # (tools/check_migrations.js, the database's lock kept in the files. It reads the real repository, read-only.)
 JSC=/System/Library/Frameworks/JavaScriptCore.framework/Versions/Current/Helpers/jsc
-if [ -x "$JSC" ]; then
+if [ ! -f "$HERE/../tools/check_migrations.js" ] || ! ls "$HERE/../supabase/migrations/"*.sql >/dev/null 2>&1; then
+  # (The public copy the iPhone app is built from holds the finished website and this folder only: no database files.)
+  echo "  skip  the migration locks (no database files in this copy)"
+elif [ -x "$JSC" ]; then
   if out=$(cd "$HERE/.." && "$JSC" tools/check_migrations.js -- supabase/migrations/*.sql 2>&1); then
     ok "$(echo "$out" | tail -1)"
   else
