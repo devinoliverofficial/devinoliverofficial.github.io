@@ -1,0 +1,19 @@
+{
+  "appId": "com.greenroomtour.app",
+  "appName": "Greenroom Live",
+  "webDir": "www",
+  "backgroundColor": "#000000",
+  "ios": {
+    "backgroundColor": "#000000",
+    "contentInset": "never"
+  },
+  "plugins": {
+    "StatusBar": {
+      "style": "DARK",
+      "overlaysWebView": true
+    },
+    "PushNotifications": {
+      "presentationOptions": ["banner", "list", "sound"]
+    }
+  }
+}

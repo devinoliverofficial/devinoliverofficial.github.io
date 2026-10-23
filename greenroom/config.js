@@ -1,0 +1,6 @@
+window.GREENROOM_CONFIG = {
+  url: 'https://fcroypkwntqnnxrbzwbx.supabase.co',
+  anonKey: 'sb_publishable_TzlzaK-oIm2YfWOa2lXNxA_0oBFKyQT',
+  vapidPublic: 'BCSSwcc_v-gce8sXPRQz6Ovzgr26YbfzH8VQEqUqQ5I1SYz8eKh-JVT0wswepP7aVeIRSyWopK26VYCybU-G5Ig',
+  mapkitToken: 'eyJraWQiOiJERDVYRFJUTVU5IiwidHlwIjoiSldUIiwiYWxnIjoiRVMyNTYifQ.eyJpc3MiOiJKWUhUSzZHOTZBIiwiaWF0IjoxNzkyNzQwMzQ2LCJvcmlnaW4iOiJkZXZpbm9saXZlcm9mZmljaWFsLmdpdGh1Yi5pbyIsInNjb3BlIjoibWFwa2l0X2pzIn0.KPKnaoOkQenWUI4srgm4FyC9DdyVGXvMSXfRMvFb_V6BpGev17xH1Vsw_4R9AsWkYCiey5BMTT8sTRP7nRP61A'
+};

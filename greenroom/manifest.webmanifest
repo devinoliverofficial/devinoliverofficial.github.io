@@ -1,0 +1,29 @@
+{
+  "name": "Greenroom",
+  "short_name": "Greenroom",
+  "description": "Tour income tracker \u2014 watch the number climb from red to green as shows come in.",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#000000",
+  "theme_color": "#CCF80A",
+  "icons": [
+    {
+      "src": "icon-20261023-014609.png",
+      "sizes": "180x180",
+      "type": "image/png"
+    },
+    {
+      "src": "gr-icon-360.png",
+      "sizes": "360x360",
+      "type": "image/png"
+    },
+    {
+      "src": "gr-icon-1024.png",
+      "sizes": "540x540",
+      "type": "image/png",
+      "purpose": "any"
+    }
+  ]
+}

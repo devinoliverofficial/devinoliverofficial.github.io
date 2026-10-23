@@ -1,0 +1,21 @@
+{
+  "name": "greenroom-ios-shell",
+  "version": "1.0.0",
+  "private": true,
+  "description": "The iPhone shell around Greenroom: a Capacitor 8 project that holds a copy of the built website. The Xcode project is made fresh by GitHub's Mac on every run (see README.md).",
+  "dependencies": {
+    "@capacitor/app": "8.1.2",
+    "@capacitor/core": "8.5.3",
+    "@capacitor/filesystem": "8.1.5",
+    "@capacitor/ios": "8.5.3",
+    "@capacitor/push-notifications": "8.1.3",
+    "@capacitor/share": "8.0.3",
+    "@capacitor/status-bar": "8.0.4"
+  },
+  "devDependencies": {
+    "@capacitor/cli": "8.5.3"
+  },
+  "engines": {
+    "node": ">=22"
+  }
+}

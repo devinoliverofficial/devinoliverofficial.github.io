@@ -1,0 +1,183 @@
+# Greenroom iPhone app: signing and the TestFlight upload.
+# Runs on GitHub's Mac (see .github/workflows/ios-testflight.yml and ios-app/README.md).
+#
+# Nothing secret lives in this file. Every key arrives through the environment the
+# workflow sets from GitHub's locked "Secrets" box, and none of them is ever printed.
+# The lane is only reached in the workflow's "testflight" mode.
+
+require 'shellwords'
+
+default_platform(:ios)
+
+platform :ios do
+  desc 'Sign the app for the App Store and send it to TestFlight'
+  lane :beta do
+    # A setting that must be there: says which one is missing without ever printing a value.
+    need = lambda do |name|
+      value = ENV[name].to_s
+      UI.user_error!("#{name} is not set. Add it under Settings > Secrets and variables > Actions (see ios-app/README.md).") if value.strip.empty?
+      value
+    end
+
+    # Make sure the bundle ID exists with Apple. Best effort: if it already exists, or this
+    # cannot be done, the lane carries on and `match` will say plainly if it is still missing.
+    make_sure_bundle_id_exists = lambda do |api_key, bundle_id, name|
+      begin
+        Spaceship::ConnectAPI.token = Spaceship::ConnectAPI::Token.from(hash: api_key)
+        if Spaceship::ConnectAPI::BundleId.find(bundle_id)
+          UI.message("Bundle ID #{bundle_id} already exists with Apple.")
+        else
+          Spaceship::ConnectAPI::BundleId.create(name: name, platform: 'IOS', identifier: bundle_id)
+          UI.success("Registered bundle ID #{bundle_id} with Apple.")
+        end
+      rescue StandardError => e
+        UI.important("Could not check or register the bundle ID (#{e.class}). If signing says it is missing, add it by hand: developer.apple.com > Certificates, Identifiers & Profiles > Identifiers > +.")
+      end
+    end
+
+    app_id     = need.call('APP_ID')
+    # The lock-screen day bar is a widget extension inside the app, with its own bundle ID and its own profile.
+    daybar_id  = ENV['DAYBAR_ID'].to_s.strip.empty? ? "#{app_id}.DayBar" : ENV['DAYBAR_ID'].strip
+    team_id    = need.call('APPLE_TEAM_ID')
+    # First run only: let match make the certificate and the profile. After that it only reads them.
+    make_certs = ENV['CREATE_SIGNING'].to_s == 'true'
+    # The lock-screen day bar's server pushes (prepare.sh DAYBAR_PUSH, from the GitHub variable DAYBAR_PUSH, set to 1 on
+    # Oct 22): with 1 the app carries Apple's push permission (aps-environment = production), so the APP's bundle ID gets
+    # Push Notifications and its signing profile is made again to carry it. The DayBar widget extension does not: a Live
+    # Activity's push tokens (update and push-to-start) are asked for and handed over by the app (ActivityKit), Apple's
+    # pushes are addressed to the app's topic (<app id>.push-type.liveactivity), and the extension only draws the bar,
+    # so its entitlements ask for nothing and its profile stays as it is. With 0 nothing below about pushes runs.
+    pushes = ENV['DAYBAR_PUSH'].to_s.strip == '1'
+
+    need.call('MATCH_PASSWORD') # match reads it itself; this only gives a clear message if it is empty
+
+    # A throwaway keychain on the build machine, gone when the job ends.
+    setup_ci
+
+    api_key = app_store_connect_api_key(
+      key_id: need.call('APP_STORE_CONNECT_KEY_ID'),
+      issuer_id: need.call('APP_STORE_CONNECT_ISSUER_ID'),
+      key_content: need.call('APP_STORE_CONNECT_KEY'), # the .p8 file's text, BEGIN and END lines included
+      in_house: false
+    )
+
+    make_sure_bundle_id_exists.call(api_key, app_id, 'Greenroom')
+    make_sure_bundle_id_exists.call(api_key, daybar_id, 'Greenroom Day Bar')
+
+    # (pushes only) Push Notifications switched on for the app's bundle ID through the App Store Connect API, if it is
+    # not already. Unlike the bundle ID check above this is not best effort: a build that asks for push permission
+    # cannot be signed without it.
+    push_capability = lambda do |bundle_id|
+      push = Spaceship::ConnectAPI::BundleIdCapability::Type::PUSH_NOTIFICATIONS
+      bid = Spaceship::ConnectAPI::BundleId.find(bundle_id)
+      UI.user_error!("Bundle ID #{bundle_id} is not registered with Apple, so Push Notifications cannot be switched on.") unless bid
+      if bid.get_capabilities.any? { |c| c.capability_type == push }
+        UI.message("Push Notifications already on for #{bundle_id}.")
+      else
+        bid.create_capability(push)
+        UI.success("Switched Push Notifications on for #{bundle_id}.")
+      end
+    end
+    push_capability.call(app_id) if pushes
+
+    # The certificate and profile live, encrypted with MATCH_PASSWORD, in a PRIVATE git repo that only this
+    # workflow's deploy key can open (the key is written to a temporary file on the build machine).
+    match_key_file = File.join(Dir.tmpdir, 'match_deploy_key')
+    File.write(match_key_file, need.call('MATCH_GIT_PRIVATE_KEY').strip + "\n")
+    File.chmod(0600, match_key_file)
+    match_with = lambda do |identifier, readonly, force = false|
+      match(
+        type: 'appstore',
+        app_identifier: identifier,
+        api_key: api_key,
+        git_url: need.call('MATCH_GIT_URL'),
+        git_private_key: match_key_file,
+        readonly: readonly && !force,
+        force: force
+      )
+    end
+    match_with.call(app_id, !make_certs)
+    # The day bar's profile: read it; the first time there is none, so it is made then, with the certificate the app
+    # already uses (no new certificate). Any other trouble stops the run as before.
+    begin
+      match_with.call(daybar_id, !make_certs)
+    rescue StandardError => e
+      raise unless !make_certs && e.message.to_s =~ /provisioning profile/i
+      UI.important("No signing profile for #{daybar_id} yet: making it now, with the existing certificate.")
+      match_with.call(daybar_id, false)
+    end
+    # (pushes only) The app's profile made before Push Notifications was switched on does not carry it: made again
+    # once, with the same certificate, and kept in the private repo for the runs after.
+    if pushes
+      carries_push = lambda do |identifier|
+        path = ENV["sigh_#{identifier}_appstore_profile-path"].to_s
+        !path.empty? && File.exist?(path) &&
+          `security cms -D -i #{Shellwords.escape(path)} 2>/dev/null`.include?('<key>aps-environment</key>')
+      end
+      [app_id].each do |identifier|
+        next if carries_push.call(identifier)
+        UI.important("The signing profile for #{identifier} has no push permission yet: making it again.")
+        match_with.call(identifier, false, true)
+        UI.user_error!("The new profile for #{identifier} still has no push permission.") unless carries_push.call(identifier)
+      end
+    end
+
+    mapping = lane_context[SharedValues::MATCH_PROVISIONING_PROFILE_MAPPING] || {}
+    profile_of = lambda do |identifier|
+      mapping[identifier].to_s.empty? ? ENV["sigh_#{identifier}_appstore_profile-name"].to_s : mapping[identifier].to_s
+    end
+    profile = profile_of.call(app_id)
+    daybar_profile = profile_of.call(daybar_id)
+    UI.user_error!("match did not hand back a profile for #{app_id}") if profile.empty?
+    UI.user_error!("match did not hand back a profile for #{daybar_id}") if daybar_profile.empty?
+
+    # Sign the app target, and the day bar extension inside it, by hand with those profiles (the Capacitor project
+    # signs automatically otherwise).
+    update_code_signing_settings(
+      use_automatic_signing: false,
+      path: 'ios/App/App.xcodeproj',
+      team_id: team_id,
+      targets: ['App'],
+      build_configurations: ['Release'],
+      code_sign_identity: 'Apple Distribution',
+      profile_name: profile,
+      bundle_identifier: app_id
+    )
+    update_code_signing_settings(
+      use_automatic_signing: false,
+      path: 'ios/App/App.xcodeproj',
+      team_id: team_id,
+      targets: ['DayBar'],
+      build_configurations: ['Release'],
+      code_sign_identity: 'Apple Distribution',
+      profile_name: daybar_profile,
+      bundle_identifier: daybar_id
+    )
+
+    # The version and build number are already in the project (prepare.sh set them).
+    build_app(
+      project: 'ios/App/App.xcodeproj',
+      scheme: 'App',
+      configuration: 'Release',
+      export_method: 'app-store',
+      export_team_id: team_id,
+      export_options: {
+        provisioningProfiles: { app_id => profile, daybar_id => daybar_profile },
+        signingStyle: 'manual',
+        manageAppVersionAndBuildNumber: false,
+        uploadSymbols: true
+      },
+      output_directory: 'build',
+      output_name: 'Greenroom'
+    )
+
+    # Do not wait for Apple to finish processing (10 to 40 minutes): the run ends as soon as it is handed over.
+    upload_to_testflight(
+      api_key: api_key,
+      app_identifier: app_id,
+      ipa: lane_context[SharedValues::IPA_OUTPUT_PATH],
+      skip_waiting_for_build_processing: true
+    )
+    UI.success("Sent #{app_id} #{ENV['MARKETING_VERSION']} (#{ENV['BUILD_NUMBER']}) to TestFlight. It shows up in the TestFlight app after Apple finishes processing it.")
+  end
+end

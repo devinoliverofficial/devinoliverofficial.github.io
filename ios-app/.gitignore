@@ -1,0 +1,20 @@
+# Made fresh on every run, never kept in git
+node_modules/
+www/
+ios/
+build/
+fastlane/report.xml
+fastlane/README.md
+fastlane/test_output/
+*.xcarchive
+*.ipa
+*.dSYM.zip
+
+# Apple keys and signing files must NEVER be committed: this repository is public.
+*.p8
+*.p12
+*.cer
+*.mobileprovision
+AuthKey_*
+.env
+.env.*
