@@ -619,6 +619,7 @@
   function dataArrived() {
     var first = !S.loaded;
     S.loaded = true;
+    keptPrune();
     legalNoticeAsk();
     if (first) restoreLastTour();
     if (first) artistAsks(true);
@@ -717,7 +718,6 @@
     if (!(route.name === 'wizard' && route.step === 2)) S.wzPeople = null;
     if (route.name === 'home' && actingAs()) { S.fromMap = {}; route = actHome(); }
     if (route.name === 'tour' && route.view === 'details') { S.dsIndex = null; S.dsMore = null; }
-    if (!(route.name === 'tour' && route.view === 'cards')) S.cardsSide = null;
     if (route.name === 'tour' && route.id) rememberTour(route.id);
     if (route.name === 'offtour' && route.host === undefined && S.route && S.route.name === 'offtour' && S.route.host &&
         ['costs', 'cards', 'money', 'mypay'].indexOf(route.view) >= 0) {
@@ -742,7 +742,7 @@
     if (route.name === 'home') artistAsks(true);
     S.route = route;
     if (!held) S.xsAt = null;
-    if (held) { S.dsIndex = held.dsIndex; S.dsMore = held.dsMore; S.cardsSide = held.cardsSide; S.wzPeople = held.wzPeople; }
+    if (held) { S.dsIndex = held.dsIndex; S.dsMore = held.dsMore; S.wzPeople = held.wzPeople; }
     S.focusOnRender = o.keep ? false : !backToTabs;
     window.scrollTo(0, 0);
     render(true);
@@ -4393,6 +4393,8 @@
   }
   var SPOT_KINDS = [['food', 'Food'], ['coffee', 'Coffee'], ['bar', 'Bar'],
     ['club', 'Club'], ['to do', 'To do'], ['other', 'Other']];
+  var SPOT_NEAR_M = 150000;
+  var SPOT_SETTLE_MS = 1500;
   function spotsOn() {
     var B = window.GR_BACKEND;
     return S.mode === 'db' && !!(B && B.spotsOn && B.mySpots && B.spotAdd && B.spotsOn());
@@ -4450,30 +4452,41 @@
     return country && country !== 'United States' ? city + ', ' + country : city;
   }
   function spotRowEl(x, f) {
+    var meta = spotMetaLine(x, f);
+    return h('li', { class: 'am-li td-li' },
+      h('button', { class: 'fl-row td-open sp-item', type: 'button', onclick: function () { openSpotCard(x, { own: true }); } },
+        h('span', { class: 'sp-glyph' }, icon(spotKindIcon(x.kind), 18)),
+        h('span', { class: 'lr-text' },
+          h('span', { class: 'lr-title' }, x.name),
+          h('span', { class: 'lr-sub sp-meta' }, meta),
+          x.note ? h('span', { class: 'sp-note' }, x.note) : null)));
+  }
+  function spotMetaLine(x, f, more) {
     f = f || {};
     var when = f.open === true || f.open === false
       ? h('span', { class: 'sp-when ' + (f.open ? 'pos' : 'neg') }, f.open ? 'Open' : 'Closed') : null;
     var far = f.far ? h('span', { class: 'sp-far' }, f.far) : null;
-    return h('li', { class: 'am-li td-li' },
-      h('button', { class: 'fl-row td-open', type: 'button', onclick: function () { openSpotCard(x, { own: true }); } },
-        h('span', { class: 'lr-text' },
-          h('span', { class: 'lr-title' }, x.name, h('span', { class: 'fw-cat' }, spotKindLabel(x.kind))),
-          x.note ? h('span', { class: 'lr-sub' }, x.note) : null),
-        when || far ? h('span', { class: 'sp-facts' }, when, far) : null));
+    var parts = [when, h('span', null, spotKindLabel(x.kind)), far, more ? h('span', null, more) : null].filter(Boolean);
+    return parts.map(function (m, i) { return i ? [' · ', m] : m; });
   }
-  function spotGroups(all, nowKey) {
+  function spotGroups(all, nowKey, here) {
     var groups = [], slot = Object.create(null);
     all.forEach(function (x) {
       var k = G.roadCityKey(String(x.city || '').split(',')[0]);
       var g = slot[k];
-      if (!g) { g = slot[k] = { key: k, city: String(x.city || '').trim() || 'Somewhere', items: [], newest: '' }; groups.push(g); }
+      if (!g) { g = slot[k] = { key: k, city: String(x.city || '').trim() || 'Somewhere', items: [], newest: '', near: null }; groups.push(g); }
       g.items.push(x);
       var at = String(x.createdAt || '');
       if (at > g.newest) g.newest = at;
+      var pt = !nowKey && here ? spotApplePt(x) : null;
+      var m = pt ? G.geoMeters(here.lat, here.lon, pt.lat, pt.lon) : null;
+      if (m != null && m < SPOT_NEAR_M && (g.near == null || m < g.near)) g.near = m;
     });
     groups.sort(function (a, b) {
       var an = !!nowKey && a.key === nowKey, bn = !!nowKey && b.key === nowKey;
       if (an !== bn) return an ? -1 : 1;
+      if ((a.near == null) !== (b.near == null)) return a.near == null ? 1 : -1;
+      if (a.near != null && a.near !== b.near) return a.near - b.near;
       return a.newest < b.newest ? 1 : a.newest > b.newest ? -1 : a.city.localeCompare(b.city);
     });
     return groups;
@@ -4483,9 +4496,14 @@
     var town = String(x.city || '').split(',')[0].trim();
     var known = x.id != null && ctx.hrs ? ctx.hrs[x.id] : null;
     var hrs = known && known.hours ? G.hoursNow(known.hours, now || new Date()) : null;
+    var far = pt && ctx.ref ? G.geoMeters(ctx.ref.lat, ctx.ref.lon, pt.lat, pt.lon) : null;
+    if (far == null && pt && ctx.here) {
+      var m = G.geoMeters(ctx.here.lat, ctx.here.lon, pt.lat, pt.lon);
+      if (m < SPOT_NEAR_M) far = m;
+    }
     return {
       open: hrs && spotIsLocal({ here: ctx.here || null }, pt, town) ? hrs.open : null,
-      far: pt && ctx.ref ? G.geoMeters(ctx.ref.lat, ctx.ref.lon, pt.lat, pt.lon) : null
+      far: far
     };
   }
   function spotsOrder(rows) {
@@ -4498,29 +4516,37 @@
       return a.i - b.i;
     }).map(function (o) { return o.r; });
   }
-  function spotsHoursAsk(items) {
+  var SPOT_HOURS_AT_ONCE = 4;
+  function spotsHoursAsk(items, first) {
     var B = window.GR_BACKEND;
     if (!(B && B.spotDetails && B.spotDetailsOn && B.spotDetailsOn())) return;
     var hrs = S.spotHrs = S.spotHrs || Object.create(null);
-    var q = S.spotHrsQ = S.spotHrsQ || { list: [], busy: false, now: null, timer: 0 };
+    var q = S.spotHrsQ = S.spotHrsQ || { list: [], live: [], timer: 0 };
+    var ahead = [];
     items.forEach(function (x) {
-      if (x.id == null || hrs[x.id] || x.id === q.now || q.list.indexOf(x.id) >= 0) return;
-      q.list.push(x.id);
+      if (x.id == null || hrs[x.id] || q.live.indexOf(x.id) >= 0) return;
+      var at = q.list.indexOf(x.id);
+      if (first) { if (at >= 0) q.list.splice(at, 1); if (ahead.indexOf(x.id) < 0) ahead.push(x.id); } else if (at < 0) q.list.push(x.id);
     });
-    if (!q.busy && !q.timer && q.list.length) q.timer = setTimeout(spotsHoursNext, 0);
+    if (ahead.length) q.list = ahead.concat(q.list);
+    if (!q.timer && q.list.length && q.live.length < SPOT_HOURS_AT_ONCE) q.timer = setTimeout(spotsHoursNext, 0);
   }
   function spotsHoursNext() {
     var q = S.spotHrsQ, B = window.GR_BACKEND;
     if (!q) return;
     q.timer = 0;
-    if (q.busy || !q.list.length || !B || !B.spotDetails) return;
-    var id = q.list.shift(), done = false;
-    q.busy = true; q.now = id;
+    if (!B || !B.spotDetails) return;
+    while (q.list.length && q.live.length < SPOT_HOURS_AT_ONCE) spotsHoursOne(q, q.list.shift());
+  }
+  function spotsHoursOne(q, id) {
+    var B = window.GR_BACKEND, done = false;
+    q.live.push(id);
     var finish = function (a) {
       if (done) return;
       done = true;
       S.spotHrs[id] = { hours: a && G.isObj(a.details) ? String(a.details.hours || '') : '', at: Date.now() };
-      q.busy = false; q.now = null;
+      var i = q.live.indexOf(id);
+      if (i >= 0) q.live.splice(i, 1);
       render(true);
       if (q.list.length && !q.timer) q.timer = setTimeout(spotsHoursNext, 0);
     };
@@ -4531,8 +4557,80 @@
     var was = S.spotHere, fresh = was && Date.now() - was.at < 300e3 ? was : null;
     if (fresh || (S.spotHereAsked && Date.now() - S.spotHereAsked < 60e3)) return fresh;
     S.spotHereAsked = Date.now();
-    spotHereQuiet(function (here) { if (here) render(true); });
+    S.spotHereWait = true;
+    spotHereQuiet(function (here) {
+      S.spotHereWait = false;
+      if (here || spotsHolding()) setTimeout(function () { render(true); }, 0);
+    });
     return null;
+  }
+  function spotsSettle(key, ids, pending) {
+    var book = S.spotSettle = S.spotSettle || Object.create(null);
+    var e = book[key];
+    if (!e || !spotsOnScreen(key)) e = book[key] = { since: Date.now(), ids: null, timer: 0 };
+    if (!e.ids) {
+      var left = e.since + SPOT_SETTLE_MS - Date.now();
+      if (pending && left > 0 && ids.length > 1) {
+        if (!e.timer) e.timer = setTimeout(function () { e.timer = 0; render(true); }, left + 20);
+        return null;
+      }
+      e.ids = ids.slice();
+      e.early = !!pending && ids.length > 1;
+    } else if (e.early && !pending) {
+      e.early = false;
+      e.ids = ids.slice();
+    }
+    var out = e.ids.filter(function (id) { return ids.indexOf(id) >= 0; });
+    ids.forEach(function (id, i) {
+      if (out.indexOf(id) >= 0) return;
+      var at = out.length;
+      for (var j = i + 1; j < ids.length; j++) { var p = out.indexOf(ids[j]); if (p >= 0) { at = p; break; } }
+      out.splice(at, 0, id);
+    });
+    e.ids = out;
+    return out.slice();
+  }
+  function spotsOnScreen(key) {
+    try {
+      var els = document.querySelectorAll('[data-sp-hold]');
+      for (var i = 0; i < els.length; i++) if (els[i].getAttribute('data-sp-hold') === key) return true;
+      return false;
+    } catch (e) { return true; }
+  }
+  function spotsHolding() {
+    var book = S.spotSettle;
+    return !!book && Object.keys(book).some(function (k) { return !book[k].ids; });
+  }
+  function spotKeyOf(x) { return x.id != null ? 'i' + x.id : 'n' + String(x.name || ''); }
+  function spotsHoursPending(items) {
+    var B = window.GR_BACKEND, q = S.spotHrsQ;
+    var ids = items.filter(function (x) { return x.id != null; });
+    if (!ids.length) return false;
+    if (B && B.spotDetailsSoon && B.spotDetailsSoon()) return true;
+    return !!q && ids.some(function (x) { return q.live.indexOf(x.id) >= 0 || q.list.indexOf(x.id) >= 0; });
+  }
+  function spotsRefPending() {
+    var B = window.GR_BACKEND;
+    if (!placeDayNow()) return false;
+    if (S.spotRef && S.spotRef.state === 'asking') return true;
+    return placeFindOn() && !!B.placeSearchSoon && B.placeSearchSoon();
+  }
+  function spotsLocal(items, here, city) {
+    return items.filter(function (x) {
+      return spotIsLocal({ here: here }, spotApplePt(x), String(x.city || city || '').split(',')[0].trim());
+    });
+  }
+  function spotsSettled(key, rows, pending) {
+    var sorted = spotsOrder(rows), by = Object.create(null);
+    var keys = sorted.map(function (r) {
+      var k = spotKeyOf(r.x), n = 1;
+      while (by[k + (n > 1 ? '#' + n : '')]) n += 1;
+      k += n > 1 ? '#' + n : '';
+      by[k] = r;
+      return k;
+    });
+    var ids = spotsSettle(key, keys, pending);
+    return ids ? ids.map(function (id) { return by[id]; }) : null;
   }
   function spotPlainName(s) {
     var t = String(s || '');
@@ -4598,6 +4696,9 @@
     }
     return r.pt ? r : null;
   }
+  function spotsHead() {
+    return h('h3', { class: 'mn-h mn-over td-h sp-h' }, 'Locations');
+  }
   function pfSpots() {
     var B = window.GR_BACKEND;
     var all = spotsOn() ? B.mySpots() : null;
@@ -4606,39 +4707,48 @@
       h('button', { class: 'add-pill', type: 'button', onclick: function () { openSpotEdit(null); } },
         icon('plus', 16), 'Add a spot'));
     if (!all.length) {
-      return [h('h3', { class: 'mn-h mn-over td-h' }, 'Favorite Local Spots'),
+      return [spotsHead(),
         emptyState('No spots saved yet', 'Save the restaurants, coffee shops, bars, clubs and things you love in each city, and find them again next run.'),
         addBtn];
     }
     var day = placeDayNow(), nowKey = day ? G.roadCityKey(day.city.split(',')[0]) : '';
-    var groups = spotGroups(all, nowKey);
     S.spotOpen = S.spotOpen || {};
-    var opened = groups.filter(function (g) { return S.spotOpen[g.key] === true; });
-    var ref = nowKey && opened.some(function (g) { return g.key === nowKey; }) ? spotsRefNow() : null;
-    var here = opened.length ? spotsHereQuiet() : null;
+    var isOpen = function (k) { return S.spotOpen[k] === true; };
+    var anyOpen = all.some(function (x) { return isOpen(G.roadCityKey(String(x.city || '').split(',')[0])); });
+    var here = anyOpen || !nowKey ? spotsHereQuiet() : null;
+    var groups0 = spotGroups(all, nowKey, here);
+    var gBy = Object.create(null);
+    groups0.forEach(function (g) { gBy[g.key] = g; });
+    var groups = spotsSettle('spots-tab', groups0.map(function (g) { return g.key; }), false).map(function (k) { return gBy[k]; });
+    var lead = groups[0];
+    var ref = nowKey ? spotsRefNow() : null;
+    if (lead && (lead.key === nowKey || lead.near != null)) spotsHoursAsk(spotsLocal(lead.items, here), true);
     var miles = G.usesMiles(navigator.language);
     return [
-      h('h3', { class: 'mn-h mn-over td-h' }, 'Favorite Local Spots'),
-      groups.map(function (g) {
-        var open = S.spotOpen[g.key] === true, rows = null, from = '';
+      spotsHead(),
+      groups.map(function (g, gi) {
+        var open = isOpen(g.key), rows = null, from = '', hold = 'spots|' + g.key, waiting = false;
         if (open) {
           var ctx = { here: here, hrs: S.spotHrs || null, ref: ref && ref.town === g.key ? ref.pt : null };
-          rows = spotsOrder(g.items.map(function (x) { return { x: x, f: spotListFacts(x, ctx) }; }));
-          if (rows.some(function (r) { return r.f.far != null; })) from = ref.label;
-          spotsHoursAsk(g.items.filter(function (x) {
-            return spotIsLocal({ here: here }, spotApplePt(x), String(x.city || '').split(',')[0].trim());
-          }));
+          var local = spotsLocal(g.items, here);
+          spotsHoursAsk(local, true);
+          var pending = (g.key === nowKey && spotsRefPending()) || (!here && !!S.spotHereWait) || spotsHoursPending(local);
+          var facts = g.items.map(function (x) { return { x: x, f: spotListFacts(x, ctx) }; });
+          rows = spotsSettled(hold, facts, pending);
+          if (!rows) { rows = facts; waiting = true; }
+          if (ctx.ref && rows.some(function (r) { return r.f.far != null; })) from = ref.label;
         }
-        return h('section', { class: 'pt-run' + (open ? ' open' : '') },
+        return h('section', { class: 'pt-run' + (open ? ' open' : ''), 'data-sp-hold': gi === 0 ? 'spots-tab' : null },
           h('button', { class: 'pt-run-h', type: 'button', 'aria-expanded': open ? 'true' : 'false',
             onclick: function () { S.spotOpen[g.key] = !open; render(true); } },
             h('span', { class: 'lr-text' },
               h('span', { class: 'lr-title' }, g.city),
               h('span', { class: 'lr-sub' }, plural(g.items.length, 'spot') + (from ? ' · distances from ' + from : ''))),
             icon('chevron', 16)),
-          open ? h('ul', { class: 'rows td-list sp-list' }, rows.map(function (r) {
+          !open ? null : h('ul', { class: 'rows td-list sp-list' + (waiting ? ' sp-holding' : ''), 'data-sp-hold': hold,
+            'aria-busy': waiting ? 'true' : null }, rows.map(function (r) {
             return spotRowEl(r.x, { open: r.f.open, far: r.f.far != null ? G.distanceText(r.f.far, miles) : '' });
-          })) : null);
+          })));
       }),
       addBtn
     ];
@@ -4798,6 +4908,14 @@
     '<path d="M11 13.4l2.6 3.2.6 4.4"/><path d="M12.1 8.6L9.1 10.6 8.2 13.2"/><path d="M12.1 8.6l2.3 2.7 2.6 1"/>';
   ICONS.globe = '<circle cx="12" cy="12" r="9"/><path d="M3 12h18"/>' +
     '<path d="M12 3a14 14 0 0 1 3.6 9A14 14 0 0 1 12 21a14 14 0 0 1-3.6-9A14 14 0 0 1 12 3z"/>';
+  ICONS.spfood = '<path d="M6 3v5a3 3 0 0 0 6 0V3M9 3v18"/><path d="M18 21V3c-2.2 1.4-3.3 4-3.3 7.4V14H18"/>';
+  ICONS.spcoffee = '<path d="M4 9h13v5a5 5 0 0 1-5 5H9a5 5 0 0 1-5-5V9z"/><path d="M17 11h1.5a2.5 2.5 0 0 1 0 5H17"/>' +
+    '<path d="M8 3.5c0 1.2 1 1.3 1 2.5M12 3.5c0 1.2 1 1.3 1 2.5"/>';
+  ICONS.spbar = '<path d="M4 4h16l-8 9z"/><path d="M12 13v8M8 21h8"/>';
+  function spotKindIcon(k) {
+    var m = { food: 'spfood', coffee: 'spcoffee', bar: 'spbar', club: 'music', 'to do': 'star' };
+    return Object.prototype.hasOwnProperty.call(m, k) ? m[k] : 'tabmap';
+  }
   function spotHereQuiet(cb) {
     var was = S.spotHere;
     if (was && Date.now() - was.at < 300e3) { cb(was, 'granted'); return; }
@@ -4833,6 +4951,9 @@
     return h('div', { class: 'spc-fact' },
       h('span', { class: 'spc-fact-k' }, label),
       h('span', { class: 'spc-fact-v' + (tone ? ' ' + tone : '') }, value));
+  }
+  function spotRanges(text) {
+    return String(text || '').split(', ').map(function (r) { return h('span', { class: 'spc-range' }, r); });
   }
   function spotLine(label, value) {
     return h('div', { class: 'spc-line' }, h('span', { class: 'spc-k' }, label), value);
@@ -4950,10 +5071,11 @@
       web ? h('a', { class: 'spc-act', href: web, target: '_blank', rel: 'noopener' }, icon('globe', 20), h('span', null, 'Website')) : null);
     var facts = [];
     var hrs = d.hours ? G.hoursNow(d.hours, new Date()) : null;
+    var openNow = hrs && spotIsLocal(st, pt, town) ? hrs.open : null;
     if (hrs) {
-      facts.push(spotIsLocal(st, pt, town)
-        ? spotFact('Hours', hrs.open ? 'Open' : 'Closed', hrs.open ? 'pos' : 'neg')
-        : spotFact('Hours today', hrs.today));
+      facts.push(openNow != null
+        ? spotFact('Hours', openNow ? 'Open' : 'Closed', openNow ? 'pos' : 'neg')
+        : spotFact('Hours today', spotRanges(hrs.today), 'long'));
     }
     if (pt && far != null) {
       facts.push(spotFact('Distance', G.distanceText(far, G.usesMiles(navigator.language))));
@@ -4969,31 +5091,51 @@
       facts.push(spotFact('Distance', 'Finding you…'));
     }
     var week = d.hours ? G.hoursWeek(d.hours) : [];
+    var weekEl = week.length ? h('span', { class: 'spc-v spc-week' }, week.map(function (w) {
+      return h('span', { class: 'spc-wk' }, h('span', null, w.days), h('span', null, spotRanges(w.hours)));
+    })) : null;
+    var nowEl = openNow != null ? h('span', { class: 'spc-now ' + (openNow ? 'pos' : 'neg') }, openNow ? 'Open' : 'Closed') : null;
+    var hoursLine = null;
+    if (d.hours && week.length && hrs) {
+      var nx = nowEl ? G.hoursNext(d.hours, new Date()) : null;
+      var allDay = function (x) { return x === 'Open all day' ? '24 hours' : x; };
+      var said = nowEl ? (nx && nx.next ? ' \u00b7 ' + nx.next : '')
+        : week.length === 1 ? 'Every day \u00b7 ' + allDay(week[0].hours)
+        : hrs.today === 'Closed' ? 'Closed today' : 'Today \u00b7 ' + allDay(hrs.today);
+      var folds = week.length > 1;
+      hoursLine = h(folds ? 'button' : 'div', folds ? { class: 'spc-line spc-hours' + (st.weekOpen ? ' open' : ''), type: 'button',
+        'aria-expanded': st.weekOpen ? 'true' : 'false', onclick: function () { st.weekOpen = !st.weekOpen; redraw(); } }
+        : { class: 'spc-line spc-hours' },
+        h('span', { class: 'spc-k' }, 'Hours'),
+        h('span', { class: 'spc-v spc-today' }, nowEl, said, folds ? icon('chevron', 14) : null),
+        folds && st.weekOpen ? weekEl : null);
+    } else if (d.hours) {
+      hoursLine = spotLine('Hours', [nowEl, weekEl || h('span', { class: 'spc-v' }, d.hours)]);
+    }
     var lines = [
+      hoursLine,
+      tel.length >= 5 ? spotLine('Phone', h('a', { class: 'spc-v spc-link', href: 'tel:' + tel }, String(d.phone).trim())) : null,
+      web ? spotLine('Website', h('a', { class: 'spc-v spc-link spc-one', href: web, target: '_blank', rel: 'noopener' },
+        web.replace(/^https?:\/\/(www\.)?/i, '').split(/[\/?#]/)[0])) : null,
       address ? spotLine('Address', h('a', { class: 'spc-v spc-link', target: '_blank', rel: 'noopener',
         href: pt ? 'https://maps.apple.com/?q=' + encodeURIComponent(name) + '&ll=' + pt.lat + ',' + pt.lon
-          : mapsHref([name, address, city].filter(Boolean).join(', ')) }, address)) : null,
-      d.hours ? spotLine('Hours', week.length
-        ? h('span', { class: 'spc-v spc-week' }, week.map(function (w) {
-            return h('span', { class: 'spc-wk' }, h('span', null, w.days), h('span', null, w.hours));
-          }))
-        : h('span', { class: 'spc-v' }, d.hours)) : null,
-      tel.length >= 5 ? spotLine('Phone', h('a', { class: 'spc-v spc-link', href: 'tel:' + tel }, String(d.phone).trim())) : null,
-      web ? spotLine('Website', h('a', { class: 'spc-v spc-link', href: web, target: '_blank', rel: 'noopener' },
-        web.replace(/^https?:\/\/(www\.)?/i, '').replace(/\/$/, ''))) : null
+          : mapsHref([name, address, city].filter(Boolean).join(', ')) }, address)) : null
     ].filter(Boolean);
     var whoName = String(st.who || '').trim() || 'Someone';
     var sdOn = !!(B && B.spotDetailsOn && B.spotDetailsOn());
     return [
+      h('div', { class: 'spc-tile', 'aria-hidden': 'true' }, icon(spotKindIcon(sp.kind), 30)),
       h('h2', { class: 'sh-title spc-name' }, name),
-      h('p', { class: 'spc-kind' }, [spotCuisine(d.cuisine) || spotKindLabel(sp.kind), where].filter(Boolean).join(' · ')),
+      h('p', { class: 'spc-kind' }, spotCuisine(d.cuisine) || spotKindLabel(sp.kind),
+        where ? [' · ', h('span', { class: 'spc-where' }, where)] : null),
       acts,
       facts.length ? h('div', { class: 'spc-facts' }, facts) : null,
       st.waiting && sdOn ? h('p', { class: 'hint spc-wait' }, 'Looking up the details…') : null,
       spotCardApple(st),
+      lines.length ? h('h3', { class: 'spc-sec' }, 'Details') : null,
       lines.length ? h('div', { class: 'spc-info' }, lines) : null,
+      h('h3', { class: 'spc-sec' }, 'Recommended by'),
       h('div', { class: 'spc-rec' },
-        h('span', { class: 'spc-k' }, 'Recommended by'),
         h('div', { class: 'spc-who' },
           personPhoto({ name: whoName, avatar: st.avatar || '' }, 'xs spc-face'),
           h('div', { class: 'spc-who-t' },
@@ -5045,6 +5187,20 @@
       return [box];
     }, { label: String(x.name || 'Spot'), cls: 'spc-sheet', onClose: function () { st.alive = false; spotAppleStop(st); } });
   }
+  function spotsDayOrder(key, items, city) {
+    var tk = G.roadCityKey(String(city || '').split(',')[0]);
+    var day = placeDayNow();
+    var today = !!day && !!tk && G.roadCityKey(day.city.split(',')[0]) === tk;
+    var ref = today ? spotsRefNow() : null;
+    var here = spotsHereQuiet();
+    var ctx = { here: here, hrs: S.spotHrs || null, ref: ref ? ref.pt : null };
+    var local = spotsLocal(items, here, city);
+    spotsHoursAsk(local);
+    var pending = (today && spotsRefPending()) || (!here && !!S.spotHereWait) || spotsHoursPending(local);
+    var rows = spotsSettled(key, items.map(function (x) { return { x: x, f: spotListFacts(x, ctx) }; }), pending);
+    return rows ? { list: rows.map(function (r) { return r.x; }), facts: rows.map(function (r) { return r.f; }), waiting: false }
+      : { list: items.slice(), facts: items.map(function () { return {}; }), waiting: true };
+  }
   function spotsRecommended(tourId, city) {
     if (!spotsOn()) return null;
     var B = window.GR_BACKEND;
@@ -5052,16 +5208,22 @@
     if (!city || !B.tourSpots) return null;
     var rows = B.tourSpots(tourId, G.roadCityKey(city.split(',')[0]));
     if (!rows || !rows.length) return null;
+    var hold = 'ds|' + tourId + '|' + G.roadCityKey(city.split(',')[0]);
+    var order = spotsDayOrder(hold, rows, city);
+    rows = order.list;
     var faces = (B.facesFor && B.facesFor(tourId)) || {};
-    return h('section', { class: 'ds-sec sp-rec' },
+    var miles = G.usesMiles(navigator.language);
+    return h('section', { class: 'ds-sec sp-rec', 'data-sp-hold': hold },
       h('h3', { class: 'ds-sec-h sp-rec-h' }, icon('heart', 18), 'TOUR SPOTS'),
-      h('div', { class: 'ledger' }, rows.map(function (x) {
+      h('div', { class: 'ledger' + (order.waiting ? ' sp-holding' : ''), 'aria-busy': order.waiting ? 'true' : null }, rows.map(function (x, i) {
         var face = (x.userId && faces[x.userId]) || '';
+        var f = order.facts[i] || {};
         return h('button', { class: 'row ds-row sp-row', type: 'button',
           onclick: function () { openSpotCard(x, { face: face }); } },
           personPhoto({ name: x.who || 'Someone', avatar: face }, 'xs sp-face'),
           h('div', { class: 'row-label' }, x.name,
-            h('span', { class: 'hint' }, spotKindLabel(x.kind) + ' · ' + (x.who || 'Someone') + ' recommends it')),
+            h('span', { class: 'hint sp-meta' }, spotMetaLine(x, { open: f.open, far: f.far != null ? G.distanceText(f.far, miles) : '' },
+              x.who || 'Someone'))),
           icon('chevron', 16));
       })));
   }
@@ -5210,10 +5372,13 @@
     if (!(S.mode === 'db' && B && B.followSpotsOn && B.followSpots && B.followSpotsOn())) return null;
     var rows = B.followSpots(city);
     if (!rows || !rows.length) return null;
-    return h('section', { class: 'ds-page pt-hist', 'aria-label': 'Spots from people you follow' },
+    var hold = 'fs|' + G.roadCityKey(city.split(',')[0]);
+    var order = spotsDayOrder(hold, rows.slice(0, 8), city);
+    rows = order.list;
+    return h('section', { class: 'ds-page pt-hist', 'aria-label': 'Spots from people you follow', 'data-sp-hold': hold },
       h('section', { class: 'ds-sec' },
         h('h3', { class: 'ds-sec-h' }, 'Spots'),
-        h('div', { class: 'ledger' }, rows.slice(0, 8).map(function (x) {
+        h('div', { class: 'ledger' + (order.waiting ? ' sp-holding' : ''), 'aria-busy': order.waiting ? 'true' : null }, rows.map(function (x) {
           return h('button', { class: 'row ds-row sp-row', type: 'button', onclick: function () { openSpotCard(x); } },
             h('div', { class: 'row-label' }, x.name,
               h('span', { class: 'hint' }, spotKindLabel(x.kind) +
@@ -9496,7 +9661,7 @@
     var back = S.route || { name: 'home' };
     var under = { node: old, y: window.scrollY, back: back, inner: innerScrolls(old), scrolls: pageScrolls(),
       bar: old && old.querySelector ? old.querySelector('nav.tabbar') : null,
-      st: { dsIndex: S.dsIndex, dsMore: S.dsMore, cardsSide: S.cardsSide, wzPeople: S.wzPeople } };
+      st: { dsIndex: S.dsIndex, dsMore: S.dsMore, wzPeople: S.wzPeople } };
     S.menuQ = '';
     menuUnder = null;
     go({ name: 'mainmenu', back: back, fresh: true });
@@ -9866,7 +10031,7 @@
   }
   function menuGates() {
     var B = window.GR_BACKEND;
-    return { mine: artistSide(), signedIn: !!(S.mode === 'db' && B && B.signOut), music: inMusic() };
+    return { mine: artistSide(), signedIn: !!(S.mode === 'db' && B && B.signOut), music: inMusic() || myPastRows().length > 0 };
   }
   var MENU_TITLE = 'Settings';
   function viewMenu() {
@@ -9874,9 +10039,11 @@
     var here = { name: 'mainmenu', back: backTo };
     var g = menuGates();
     var tg = menuTourGroup(backTo);
+    var cards = settingsDoors().cards;
     var body = h('div', { class: 'mn-body' },
       menuSection('Your account', [
         g.signedIn ? menuRow('people', 'Contact Card', function () { openContactCard(); }) : null,
+        cards ? menuRow('card', 'Linked Cards', cards) : null,
         g.signedIn ? menuRow('bell', 'Notifications', function () { openNotifications(null); }) : null,
         menuRow('gear', 'Settings', function () { openSettingsSheet(); })]),
       menuSection('Tours', [
@@ -10019,6 +10186,8 @@
     };
     var inSheet = function (opener, sheets) { return function (label) { return function () { var was = sheet ? sheet.panel : null; opener(); menuPoint(label, sheets, was); }; }; };
     if (g.signedIn) add('contact', 'people', 'Contact Card', 'Your account', function () { openContactCard(); });
+    var lcDoor = settingsDoors().cards;
+    if (lcDoor) add('linked', 'card', 'Linked Cards', 'Your account', lcDoor);
     if (g.signedIn) add('notifications', 'bell', 'Notifications', 'Your account', function () { openNotifications(null); });
     add('settings', 'gear', 'Settings', 'Your account', function () { openSettingsSheet(); });
     if (g.mine) add('create', 'plus', 'Create a tour', 'Tours', createTourFromMenu);
@@ -10068,20 +10237,26 @@
           var ak = a.name.toLowerCase(), at = 'Budget History › ' + y.year;
           add('', 'music', a.name, at, menuReveal(function () { var s = bh(); s.open = true; s.year = y.year; s.artist = ak; }, a.name));
           a.tours.forEach(function (e) { add('', 'tabmoney', e[1].name || 'Untitled tour', at + ' › ' + a.name, menuHistoryLeaf(here, { kind: 'tour', id: e[0] })); });
+          a.past.forEach(function (x) { add('', 'tabmoney', pastName(x), at + ' › ' + a.name, menuHistoryLeaf(here, { kind: 'past', id: x.tourId })); });
           if (a.off) add('', 'tabcost', 'Off Tour', at + ' › ' + a.name, menuHistoryLeaf(here, { kind: 'off', artist: a.name, year: y.year }));
         });
       });
     }
     return out;
   }
-  function settingsIndex(add) {
+  function settingsIndex(add, withLinked) {
     var d = settingsDoors();
+    if (withLinked && d.cards) add('linked', 'card', 'Linked Cards', 'Your account', d.cards);
     settingsItems(d).forEach(function (r) { add(r.key, r.ic, r.label, 'Settings', r.tap, { danger: r.danger }); });
     var LC = { 'Card dates': ['calendar', ''], 'Bank lines': ['bank', 'banklines'], 'Card statement history': ['tabsheet', 'statements'],
-      'Learned labels': ['tag', 'labels'], 'Connect a bank or card': ['card', ''], 'How Linked Cards work': ['card', ''] };
+      'Learned labels': ['tag', 'labels'], 'Connect a bank or card': ['card', ''], 'How Linked Cards work': ['gear', ''] };
+    var GEAR = { 'Card dates': 1, 'How Linked Cards work': 1 };
+    var own = { 'Card dates': function () { openCardDates(null); }, 'Bank lines': function () { openBankLines(null, null); },
+      'Card statement history': function () { openStatementHistory(null); }, 'Learned labels': function () { openLabelsSheet(null); } };
     linkedCardsItems(d.lc).forEach(function (l) {
       var k = LC[l] || ['bank', ''];
-      add(k[1], k[0], l, 'Settings › Linked Cards', function () { var was = sheet ? sheet.panel : null; d.cards(); menuPoint(l, ['Linked Cards', 'Link a card'], was); });
+      add(k[1], k[0], l, GEAR[l] ? 'Linked Cards settings' : 'Linked Cards', own[l] ? own[l]
+        : function () { var was = sheet ? sheet.panel : null; d.cards(); menuPoint(l, ['Linked Cards', 'Link a card'], was); });
     });
   }
   function menuReveal(set, label) {
@@ -11287,14 +11462,65 @@
     });
     return Object.keys(by).sort().reverse().map(function (y) { return by[y]; });
   }
+  function myPayPastLoad(fresh) {
+    var B = window.GR_BACKEND;
+    var c = S.myPayPast || (S.myPayPast = { list: [], at: 0, asking: false, failed: false });
+    if (S.mode !== 'db' || !B || !B.myPayPast || c.asking) return c;
+    if (fresh || !c.at || Date.now() - c.at > 60000) {
+      c.asking = true;
+      B.myPayPast().then(function (list) {
+        var next = Array.isArray(list) ? list : [], was = JSON.stringify(c.list || []);
+        c.list = next; c.at = Date.now(); c.asking = false; c.failed = false;
+        if (JSON.stringify(next) !== was) render(true);
+      }, function () { c.at = Date.now(); c.asking = false; c.failed = true; });
+    }
+    return c;
+  }
+  function myPastRows() {
+    if (actingAs()) return [];
+    return (myPayPastLoad().list || []).filter(function (x) { return x && x.tourId && G.isObj(x.tour) && !getTour(x.tourId); });
+  }
+  function myPastOf(tourId) {
+    var list = S.myPayPast && S.myPayPast.list;
+    return tourId && Array.isArray(list) ? list.filter(function (x) { return x && x.tourId === tourId; })[0] || null : null;
+  }
+  function pastYear(x) {
+    if (G.parseDay(x.tour.first)) return String(x.tour.first).slice(0, 4);
+    var days = G.rows(x.book && x.book.entries).concat(G.rows(x.book && x.book.income)).map(function (e) { return e && e.date; })
+      .concat((x.asks || []).map(function (r) { return r.date; })).filter(G.parseDay).sort();
+    return days.length ? String(days[0]).slice(0, 4) : '';
+  }
+  function pastLine(x) {
+    var span = G.parseDay(x.tour.first) ? G.sumSpan(x.tour.first, x.tour.last || x.tour.first) : '';
+    return [span, x.gone ? 'The tour was deleted' : 'You’re off this tour'].filter(Boolean).join(' · ');
+  }
+  function pastName(x) { return String(x.tour.name || '').trim() || 'Untitled tour'; }
+  function pastSummary(x) {
+    var m = G.paySummary({ tour: { name: pastName(x), artist: x.tour.artist, first: x.tour.first, last: x.tour.last }, info: {},
+      book: x.book, names: myPayNames(x.tourId) });
+    var asks = (x.asks || []).filter(function (r) { return G.num(r.amount) > 0; });
+    if (asks.length) {
+      var paid = asks.filter(rbPaid);
+      m.sections.push({ key: 'asks', title: 'Reimbursements you asked for',
+        lines: asks.map(function (r) { return { label: r.what || 'Paid for the tour', amount: Math.round(G.num(r.amount) * 100) / 100,
+          hint: [r.date ? dayMD(r.date) : '', reimbStateText(r)].filter(Boolean).join(' · ') }; }),
+        total: { label: 'Paid back to you', amount: rbSum(paid) }, notes: [] });
+    }
+    m.notes = [(x.gone ? 'This tour was deleted from Greenroom. ' : 'You’re no longer on this tour. ') +
+      'Your own MY PAY for it is kept, read-only: what you logged yourself and what you spent. Only you see it.'];
+    m.details = (m.details || []).filter(function (d) { return !d || d.title !== 'Pay from the tour'; });
+    m.sheets = (m.sheets || []).filter(function (d) { return !d || d.name !== 'Pay from the tour'; });
+    return m;
+  }
   var NO_ARTIST = 'No artist yet';
   function historyTree() {
     var by = {};
     var art = function (y, name) {
       var s = by[y] || (by[y] = {}), k = name.toLowerCase();
-      return s[k] || (s[k] = { name: name, tours: [], off: false });
+      return s[k] || (s[k] = { name: name, tours: [], past: [], off: false });
     };
     scopedTours().forEach(function (e) { var y = tourYear(e[1]); if (y) art(y, artistOf(e[1]) || NO_ARTIST).tours.push(e); });
+    myPastRows().forEach(function (x) { var y = pastYear(x); if (y) art(y, String(x.tour.artist || '').trim() || NO_ARTIST).past.push(x); });
     historyArtists().forEach(function (name) {
       var id = offTourOf(name), t = id ? getTour(id) : null;
       if (t) G.bookYears(t).forEach(function (y) { art(y, name).off = true; });
@@ -11329,13 +11555,14 @@
           menuRow('calendar', y.year, toggle(yk), plural(y.artists.length, 'artist'), { open: yOpen, cls: 'bh-year' }),
           !yOpen ? null : h('div', { class: 'mn-drop' }, y.artists.map(function (a) {
             var ak = yk + '|' + a.name.toLowerCase(), aOpen = !!S.histOpen[ak];
-            var bits = [a.tours.length ? plural(a.tours.length, 'tour') : '', a.off ? 'Off Tour' : ''].filter(Boolean).join(' · ');
+            var bits = [a.tours.length + a.past.length ? plural(a.tours.length + a.past.length, 'tour') : '', a.off ? 'Off Tour' : ''].filter(Boolean).join(' · ');
             return [
               menuRow('music', a.name, toggle(ak), bits, { open: aOpen }),
               !aOpen ? null : h('div', { class: 'mn-drop' },
                 a.tours.map(function (e) {
                   return menuRow('tabmoney', e[1].name || 'Untitled tour', open({ kind: 'tour', id: e[0] }), tourSpanLine(e[1]));
                 }),
+                a.past.map(function (x) { return menuRow('tabmoney', pastName(x), open({ kind: 'past', id: x.tourId }), pastLine(x)); }),
                 a.off ? menuRow('tabcost', 'Off Tour', open({ kind: 'off', artist: a.name, year: y.year }),
                   y.year === thisYear ? 'So far this year' : 'The whole year') : null)
             ];
@@ -11360,13 +11587,14 @@
           plural(y.artists.length, 'artist'), { open: yOpen, cls: 'bh-year' }),
         !yOpen ? null : h('div', { class: 'mn-drop', 'data-bh': yk }, y.artists.map(function (a) {
           var ak = a.name.toLowerCase(), aOpen = st.artist === ak;
-          var bits = [a.tours.length ? plural(a.tours.length, 'tour') : '', a.off ? 'Off Tour' : ''].filter(Boolean).join(' · ');
+          var bits = [a.tours.length + a.past.length ? plural(a.tours.length + a.past.length, 'tour') : '', a.off ? 'Off Tour' : ''].filter(Boolean).join(' · ');
           return [
             menuRow('music', a.name, function () { st.artist = aOpen ? '' : ak; render(true); if (!aOpen) menuDropIn(yk + '|' + ak); }, bits, { open: aOpen }),
             !aOpen ? null : h('div', { class: 'mn-drop', 'data-bh': yk + '|' + ak },
               a.tours.map(function (e) {
                 return menuRow('tabmoney', e[1].name || 'Untitled tour', open({ kind: 'tour', id: e[0] }), tourSpanLine(e[1]));
               }),
+              a.past.map(function (x) { return menuRow('tabmoney', pastName(x), open({ kind: 'past', id: x.tourId }), pastLine(x)); }),
               a.off ? menuRow('tabcost', 'Off Tour', open({ kind: 'off', artist: a.name, year: y.year }),
                 y.year === thisYear ? 'So far this year' : 'The whole year') : null)
           ];
@@ -11415,14 +11643,22 @@
       if (spans.partial) return { retry: { text: 'Couldn’t read ' + name + '’s tour history just now, so this summary can’t tell yet which lines happened during a tour.',
         go: function () { offTours(name, getTour(bookId), true); render(true); } } };
       return { model: G.offSummary(getTour(bookId), year, name, spans.tours), stem: fileStem(name + ' off tour ' + year),
-        door: { label: 'Open the Off Tour book', go: function () { go(offRoute(name, 'costs')); } } };
+        door: { label: 'Open the Off Tour book', go: function () { go(offRoute(name, bookTabNow())); } } };
+    }
+    if (sum.kind === 'past') {
+      var pc = myPayPastLoad(), x = myPastOf(sum.id);
+      if (!x || !G.isObj(x.tour)) {
+        if (pc.failed && !pc.list.length) return { retry: { text: 'Couldn’t load your MY PAY just now.', go: function () { myPayPastLoad(true); render(true); } } };
+        return pc.at ? { title: 'That book isn’t here', text: 'Your own MY PAY for that tour isn’t on Greenroom any more.' } : { wait: true };
+      }
+      return { model: pastSummary(x), stem: fileStem(pastName(x) + ' my pay') };
     }
     var id = sum.id, t = id ? getTour(id) : null;
     if (!t || t.deletedAt || isOffTour(t)) return { title: 'That tour isn’t here', text: 'It may have been deleted. Its creator can restore it from Settings.' };
     if (!roleKnown(id)) { tourRole(id); return later(); }
     if (canSeeMoney(id)) {
       return { model: G.tourSummary(t), stem: fileStem((t.name || 'tour') + ' summary'),
-        door: { label: 'Open the tour’s Budget', go: function () { openTour(id, 'costs', here, 'Summary', 'list'); } } };
+        door: { label: 'Open the tour’s Budget', go: function () { openTour(id, tourBudget(id).view, here, 'Summary', 'list'); } } };
     }
     var c = myPayInfo(id);
     if (c.none) return { title: 'MY PAY is for a signed-in tour', text: 'Once you’re signed in, your pay and your own spending for this tour show up here.' };
@@ -11458,14 +11694,18 @@
     var totalRow = function (x) {
       return h('div', { class: 'row total bh-total' }, h('span', { class: 'row-label' }, x.label), h('strong', { class: 'amt num' }, money(x.amount)));
     };
+    var amts = sec.lines.map(function (l) { return G.num(l.amount); });
+    var parts = !!sec.total && !(sec.more && sec.more.length) &&
+      Math.abs(Math.round(amts.reduce(function (n, v) { return n + v; }, 0) * 100) - Math.round(G.num(sec.total.amount) * 100)) < 1;
+    var shown = parts ? G.footTo(amts, sec.total.amount, 1) : amts;
     return h('section', { class: 'bh-sec' },
       h('h2', { class: 'mn-h mn-over' }, sec.title),
       sec.sub ? h('p', { class: 'bh-sub' }, sec.sub) : null,
       h('div', { class: 'ledger' },
-        sec.lines.length ? sec.lines.map(function (l) {
+        sec.lines.length ? sec.lines.map(function (l, i) {
           return h('div', { class: 'row' },
             h('div', { class: 'row-label' }, l.label, l.hint ? h('span', { class: 'hint' }, l.hint) : null),
-            h('span', { class: 'amt num' }, money(l.amount)));
+            h('span', { class: 'amt num' }, money(shown[i])));
         }) : h('div', { class: 'row' }, h('div', { class: 'row-label bh-none' }, 'Nothing yet')),
         sec.total ? totalRow(sec.total) : null,
         (sec.more || []).map(totalRow)),
@@ -11765,13 +12005,15 @@
     var address = s ? String(d.venueAddress || '').trim() : String(off.hotelAddress || '').trim();
     var next = !s ? shows.filter(function (x) { return x.date > entry.date; })[0] : null;
     var sheet = daySheetNodes(s, off, { onlySet: true, cliff: true, band: ourBand(t), bands: tourBands(t) });
+    var offBlank = !s && kind === 'Day off' && !!next && !G.offDayLines(off).length && !String(off.city || '').trim();
     var checkIn = null;
     return [
       h('div', { class: 'pt-headrow' }, pfLeftChip(t), pfTourBar(id, t, count, 'details'), pfOffChip(t)),
       dayRow(h('span', { class: 'pt-chip' + (isToday ? ' on' : '') }, when), entry.date, s ? '' : city, place, address,
         s && s.soldOut ? h('span', { class: 'pt-chip sold' }, 'Sold out') : null,
         buyoutCorner(id, t, when, entry.date, s ? '' : city, !!(s && s.soldOut), isToday ? busChip(id, t) : null)),
-      next ? h('p', { class: 'pt-next' }, 'Next show: ' + dayMD(next.date) + ' \u00b7 ' +
+      offBlank ? h('div', { class: 'ds-page pt-ds' }, offNextShow(next)) : null,
+      next && !offBlank ? h('p', { class: 'pt-next' }, 'Next show: ' + dayMD(next.date) + ' \u00b7 ' +
         [next.city, next.venue].map(function (x) { return String(x || '').trim(); }).filter(Boolean).join(' \u00b7 ')) : null,
       sheet ? h('div', { class: 'ds-page pt-ds' }, sheet) : null,
       s && isToday ? todayHistory(id, s) : null,
@@ -12205,7 +12447,6 @@
     add('contactus', 'mail', 'Contact us', A.contact);
     var cm = d.offId ? cardMenuTap(d.offId) : null;
     if (cm) add('cardsettings', cm.ic, cm.label, cm.tap);
-    if (d.cards) add('linked', 'card', 'Linked Cards', d.cards);
     if (historyArtists().length) add('business', 'tag', 'Business details', function () { openCpaBusiness(null, openSettingsSheet); });
     if (d.trashed) add('trash', 'trash', 'Deleted tours (' + d.trashed + ')', A.trash);
     if (d.signedIn) add('signout', 'back', 'Sign out', A.signout);
@@ -12217,7 +12458,7 @@
   }
   function openSettingsSheet() {
     var d = settingsDoors();
-    var B = d.B, signedIn = d.signedIn, who = d.who, asArtist = d.asArtist, trashed = d.trashed, offId = d.offId, cards = d.cards;
+    var B = d.B, signedIn = d.signedIn, who = d.who, asArtist = d.asArtist, trashed = d.trashed, offId = d.offId;
     var A = settingsActions(d);
     openSheet(function () {
       var q = '', idx = null, paint = function () {};
@@ -12275,7 +12516,6 @@
           stRow('mail', 'Contact us', A.contact, { sub: CONTACT_EMAIL })]),
         stGroup('Your tours', [
           offId ? cardMenuItem(offId, true) : null,
-          cards ? stRow('card', 'Linked Cards', cards) : null,
           historyArtists().length ? stRow('tag', 'Business details', function () { openCpaBusiness(null, openSettingsSheet); }) : null,
           trashed ? stRow('trash', 'Deleted tours (' + trashed + ')', A.trash) : null]),
         stGroup(null, [
@@ -12294,7 +12534,7 @@
           settingsIndex(function (key, ic, label, where, open, o) {
             idx.push({ key: key, ic: ic, label: label, where: where, open: open, danger: !!(o && o.danger),
               words: (MENU_WORDS[key] || []).concat((o && o.words) || []) });
-          });
+          }, true);
         }
         var hits = menuMatch(idx, q);
         said.textContent = hits.length ? plural(hits.length, 'result') : 'No results';
@@ -12803,7 +13043,7 @@
     if (fr.host) {
       var ht = getTour(fr.host) || {};
       var back = function (view) { return function () { go({ name: 'tour', id: fr.host, view: view, list: (S.route && S.route.list) || null }); }; };
-      if (canSeeMoney(fr.host)) tabs.push({ label: ht.name || 'Untitled tour', on: false, go: back('costs') });
+      if (canSeeMoney(fr.host)) tabs.push({ label: ht.name || 'Untitled tour', on: false, go: function () { back(bookTabNow())(); } });
       if (offPayOf(artist)) {
         tabs.push({ label: 'MY PAY', on: current === 'mypay', go: function () {
           if (current !== 'mypay') go(Object.assign(offRoute(artist, 'mypay', fr.host), { list: (S.route && S.route.list) || null }));
@@ -12814,7 +13054,7 @@
       tabs.push({ label: 'MY PAY', on: current === 'mypay', go: function () { if (current !== 'mypay') go(offRoute(artist, 'mypay')); } });
     }
     if (artist) tabs.push({ label: 'OFF TOUR', on: current === 'off',
-      go: function () { if (current !== 'off' || S.route.view !== 'costs') go(offRoute(artist, 'costs')); } });
+      go: function () { var v = bookTabNow(); if (current !== 'off' || S.route.view !== v) go(offRoute(artist, v)); } });
     return payTabRow(tabs);
   }
   function offBar(fr) { return tourTabs(fr.bar, 'costs', { off: true }); }
@@ -12836,7 +13076,7 @@
         h('div', { class: 'fl-list' }, list.map(function (n) {
           var on = n === cur;
           return h('button', { class: 'fl-row', type: 'button', 'aria-pressed': on ? 'true' : 'false',
-            onclick: function () { S.offArtist = n; closeSheet(); go(offRoute(n, 'costs')); } },
+            onclick: function () { S.offArtist = n; closeSheet(); go(offRoute(n, bookTabNow())); } },
             h('span', { class: 'lr-text' }, h('span', { class: 'lr-title' }, n)),
             on ? h('span', { class: 'acct-on', 'aria-hidden': 'true' }, icon('check', 14)) : null);
         })),
@@ -12862,7 +13102,7 @@
       if (fr.bar) { S.route = { name: 'tour', id: fr.bar, view: 'costs' }; return viewTour(); }
       return viewOffPay(fr, '');
     }
-    if (view === 'tours' && fr.host) view = 'costs';
+    if (view === 'tours' && fr.host) view = bookTabNow();
     if (!artist && view !== 'mypay') view = 'tours';
     if (view === 'mypay') {
       if (fr.host && !offPayOf(artist)) { S.route = { name: 'tour', id: fr.host, view: 'mypay', list: r.list || null }; return viewTour(); }
@@ -13030,7 +13270,7 @@
         return h('section', { class: 'hist-year' },
           h('h2', { class: 'mn-h mn-over hist-y' }, y.year),
           h('ul', { class: 'tour-list rows mn-list' }, y.tours.map(function (e) {
-            return h('li', null, tourListRow(e, function () { openTour(e[0], 'costs', here, 'Tours', 'list'); }));
+            return h('li', null, tourListRow(e, function () { openTour(e[0], tourBudget(e[0]).view, here, 'Tours', 'list'); }));
           })));
       }) : emptyState('No tours yet', 'Once there is a tour, its budget shows up here, year by year.'),
       offBar(fr));
@@ -13063,8 +13303,20 @@
     var ch = G.isObj(t.charges) ? t.charges[r.chargeId] : null;
     if (!(G.isObj(ch) && !ch.accounted && G.num(ch.amount) > 0 && !ch.crewId && !G.crewSplitOf(ch))) return false;
     if (offMoveTwin(t, id, r.chargeId)) return false;
+    var bankKey = /^[py]./.test(String(r.chargeId));
+    if (chargeSource(t, ch) === 'PLAID' ? !/^p./.test(String(r.chargeId)) : bankKey && !ch.byUser) return false;
+    if (!offLineMine(t, id, ch)) return false;
     if (chargeSource(t, ch) === 'PLAID' && !offMoveHeld()) return false;
     return true;
+  }
+  function offLineMine(t, id, ch) {
+    if (chargeSource(t, ch) === 'PLAID' || !ch.byUser) return createdTour(id);
+    var B = window.GR_BACKEND, me = B && B.uid ? B.uid() : null;
+    return !!me && String(ch.byUser) === String(me);
+  }
+  function offByOf(id) {
+    var B = window.GR_BACKEND, me = S.mode === 'db' && B && B.uid ? B.uid() : null;
+    return me && isOffTour(getTour(id)) ? { byUser: String(me) } : {};
   }
   function offMoveTwin(t, id, chargeId) {
     return bandTours(artistOf(t)).some(function (e) {
@@ -13075,7 +13327,7 @@
   function offMoveHeld() {
     var d = S.acct && S.acct.data;
     if (!d) { ensureAcct(); return false; }
-    return G.isObj(d.look) && typeof d.look.my_pay_moved === 'number';
+    return G.isObj(d.look) && typeof d.look.my_pay_held === 'number';
   }
   function offMoveEntry(id, t, lineId, ch) {
     var feed = chargeSource(t, ch) === 'PLAID' && /^p./.test(String(lineId)) ? String(lineId).slice(1) : null;
@@ -13164,6 +13416,7 @@
     if (!m.feed) { line.date = day; line.amount = amount; }
     var note = String(e.note || '').trim().slice(0, 60), had = was && was.merchant != null ? String(was.merchant).trim().slice(0, 60) : null;
     if (!m.feed && note && had !== note) line.merchant = note;
+    if (!was && !m.feed) Object.assign(line, offByOf(String(m.book)));
     return line;
   }
   function offMoveJobs(id, t, book) {
@@ -13207,7 +13460,7 @@
   function offMoveAsk(id, r, again) {
     var t = getTour(id), ch = t && G.isObj(t.charges) ? t.charges[r.chargeId] : null;
     if (!G.isObj(ch)) { toast('That entry isn’t there anymore.'); return; }
-    var what = [String(ch.merchant || 'This line'), money(G.num(ch.amount)), ch.date ? dayMD(ch.date) : ''].filter(Boolean).join(' · ');
+    var what = [String(ch.merchant || 'This line'), G.moneyCents(G.num(ch.amount)), ch.date ? dayMD(ch.date) : ''].filter(Boolean).join(' · ');
     var twin = bandTours(artistOf(t)).filter(function (e) {
       var x = e[0] !== id && G.isObj(e[1].charges) ? e[1].charges[r.chargeId] : null;
       return G.isObj(x) && x.category === 'offdebt';
@@ -13915,8 +14168,8 @@
           (sm.remainder > 0.004 ? money(sm.remainder) + ' to sort' : 'All sorted') +
           ' \u00b7 ' + (sm.owed > 0 ? money(sm.owed) + ' owed' : 'paid off'))),
       h('span', { class: 'amt num glow ex-proj', 'aria-label': 'Projected not set' }, '\u2014'),
-      creditCell(sm.remainder),
-      paidCell(sm.paidOff),
+      creditCell(sm.remainder - Math.min(sm.paidOff, sm.remainder)),
+      paidCell(Math.min(sm.paidOff, sm.remainder)),
       cashCell(0)
     ];
     if (!canSeeMoney(id)) return h('div', { class: 'row ex-row cc-row' }, inner);
@@ -14047,7 +14300,8 @@
     var tints = ['crew', 'lcard', 'bus', 'members', 'mbill', 'comm'];
     var biggest = Object.keys(byRow).filter(function (k) { return byRow[k] > 0.004; }).sort(function (a, b) { return byRow[b] - byRow[a]; });
     var parts = biggest.slice(0, tints.length).map(function (k, i) { return { label: rowName[k] || 'Other', v: byRow[k], cls: tints[i] }; });
-    var small = biggest.slice(tints.length).reduce(function (n, k) { return n + byRow[k]; }, 0);
+    var small = Object.keys(byRow).filter(function (k) { return biggest.slice(0, tints.length).indexOf(k) < 0; })
+      .reduce(function (n, k) { return n + byRow[k]; }, 0);
     if (small > 0.004) parts.push({ label: 'Other', v: small, cls: 'other' });
     return parts;
   }
@@ -14067,10 +14321,16 @@
     if (!(income > 0) && !(spent > 0)) return null;
     var net = r2(income - spent);
     var some = function (x) { return x.v > 0; };
+    var fit = function (parts, total) {
+      var whole = G.footTo(parts.map(function (x) { return x.v; }), total, 1);
+      parts.forEach(function (x, i) { if (!x.say) x.say = money(whole[i]); });
+    };
     var left = off ? [] : incParts.filter(some);
+    fit(left, income);
     var gap = money(Math.abs(Math.round(income) - Math.round(spent)));
     if (!off && net < 0) left.push({ label: 'Behind', v: -net, cls: 'behind', say: gap });
     var right = expParts.filter(some);
+    fit(right, spent);
     if (!off && net > 0) right.push({ label: 'Ahead', v: net, cls: 'ahead', say: gap });
     var W = 300, TRUNK = off ? Math.min(184, Math.max(72, right.length * 30)) : 184, PAD = 6;
     var XL = off ? 0 : 70, XM = off ? 8 : 118, XR = off ? 96 : 166, BAR = 8;
@@ -14135,7 +14395,7 @@
     var head = function (label, amount, cls) {
       return h('div', { class: 'xs-head ' + cls }, h('span', { class: 'xs-k' }, label), h('strong', { class: 'xs-v num' }, money(amount)));
     };
-    var say = function (parts) { return parts.map(function (x) { return x.label + ' ' + money(x.v) + (x.sub ? ' (' + x.sub + ' a show)' : ''); }).join(', '); };
+    var say = function (parts) { return parts.map(function (x) { return x.label + ' ' + (x.say || money(x.v)) + (x.sub ? ' (' + x.sub + ' a show)' : ''); }).join(', '); };
     var kind = off ? 'off' : 'on';
     var body = h('div', { class: 'xs-body' },
       h('div', { class: 'xs-heads' }, off ? null : head('Income', income, 'in'), head('Expenses', spent, 'out')),
@@ -14172,6 +14432,7 @@
     if (!partsOnly && !readOnly) tasksSeen(id, taskCharges(t).map(function (x) { return 'exp:' + x.ch.id; }));
     if (!partsOnly) healCatNames(id);
     if (off) c = Object.assign({}, c, { lines: c.lines.filter(function (l) { return l.key !== 'offdebt' && (l.key === 'commission' || !G.isDerived(l.key)); }) });
+    else c = Object.assign({}, c, { lines: c.lines.map(function (l) { return l.key === 'commission' && G.num(l.paid) < 0 ? Object.assign({}, l, { paid: 0 }) : l; }) });
     var figured = function (k) { return G.isDerived(k) && !(off && k === 'commission'); };
     var edit = canEditTour(id) && !readOnly;
     var chev = edit ? h('span', { class: 'ex-chev', 'aria-hidden': 'true' }) : null;
@@ -14181,22 +14442,25 @@
     var paidOutTotal = 0, creditTotal = 0;
     var byRow = {}, rowKey = '';
     var tally = function (v) { byRow[rowKey] = (byRow[rowKey] || 0) + v; };
+    var shown = { proj: [], credit: [], debit: [], cash: [] };
+    var keep = function (col, word, v, el) { shown[col].push({ el: el, word: word, v: v }); return el; };
+    var cellText = function (v) { return Math.abs(v) > 0.004 ? money(v) : '\u2014'; };
     var paidCell = function (v) {
       v = Math.round(G.num(v) * 100) / 100;
       paidOutTotal += v; tally(v);
-      return h('span', { class: 'amt num ex-done', 'aria-label': 'Debit ' + money(v) }, v > 0.004 ? money(v) : '\u2014');
+      return keep('debit', 'Debit', v, h('span', { class: 'amt num ex-done', 'aria-label': 'Debit ' + money(v) }, cellText(v)));
     };
     var cashTotal = 0;
     var cashCell = function (v) {
       v = Math.round(G.num(v) * 100) / 100;
       cashTotal += v; tally(v);
-      return h('span', { class: 'amt num ex-cash', 'aria-label': 'Cash ' + money(v) }, v > 0.004 ? money(v) : '\u2014');
+      return keep('cash', 'Cash', v, h('span', { class: 'amt num ex-cash', 'aria-label': 'Cash ' + money(v) }, cellText(v)));
     };
     var creditCell = function (v, over) {
       v = Math.round(G.num(v) * 100) / 100;
       creditTotal += v; tally(v);
-      return h('span', { class: 'amt num ex-paid' + (over ? ' over' : ''), 'aria-label': 'Credit ' + money(v) },
-        Math.abs(v) > 0.004 ? money(v) : '\u2014');
+      return keep('credit', 'Credit', v, h('span', { class: 'amt num ex-paid' + (over ? ' over' : ''), 'aria-label': 'Credit ' + money(v) },
+        cellText(v)));
     };
     var comm = G.normCommission(t && t.commission);
     var commSet = G.commissionLines(comm).some(function (cl) { return G.num(comm[cl.key].value) > 0; });
@@ -14213,11 +14477,11 @@
         exNums(h('span', { class: 'amt num glow ex-proj', 'aria-label': 'Projected ' + (unset ? 'not set' : money(l.projected)) },
           unset ? '\u2014' : money(l.projected)),
         creditCell(figured(l.key) ? 0 : l.creditOut != null ? l.creditOut : l.paid - paidPart(t, l.key), l.over > 0),
-        paidCell(l.paidOut != null ? l.paidOut : figured(l.key) ? l.paid - rbCash : debitPart(t, l.key) +
-          (l.key === 'card' ? G.cardDebts(t).reduce(function (n, d) { return n + G.cardSummary(d, t).paidOff; }, 0) : 0)),
+        paidCell(l.paidOut != null ? l.paidOut : figured(l.key) ? l.paid - rbCash : debitPart(t, l.key)),
         cashCell(figured(l.key) ? rbCash : l.cashOut != null ? l.cashOut : cashPart(t, l.key)),
         edit ? icon('chevron', 18) : null)
       ];
+      if (!unset) keep('proj', 'Projected', G.num(l.projected), inner[1].children[0]);
       if (!edit) return h('div', { class: 'row ex-row ex-fit' }, inner);
       return h('button', {
         class: 'row rowbtn ex-row ex-fit', type: 'button',
@@ -14237,16 +14501,15 @@
       if (l.key !== 'card' || !feedCards.length) { entries.push({ l: l, i: i }); return; }
       var inCards = feedCards.reduce(function (n, card) { return n + G.cardSummary(card, t).remainder; }, 0);
       var rest = Math.round((l.paid - inCards) * 100) / 100;
-      var otherPaid = debitPart(t, 'card') + cashPart(t, 'card') + G.cardDebts(t).filter(function (d) { return !G.isObj(d.feed); })
-        .reduce(function (n, d) { return n + G.cardSummary(d, t).paidOff; }, 0);
-      if (rest > 0.004 || l.projected != null || otherPaid > 0.004) {
+      var otherPaid = debitPart(t, 'card') + cashPart(t, 'card');
+      if (Math.abs(rest) > 0.004 || l.projected != null || Math.abs(otherPaid) > 0.004) {
         entries.push({ i: i, l: Object.assign({}, l, {
-          label: 'Credit card (other)', paid: Math.max(0, rest),
+          label: 'Credit card (other)', paid: rest,
           cards: (l.cards || []).filter(function (r) { return !r.feed; }),
           over: l.projected != null ? Math.max(0, rest - l.projected) : 0,
           paidOut: otherPaid - cashPart(t, 'card'),
           cashOut: cashPart(t, 'card'),
-          creditOut: Math.max(0, rest) - paidPart(t, 'card'),
+          creditOut: rest - paidPart(t, 'card'),
           left: l.projected != null ? Math.max(0, l.projected - Math.max(0, rest)) : l.left
         }) });
       }
@@ -14261,10 +14524,23 @@
       rows.push(lineRow(e.l));
       if (VENDOR_CATS[e.l.key]) vendorRows(id, t, e.l.key, edit).forEach(function (r) { rows.push(r); });
     });
+    var plainRow = function (key, label, credit, debit, cash) {
+      rowKey = key;
+      return h('div', { class: 'row ex-row ex-fit' },
+        h('div', { class: 'row-label' }, label),
+        exNums(h('span', { class: 'amt num glow ex-proj', 'aria-label': 'Projected not set' }, '\u2014'),
+          creditCell(credit), paidCell(debit), cashCell(cash), chev ? chev.cloneNode() : null));
+    };
+    var dayCash = G.rows(t && t.extras).reduce(function (n, x) { return n + G.num(x.amount); }, 0) + cashPart(t, G.DAY_BY_DAY);
+    var dayDebit = debitPart(t, G.DAY_BY_DAY);
+    if (Math.abs(G.num(c.dayByDay)) > 0.004) rows.push(plainRow('dayByDay', 'Day by day', G.num(c.dayByDay) - dayCash - dayDebit, dayDebit, dayCash));
+    G.otherDebts(t).forEach(function (d) {
+      if (Math.abs(G.num(d.amount)) > 0.004) rows.push(plainRow('loan:' + d.id, 'Owed: ' + (d.label || 'Debt'), G.num(d.amount), 0, 0));
+    });
     var named = (c.lines.some(function (l) { return l.key === 'members'; }) ? [['Members', 'members', 'members']] : []).concat([['Crew', 'crew', 'crew'], ['Bus', 'bus', 'bus']])
       .concat(feedCards.map(function (card) { return [cardShort(card.feed.name || card.label, cardBank(card)), 'feed:' + card.id, 'lcard']; }))
       .concat([['Commission', 'commission', 'comm'], ['Merch bill', 'merch', 'mbill']]);
-    var spentAll = Object.keys(byRow).reduce(function (n, k) { return n + Math.max(0, byRow[k]); }, 0);
+    var spentAll = Object.keys(byRow).reduce(function (n, k) { return n + byRow[k]; }, 0);
     var expParts = named.map(function (x) { return { label: x[0], v: Math.max(0, byRow[x[1]] || 0), cls: x[2] }; });
     expParts.push({ label: 'Other', cls: 'other',
       v: Math.max(0, spentAll - expParts.reduce(function (n, x) { return n + x.v; }, 0)) });
@@ -14272,12 +14548,24 @@
       var rowName = {};
       entries.forEach(function (e) { var k = e.l.label === 'Credit card (other)' ? 'card-other' : e.l.key; rowName[k] = bookPartName(k, e.l.label); });
       feedCards.forEach(function (card) { rowName['feed:' + card.id] = cardShort(card.feed.name || card.label, cardBank(card)); });
+      rowName.dayByDay = 'Day by day';
+      G.otherDebts(t).forEach(function (d) { rowName['loan:' + d.id] = bookPartName('loan:' + d.id, d.label || 'Loan'); });
       return bookParts(byRow, rowName);
     }
     if (partsOnly) return expParts;
     var projTotal = 0, paidTotal = 0;
     c.lines.forEach(function (l) { projTotal += l.projected || 0; paidTotal += l.paid; });
     rows.unshift(head);
+    var toCent = function (v) { return Math.round(v * 100) / 100; };
+    projTotal = toCent(projTotal); creditTotal = toCent(creditTotal); paidOutTotal = toCent(paidOutTotal); cashTotal = toCent(cashTotal);
+    [['proj', projTotal], ['credit', creditTotal], ['debit', paidOutTotal], ['cash', cashTotal]].forEach(function (col) {
+      var list = shown[col[0]], whole = G.footTo(list.map(function (x) { return x.v; }), col[1], 1);
+      list.forEach(function (x, i) {
+        if (Math.abs(x.v) <= 0.004) return;
+        x.el.textContent = money(whole[i]);
+        x.el.setAttribute('aria-label', x.word + ' ' + money(whole[i]));
+      });
+    });
     rows.push(h('div', { class: 'row total ex-total' },
       h('span', null, 'Total'),
       h('strong', { class: 'amt num glow ex-proj' }, money(projTotal)),
@@ -14557,7 +14845,8 @@
     try { r = await B.feedCall('unfile', { tourId: id, id: chargeId }); } catch (e) { r = null; }
     if (!r || !r.ok) {
       toast(r && r.error === 'not_allowed' ? 'Only the tour manager can undo card charges.'
-        : r && r.error === 'offline' ? NO_SIGNAL : 'Couldn\u2019t undo that. Try again.');
+        : r && r.error === 'offline' ? NO_SIGNAL
+        : r && r.status === 'not_on_tour' ? 'That charge isn\u2019t on a tour anymore.' : 'Couldn\u2019t undo that. Try again.');
       return null;
     }
     S.pile = {};
@@ -14850,6 +15139,8 @@
     var f = { use: was.use || null, how: was.how || null, keep: typeof was.keep === 'boolean' ? was.keep : null };
     var guess = fields.how && !f.how ? G.cpaPayHowGuess(line.x, line.book) : '';
     var split = fields.how ? G.crewSplitOf(line.x) : null;
+    var moveOk = !!fields.use && offMoveOk(bookId, r);
+    var mine = !!fields.use && !moveOk && offLineMine(getTour(bookId), bookId, line.x);
     var busy = false;
     var again = function () { if (back) setTimeout(back, 260); };
     openSheet(function () {
@@ -14885,11 +15176,19 @@
         h('h2', { class: 'sh-title' }, 'For your CPA'),
         h('p', { class: 'sh-sub' }, [r.label, G.moneyCents(G.num(line.x.amount)), r.date ? dayMD(r.date) : ''].filter(Boolean).join(' · ')),
         h('form', { class: 'sh-form', novalidate: true, onsubmit: save },
-          fields.use ? cpaAsk('Business or personal',
-            segmented(['Business', 'Personal'], f.use === 'business' ? 0 : f.use === 'personal' ? 1 : -1,
-              function (i) { f.use = i === 1 ? 'personal' : 'business'; }, 'Business or personal'),
-            f.use ? null : 'Not marked yet: counted as Business.') : null,
-          fields.use && offMoveOk(bookId, r) ? h('p', { class: 'hint' }, 'Yours alone, not the band\u2019s? Move to MY PAY takes it off the band\u2019s book.') : null,
+          fields.use ? (moveOk || mine ? cpaAsk('Business or personal',
+            segmented(['Business', moveOk ? 'Move to MY PAY' : 'Personal'], f.use === 'business' ? 0 : mine && f.use === 'personal' ? 1 : -1,
+              function (i) {
+                if (i === 1 && moveOk) { offMoveAsk(bookId, r, back); return; }
+                f.use = i === 1 ? 'personal' : 'business';
+              }, 'Business or personal'),
+            [!f.use ? 'Not marked yet: counted as Business.' : f.use === 'personal' && moveOk ? 'Marked Personal before: kept off the CPA totals.' : '',
+              moveOk ? 'Yours alone, not the band\u2019s? Move to MY PAY takes it off the band\u2019s book.'
+                : 'Yours alone, not the band\u2019s? This line can\u2019t move to MY PAY, so Personal keeps it off the CPA totals.'].filter(Boolean).join(' '))
+            : cpaAsk('Business',
+              chipRow(['Mark as Business'], f.use === 'business' ? 'Mark as Business' : null, function () { f.use = 'business'; }),
+              [!f.use ? 'Not marked yet: counted as Business.' : f.use === 'personal' ? 'Marked Personal before: kept off the CPA totals.' : '',
+                'Only the person this line belongs to can mark it personal or move it to their MY PAY.'].filter(Boolean).join(' '))) : null,
           fields.how ? cpaAsk('How it was paid', howChips,
             [guess ? 'Looks like ' + G.cpaHowLabel(guess) : '',
               split ? 'For the whole payment, split between ' + splitNames(line.book, split) : ''].filter(Boolean).join('. ') || null) : null,
@@ -15379,7 +15678,7 @@
       } else {
         patch = { charges: {} };
         patch.charges[newId()] = Object.assign({ date: f.date, merchant: named, amount: f.amount, category: key,
-          accounted: false, manual: true, paid: paid, cash: cash || undefined, createdAt: Date.now() }, whoId ? { crewId: whoId } : {});
+          accounted: false, manual: true, paid: paid, cash: cash || undefined, createdAt: Date.now() }, whoId ? { crewId: whoId } : {}, offByOf(id));
       }
       if (!(await catOnBook(id, key, true))) return;
       if (await api.update(id, patch)) {
@@ -16031,7 +16330,8 @@
         onclick: async function () {
           for (var i = 0; i < onTour.length; i++) {
             var m = onTour[i];
-            await addToCrewExpenses(id, m.name || m.username, m.tourRole, m.invitedEmail || m.email);
+            await addToCrewExpenses(id, m.name || m.username, m.tourRole, m.invitedEmail || m.email, undefined, undefined,
+              seatListName(m, S.crewCache[id].rows));
           }
           toast(plural(onTour.length, 'person') .replace('persons', 'people') + ' added to Crew \u2014 fill in their pay');
           setTimeout(function () { openCrewSheet(id); }, 250);
@@ -16647,6 +16947,7 @@
           patch = { charges: {} };
           patch.charges[line] = { date: st.date, merchant: label, amount: st.amount, category: 'crew', accounted: false,
             manual: true, paid: st.how !== 'spent', cash: st.how === 'cash', crewId: pid, createdAt: Date.now() };
+          Object.assign(patch.charges[line], offByOf(id));
         }
         if (await api.update(id, patch)) {
           delete S.drafts['exp:' + id];
@@ -17005,7 +17306,44 @@
   function tourBand(t, id, view, center) {
     return h('div', { class: 'headband slim' }, tourTopbar(t, id, view, center));
   }
-  function bookStrip(id, current, to, pick) {
+  function bookSide(v) {
+    return v === 'costs' || v === 'expenses' ? 'costs' : v === 'cards' ? 'cards'
+      : v === 'money' || v === 'income' || v === 'buyouts' ? 'money' : null;
+  }
+  function payTabWord(v) {
+    v = bookSide(v);
+    return v === 'cards' ? 'cards' : v === 'money' ? 'income' : 'expenses';
+  }
+  function bookTabNow(have) {
+    var v = bookSide(S.bookTab) || 'costs';
+    if (!Array.isArray(have) || have.indexOf(v) >= 0) return v;
+    var order = ['costs', 'cards', 'money'], at = order.indexOf(v);
+    for (var d = 1; d < order.length; d++) {
+      if (at - d >= 0 && have.indexOf(order[at - d]) >= 0) return order[at - d];
+      if (at + d < order.length && have.indexOf(order[at + d]) >= 0) return order[at + d];
+    }
+    return 'costs';
+  }
+  function bookTabSet(v) {
+    v = bookSide(v);
+    if (v) S.bookTab = v;
+    return v;
+  }
+  function tourBudget(id) {
+    if (canSeeMoney(id)) return { name: 'tour', id: id, view: bookTabNow() };
+    var r = { name: 'tour', id: id, view: 'costs' };
+    if (!roleKnown(id)) r.want = bookTabNow();
+    return r;
+  }
+  function bookWanted(id) {
+    var r = S.route;
+    if (!r || r.view !== 'costs' || !r.want || !roleKnown(id)) return null;
+    var want = canSeeMoney(id) ? bookSide(r.want) : null;
+    delete r.want;
+    return want && want !== 'costs' ? want : null;
+  }
+  function bookStrip(id, current, to, pick, keep) {
+    if (!keep) bookTabSet(current);
     return h('div', { class: 'vp-tabs pt-tabs bk-tabs three', role: 'tablist' }, BOOK_STRIP.map(function (t) {
       var v = t.view, on = v === current;
       return h('button', { class: 'vp-tab pt-tab' + (on ? ' on' : ''), type: 'button', role: 'tab', 'aria-selected': on ? 'true' : 'false',
@@ -17031,10 +17369,13 @@
   function payTabs(id, t, current) {
     var money = canSeeMoney(id), artist = artistOf(t);
     var to = function (view) { return function () { if (current !== view || S.route.view !== view) go({ name: 'tour', id: id, view: view }); }; };
-    var tabs = (money ? [{ label: t.name || 'Untitled tour', on: current === 'costs', go: to('costs') }] : [])
+    var tabs = (money ? [{ label: t.name || 'Untitled tour', on: current === 'costs', go: function () {
+      var v = bookTabNow();
+      if (current !== 'costs' || S.route.view !== v) go({ name: 'tour', id: id, view: v });
+    } }] : [])
       .concat([{ label: 'MY PAY', on: current === 'mypay', go: to('mypay') }]);
     if (money && artist && !isOffTour(t) && mayOpenOff(artist)) {
-      tabs.push({ label: 'OFF TOUR', on: false, go: function () { go(Object.assign(offRoute(artist, 'costs', id), { list: S.route.list || null, start: true })); } });
+      tabs.push({ label: 'OFF TOUR', on: false, go: function () { go(Object.assign(offRoute(artist, bookTabNow(), id), { list: S.route.list || null, start: true })); } });
     }
     return payTabRow(tabs);
   }
@@ -17049,16 +17390,23 @@
     S.myPay = S.myPay || {};
     var c = S.myPay[id] || (S.myPay[id] = { info: null, book: null, at: 0, asking: false, failed: false, none: false });
     if (S.mode !== 'db' || !B || !B.myPay) { c.none = true; return c; }
+    if (fresh && c.asking) c.again = true;
     if (!c.asking && (fresh || !c.at || Date.now() - c.at > 60000)) {
       c.asking = true;
       Promise.all([B.myPay(id), B.myPayBook(id)]).then(function (got) {
+        if (c.again) { c.again = false; c.asking = false; myPayInfo(id, true); return; }
         c.info = G.isObj(got[0]) ? got[0] : { crew: null, payments: [], tour: {} };
         c.book = G.isObj(got[1]) ? got[1] : {};
+        c.answered = null;
         c.failed = false; c.at = Date.now(); c.asking = false; render(true);
         var filing = function () { return !!(S.myPayFiling && S.myPayFiling[id]); };
         if (Object.keys(myPayFixes(id)).length && !filing()) setTimeout(function () { if (!filing()) myPayRefile(id, [], true); }, 0);
         if (isOffTour(getTour(id))) setTimeout(function () { offMoveSettle(id); }, 0);
-      }, function () { c.failed = true; c.at = Date.now(); c.asking = false; render(true); });
+      }, function () {
+        c.failed = true; c.at = Date.now(); c.asking = false;
+        if (c.again) { c.again = false; myPayInfo(id, true); }
+        render(true);
+      });
     }
     return c;
   }
@@ -17123,57 +17471,64 @@
       onclick: function () { go(Object.assign(offRoute(artist, 'mypay', id), { list: (S.route && S.route.list) || null })); } }, 'Open your own book between tours \u203a'));
   }
   function myPayTab(id) {
-    var k = S.payTab && S.payTab[id];
-    return k === 'cards' ? 'cards' : k === 'income' || k === 'buyouts' ? 'income' : 'expenses';
+    return payTabWord(bookTabNow());
   }
   function myPayStrip(id) {
     var tab = myPayTab(id);
     return bookStrip(id, tab === 'cards' ? 'cards' : tab === 'income' ? 'money' : 'costs', null, function (v) {
-      S.payTab = S.payTab || {};
-      S.payTab[id] = v === 'cards' ? 'cards' : v === 'money' ? 'income' : 'expenses';
+      bookTabSet(v);
       render(true);
     });
+  }
+  function myPayTourPays(c, t) {
+    if (isOffTour(t)) return [];
+    var info = c && G.isObj(c.info) ? c.info : {};
+    return info.payments != null ? info.payments : [];
   }
   function myPayBody(id, t, o) {
     o = o || {};
     var c = myPayInfo(id);
     if (c.none) return emptyState('MY PAY is for a signed-in tour', 'Once you’re signed in, your pay and your own spending for this tour live here.');
     var tab = myPayTab(id), lead = o.lead || null;
-    if (tab === 'cards') return [lead, myPayCardsNode(id)];
+    var ask = myPayAsk(id, c);
+    var asked = ask || !!(G.isObj(c.info) && G.isObj(c.info.ask) && c.info.ask.crewId && c.answered === c.info.ask.crewId);
+    if (tab === 'cards') return [ask, lead, myPayCardsNode(id)];
     if (c.failed && !c.info) {
       return [lead, h('div', { class: 'stack' }, h('p', { class: 'note' }, 'Couldn’t load your pay just now.'),
         h('button', { class: 'btn ghost block', type: 'button', onclick: function () { myPayInfo(id, true); render(true); } }, 'Try again'))];
     }
     if (!c.info) return [lead, h('p', { class: 'note pay-note' }, 'Loading…')];
-    var st = G.payStanding(c.info), book = G.payBook(c.book, { names: myPayNames(id) }), inc = G.payIncome(c.book, c.info.payments);
-    var off = isOffTour(t);
+    var off = isOffTour(t), tourPays = myPayTourPays(c, t);
+    var st = G.payStanding(c.info), book = G.payBook(c.book, { names: myPayNames(id) }), inc = G.payIncome(c.book, tourPays);
     var inCls = { tour: 'guar', weekly: 'merch', perdiem: 'inother', buyout: 'guar', bonus: 'merch', other: 'inother' };
     var exBy = {}, exName = {};
-    book.lines.forEach(function (l) { if (l.total > 0) { exBy[l.key] = l.total; exName[l.key] = bookPartName(l.key, l.label); } });
+    book.lines.forEach(function (l) { if (l.total) { exBy[l.key] = l.total; exName[l.key] = bookPartName(l.key, l.label); } });
     var chart = expenseSummary({ income: inc.gross, incomeBy: {},
-        incParts: inc.lines.filter(function (l) { return l.total > 0; }).map(function (l) { return { label: l.label, v: l.total, cls: inCls[l.key] || 'inother' }; }) },
+        incParts: inc.lines.filter(function (l) { return l.total > 0; }).map(function (l) { return { label: l.key === 'tour' ? 'Tour pay' : l.label, v: l.total, cls: inCls[l.key] || 'inother' }; }) },
       bookParts(exBy, exName), false)
       || h('p', { class: 'note pay-note' }, 'Nothing logged yet. Log your pay under Income and what you spend under Expenses, and the picture draws itself.');
-    var net = Math.round((inc.gross - book.spent) * 100) / 100;
+    var net = Math.round(inc.gross) - Math.round(book.spent);
     var netLine = h('p', { class: 'pay-sum' }, 'Gross ', h('strong', { class: 'num' }, money(inc.gross)), ' · spent ', h('strong', { class: 'num' }, money(book.spent)),
       ' · net ', h('strong', { class: 'num' + (net < 0 ? ' neg' : '') }, money(net)));
-    var pays = Array.isArray(c.info.payments) ? c.info.payments : [];
-    var series = G.payBalanceSeries(c.book, c.info.payments, G.tourToday());
+    var pays = Array.isArray(tourPays) ? tourPays : [];
+    var series = G.payBalanceSeries(c.book, tourPays, G.tourToday());
     var climb = series.length > 1 ? h('div', { class: 'chart-wrap pay-chart', role: 'img',
       'aria-label': 'Money in against what you spent, from ' + dayLong(series[0].date) + ' to ' + dayLong(series[series.length - 1].date) + '. Now ' +
         money(series[series.length - 1].income) + ' in and ' + money(series[series.length - 1].spent) + ' spent.' }) : null;
     if (climb) climb.__data = { series: series, nights: [], tourId: null };
     climb = climb || h('p', { class: 'note pay-note' }, 'The graph draws itself once there’s a payment or an entry to show.');
     if (tab === 'income') {
-      var incRows = inc.lines.filter(function (l) { return !(off && l.key === 'tour'); }).map(function (l) {
+      var incShown = inc.lines.filter(function (l) { return !(off && l.key === 'tour'); });
+      var incWhole = G.footTo(incShown.map(function (l) { return l.total; }), inc.gross, 1);
+      var incRows = incShown.map(function (l, li) {
         var tourLine = l.key === 'tour';
         return h('button', { class: 'row rowbtn ex-row', type: 'button', onclick: function () { if (tourLine) openMyPayments(c.info); else openMyPayIncome(id, l.key); } },
           h('div', { class: 'row-label' }, l.label, h('span', { class: 'hint' }, tourLine ? (pays.length ? plural(pays.length, 'payment') + ' logged by the tour manager' : 'none logged by the tour manager yet')
             : (l.n ? plural(l.n, 'entry') : ''))),
-          h('span', { class: 'amt num' + (l.total > 0 ? ' glow' : '') }, l.total > 0 ? money(l.total) : '—'), icon('chevron', 18));
+          h('span', { class: 'amt num' + (l.total > 0 ? ' glow' : '') }, Math.abs(l.total) > 0.004 ? money(incWhole[li]) : '—'), icon('chevron', 18));
       });
-      return [lead, chart, netLine,
-        off ? null : st.onCrew ? h('p', { class: 'note pay-note' }, 'Pay plan: ' + money(st.total) + ' for the tour · ' + money(st.paid) + ' logged as paid · ' + money(st.owed) + ' still owed')
+      return [ask, lead, chart, netLine,
+        off || asked ? null : st.onCrew ? h('p', { class: 'note pay-note' }, 'Pay plan: ' + money(st.total) + ' for the tour · ' + money(st.paid) + ' logged as paid · ' + money(st.owed) + ' still owed')
           : h('p', { class: 'note pay-note' }, 'You’re not on this tour’s crew list yet, so there is no pay plan here. The tour manager adds you under Crew with your email.'),
         h('h3', { class: 'mn-h mn-over' }, 'My income'),
         h('div', { class: 'ledger' }, incRows),
@@ -17185,8 +17540,11 @@
     var colHead = h('div', { class: 'row ex-head', 'aria-hidden': 'true' },
       h('span', null, ''), h('span', { class: 'ex-proj' }, 'Projected'), h('span', { class: 'ex-paid' }, 'Credit'),
       h('span', { class: 'ex-done' }, 'Debit'), h('span', { class: 'ex-cash' }, 'Cash'), h('span', { class: 'ex-chev', 'aria-hidden': 'true' }));
+    var cells = [];
     var cell = function (v, cls, label) {
-      return h('span', { class: 'amt num ' + cls, 'aria-label': label + ' ' + money(v) }, v > 0.004 ? money(v) : '—');
+      var el = h('span', { class: 'amt num ' + cls, 'aria-label': label + ' ' + money(v) }, Math.abs(v) > 0.004 ? money(v) : '—');
+      cells.push({ el: el, v: G.num(v), word: label });
+      return el;
     };
     var lines = book.lines.map(function (l) {
       return h('button', { class: 'row rowbtn ex-row ex-fit', type: 'button', onclick: function () { openMyPayCat(id, l.key); } },
@@ -17196,11 +17554,44 @@
         cell(l.credit, 'ex-paid', 'Credit'), cell(l.debit, 'ex-done', 'Debit'), cell(l.cash, 'ex-cash', 'Cash'),
         icon('chevron', 18)));
     });
-    return [lead, climb, netLine,
+    var cellWhole = G.footTo(cells.map(function (x) { return x.v; }), book.spent, 1);
+    cells.forEach(function (x, i) {
+      if (Math.abs(x.v) <= 0.004) return;
+      x.el.textContent = money(cellWhole[i]);
+      x.el.setAttribute('aria-label', x.word + ' ' + money(cellWhole[i]));
+    });
+    return [ask, lead, climb, netLine,
       h('h3', { class: 'mn-h mn-over' }, 'My expenses'),
       h('div', { class: 'ledger' }, colHead, lines),
       myPaySetupRow(id),
       myPayBottom(id, h('button', { class: 'btn quiet sm glow', type: 'button', onclick: function () { openMyPayCat(id, null); } }, icon('plus', 14), 'Add expense'))];
+  }
+  function myPayAsk(id, c) {
+    var a = c && G.isObj(c.info) && G.isObj(c.info.ask) ? c.info.ask : null;
+    if (!a || !a.crewId) return null;
+    if (c.answered === a.crewId) return null;
+    var B = window.GR_BACKEND, busy = !!c.answering;
+    var name = String(a.name || '').trim() || 'This name', title = String(a.title || '').trim();
+    var answer = function (yes) {
+      return function () {
+        if (c.answering || !B || !B.myPayConfirm) return;
+        c.answering = true; render(true);
+        B.myPayConfirm(id, a.crewId, yes).then(function (r) {
+          c.answering = false;
+          var why = r && r.why;
+          if (r && r.ok || why === 'gone' || why === 'no') c.answered = a.crewId;
+          else toast(why === 'taken' ? 'Someone else on the tour already said this is them.' : 'That didn’t go through. Try again in a moment.');
+          myPayInfo(id, true); render(true);
+        }, function () { c.answering = false; toast('That didn’t go through. Try again in a moment.'); render(true); });
+      };
+    };
+    return h('div', { class: 'card', style: 'margin-bottom:14px' },
+      h('h3', { class: 'mn-h' }, 'Is this you?'),
+      h('div', { class: 'row-label' }, name, title ? h('span', { class: 'hint' }, title) : null),
+      h('p', { class: 'note pay-note' }, 'The tour manager put this name on the tour’s crew list without an email. If it’s you, the pay they log for it shows up here.'),
+      h('div', { class: 'pt-two' },
+        h('button', { class: 'btn primary', type: 'button', disabled: busy || null, onclick: answer(true) }, 'This is me'),
+        h('button', { class: 'btn ghost', type: 'button', disabled: busy || null, onclick: answer(false) }, 'Not me')));
   }
   function myPayBuyouts(id, t) {
     var bo = buyoutsOn() ? myBuyoutDays(id, t) : null;
@@ -17219,13 +17610,9 @@
   function myPayCardsNode(id) {
     var c = myPayCardsInfo();
     if (c.none) return h('p', { class: 'note pay-note' }, 'Your own cards show up here once you’re signed in.');
-    if (!c.asideAsked) { c.asideAsked = true; myPayAsideLoad(); myPayPutBackKnown(); }
-    var t = id ? getTour(id) : null, between = !!t && isOffTour(t), into = t && !between ? (t.name || '') : '';
+    if (!c.asideAsked) { c.asideAsked = true; myPayPutBackKnown(); }
     var just = !!S.myPayJustLinked && Date.now() - S.myPayJustLinked < 120000;
-    return h('div', { class: 'feed-body mp-cards' },
-      h('p', { class: 'note' }, 'Only you see these cards. What lands on them goes into your own book' + (into ? ' for ' + into : '') +
-        (between ? ', never the band’s book.' : ', never the tour’s book or the band’s book.')),
-      myPayFeedEntry(id, just), myPayCardList(id, c));
+    return h('div', { class: 'feed-body mp-cards' }, myPayFeedEntry(id, just), myPayCardList(id, c));
   }
   function openMyPayIncome(id, key, keep) {
     var c = myPayInfo(id);
@@ -17290,7 +17677,7 @@
     return function () {
       if (myPayOnPage(id)) {
         var was = myPayTab(id);
-        S.payTab = S.payTab || {}; S.payTab[id] = 'cards';
+        bookTabSet('cards');
         if (sheet) closeSheet();
         if (was !== 'cards') render(true);
         return;
@@ -17333,7 +17720,7 @@
     var day = function (s) { s = String(s == null ? '' : s).slice(0, 10); return G.parseDay(s) ? s : ''; };
     var since = a ? day(a.since) : '', on = l ? day(l.date) : '';
     return !!(l && l.kind === 'charge' && l.status === 'filed' && a && a.asked === true && a.mode != null && a.mode !== 'off' &&
-      since && on && on >= since);
+      since && on && on >= since) && !(l.tour_id && myPastOf(l.tour_id));
   }
   async function myPayUnfile(bookId, lineId, label) {
     var B = window.GR_BACKEND, r = null, err = null;
@@ -17342,6 +17729,7 @@
       toast(err ? (err.code === 'offline' || err.error === 'offline' ? NO_SIGNAL : 'Couldn’t undo that. Try again.')
         : r && r.why === 'missing' ? 'Sending one back isn’t ready yet. Try again soon.'
         : r && r.why === 'card' ? 'That charge was not sent back: its card is not logging it any more.'
+        : r && r.why === 'kept' ? 'That charge is in your own book for a tour you’re no longer on, kept as it was. Nothing was changed.'
         : 'That charge isn’t filed in your MY PAY any more. Nothing was changed.', 5200);
       return false;
     }
@@ -17365,7 +17753,7 @@
     var id = trip.tourId && getTour(trip.tourId) ? trip.tourId : null;
     var c = await myPayCardsLoad(true);
     if (id) {
-      S.payTab = S.payTab || {}; S.payTab[id] = 'cards'; S.myPayJustLinked = Date.now();
+      bookTabSet('cards'); S.myPayJustLinked = Date.now();
       var bk = getTour(id);
       if (isOffTour(bk)) { if (!(S.route && S.route.name === 'offtour' && S.route.view === 'mypay')) go(offRoute(artistOf(bk), 'mypay')); }
       else if (!(S.route && S.route.name === 'tour' && S.route.id === id && S.route.view === 'mypay')) go({ name: 'tour', id: id, view: 'mypay' });
@@ -17615,17 +18003,8 @@
     });
     return out.sort(function (a, b) { return (a.kind === b.kind ? 0 : a.kind === 'credit' ? -1 : 1) || a.label.localeCompare(b.label); });
   }
-  function myPayLastRun(c) {
-    var banks = c && Array.isArray(c.banks) ? c.banks : [];
-    var says = banks.some(function (b) { return !!b && Object.prototype.hasOwnProperty.call(b, 'last_ok'); });
-    var best = 0;
-    banks.forEach(function (b) { var t = b && b.last_ok ? Date.parse(b.last_ok) : 0; if (t > best) best = t; });
-    if (c && c.checkedAt && c.checkedAt > best) best = c.checkedAt;
-    if (best) return new Date(best).toISOString();
-    return says ? '' : null;
-  }
   function myPayProblem(code) {
-    if (code === 'ITEM_LOGIN_REQUIRED' || code === 'PENDING_EXPIRATION') return 'A bank needs you to sign in again. Tap Details, then Linked Cards, then Reconnect.';
+    if (code === 'ITEM_LOGIN_REQUIRED' || code === 'PENDING_EXPIRATION') return 'A bank needs you to sign in again. Tap Linked Cards, then Reconnect.';
     return feedProblem(code);
   }
   function myPayResult(r, waiting) {
@@ -17667,14 +18046,6 @@
         return true;
       }
     });
-  }
-  function myPayAsideLoad() {
-    var B = window.GR_BACKEND, c = S.myPayCards;
-    if (!c || !B || !B.myPaySkipped || c.asideBusy) return;
-    c.asideBusy = true;
-    B.myPaySkipped().then(function (rows) {
-      c.aside = Array.isArray(rows) ? rows : null; c.asideBusy = false; myPayRedraw();
-    }, function () { c.asideBusy = false; });
   }
   function myPayFeedEntry(id, justLinked) {
     var c = myPayCardsInfo();
@@ -17726,18 +18097,12 @@
     var label = h('span', null, 'Refresh Card');
     var refreshBtn = h('button', { class: 'btn quiet glow feed-refresh', type: 'button',
       onclick: function () { myPayRefresh(id, refreshBtn, label); } }, icon('refresh', 18), label);
-    var more = [];
-    var aside = Array.isArray(c.aside) ? c.aside.length : null, wait = myPayWaiting().length + myPayDepositsWaiting().length;
-    more.push({ text: 'Linked Cards', sub: 'Your banks, your accounts and what each one logs', go: function () { openMyPayLinked(id, myPayToCards(id)); } });
-    more.push({ text: 'Left out and set aside',
-      sub: aside == null ? 'Lines you set aside, with a way to put them back.'
-        : 'Lines from your cards: ' + wait + ' waiting, ' + aside + ' set aside.',
-      go: function () { openMyPayAside(id, myPayToCards(id)); } });
-    var run = myPayLastRun(c);
     return h('div', { class: 'feed-entry' },
       h('div', { class: 'feed-bar' }, refreshBtn),
-      feedPanel({ at: run === null ? 'Tap Refresh Card to check' : feedCheckedWords(run), busy: c.asking, alerts: alerts, rows: rows, more: more }),
-      myPayActivityButton(id));
+      feedPanel({ alerts: alerts, rows: rows }),
+      myPayActivityButton(id),
+      cardsLinks([['Linked Cards', function () { openMyPayLinked(id, myPayToCards(id)); }],
+        ['Left out and set aside', function () { openMyPayAside(id, myPayToCards(id)); }]]));
   }
   function myPayCardList(id, c) {
     var unset = myPayUnset(c.accounts);
@@ -17784,7 +18149,6 @@
     label.textContent = 'Checking the cards…';
     var r = null;
     try { r = await B.feedCall('mypay_sync', { force: true }); } catch (e) { r = null; }
-    if (r && r.ok) { var c0 = myPayCardsInfo(); c0.checkedAt = Date.now(); }
     await myPayCardsLoad(true);
     btn.disabled = false;
     label.textContent = 'Refresh Card';
@@ -17801,7 +18165,6 @@
       var c = myPayCardsInfo();
       fillEl(host, [myPayFeedEntry(id, justLinked), myPayCardList(id, c)]);
     }
-    myPayAsideLoad();
     myPayPutBackKnown();
     openSheet(function () {
       draw();
@@ -17818,12 +18181,34 @@
     o = o || {};
     var B = window.GR_BACKEND;
     var again = function () { openMyPayLinked(id, back, o); };
-    var more = function () { return o.settings ? linkedMoreNode(again) : null; };
     var host = h('div', { class: 'feed-body' });
-    var foot = lcFoot(function () { openLinkedAbout(again, true); });
-    var connectBtn = function (label, cls) {
-      return h('button', { class: 'btn ' + (cls || 'primary') + ' block', type: 'button',
-        onclick: function () { connectCards(id, null, { myPay: true }); } }, icon('card', 18), label);
+    var connectBtn = function (label, lead) {
+      return lcAdd(label, function () { connectCards(id, null, { myPay: true }); }, lead);
+    };
+    var disconnectAll = function (banks) {
+      return lcAct('Disconnect every bank', function () {
+        confirmSheet({
+          onClose: function () { sheetBack(again); },
+          title: 'Disconnect every bank?',
+          body: 'Greenroom tells Plaid to delete each connection right away, and clears the charges still waiting from them. What you already filed stays in your MY PAY. You can connect again anytime.',
+          action: 'Disconnect', danger: true,
+          onConfirm: async function () {
+            var ok = true;
+            for (var k = 0; k < banks.length; k++) {
+              var r = null;
+              try { r = await B.feedCall('disconnect', { itemId: banks[k].id }); } catch (x) { r = null; }
+              if (!(r && r.ok)) ok = false;
+            }
+            toast(ok ? 'Banks disconnected' : feedProblem('unavailable'));
+            myPayCardsInfo(true);
+            return true;
+          }
+        });
+      }, true);
+    };
+    var openGear = function () {
+      var banks = myPayCardsInfo().banks;
+      openLinkedGear({ back: again, myPay: true, quiet: Array.isArray(banks) && banks.length ? [disconnectAll(banks)] : [] });
     };
     function draw() {
       var c = myPayCardsInfo();
@@ -17832,37 +18217,13 @@
       var mayConnect = connectsOwnCards();
       if (!banks.length && !accts.length) {
         fillEl(host, h('div', null, mayConnect ? [
-          h('p', { class: 'note' }, 'No bank or card is connected yet.'),
-          h('div', { class: 'stack lc-connect' }, connectBtn('Connect a bank or card'))]
-          : h('p', { class: 'note' }, 'No bank connected here yet. Connecting a bank here is for Managers for now.'), more(), foot));
+          lcLeadNote('No bank or card is connected yet.'),
+          connectBtn('Connect a bank or card', true)]
+          : h('p', { class: 'note' }, 'No bank connected here yet. Connecting a bank here is for Managers for now.')));
         return;
       }
       var parts = myPayBankCards(c, id, again, back);
-      if (mayConnect) parts.push(h('div', { class: 'stack lc-connect' }, connectBtn('Connect a bank or card', 'ghost')));
-      parts.push(more());
-      if (banks.length) {
-        parts.push(h('div', { class: 'lc-quiet' },
-          h('button', { class: 'lc-link danger', type: 'button', onclick: function () {
-            confirmSheet({
-              onClose: function () { sheetBack(back); },
-              title: 'Disconnect every bank?',
-              body: 'Greenroom tells Plaid to delete each connection right away, and clears the charges still waiting from them. What you already filed stays in your MY PAY. You can connect again anytime.',
-              action: 'Disconnect', danger: true,
-              onConfirm: async function () {
-                var ok = true;
-                for (var k = 0; k < banks.length; k++) {
-                  var r = null;
-                  try { r = await B.feedCall('disconnect', { itemId: banks[k].id }); } catch (x) { r = null; }
-                  if (!(r && r.ok)) ok = false;
-                }
-                toast(ok ? 'Banks disconnected' : feedProblem('unavailable'));
-                myPayCardsInfo(true);
-                return true;
-              }
-            });
-          } }, 'Disconnect every bank')));
-      }
-      parts.push(foot);
+      if (mayConnect) parts.push(connectBtn('Connect a bank or card'));
       fillEl(host, h('div', null, parts));
     }
     var fresh = myPayCardsInfo(true);
@@ -17870,7 +18231,7 @@
     openSheet(function () {
       draw();
       return [
-        lcHead(nothing ? 'Link a card' : 'Linked Cards', o.settings ? function () { openSettingsSheet(); } : null),
+        lcHead(nothing ? 'Link a card' : 'Linked Cards', null, lcGearBtn(openGear)),
         host
       ];
     }, { label: nothing ? 'Link a card' : 'Linked Cards', cls: 'lc-sheet', onClose: function () { sheetBack(back); } });
@@ -17899,7 +18260,7 @@
       var trouble = bk.status && bk.status !== 'ok';
       var mine = accts.filter(function (a) { return a.item_id && a.item_id === bk.id; });
       mine.forEach(function (a) { used[a.account_id] = true; });
-      out.push(lcBankCard({ name: bk.name || 'Bank', logo: bk.logo, synced: trouble ? '' : bk.last_ok || '', trouble: trouble ? bankNote(bk.status) : '',
+      out.push(lcBankCard({ name: bk.name || 'Bank', logo: bk.logo, ins: bk.ins, color: bk.color, synced: trouble ? '' : bk.last_ok || '', trouble: trouble ? bankNote(bk.status) : '',
         reconnect: trouble ? function () { closeSheet(); connectCards(id, bk.id, { myPay: true }); } : null,
         rows: mine.map(row),
         unlink: function () {
@@ -17916,7 +18277,7 @@
       if (!rest[k]) { rest[k] = []; names.push(k); }
       rest[k].push(a);
     });
-    names.forEach(function (k) { out.push(lcBankCard({ name: k, rows: rest[k].map(row), tag: 'MY PAY' })); });
+    names.forEach(function (k) { out.push(lcBankCard({ name: k, rows: rest[k].map(row), tag: 'MY PAY', other: k === 'Other accounts' })); });
     return out;
   }
   function openMyPayCardCharges(id, r, back) {
@@ -18031,7 +18392,7 @@
         delete myPayGoing[l.id];
         st.rows = st.rows.filter(function (x) { return x.id !== l.id; });
         toast('Back in your card charges');
-        myPayCardsInfo(true); myPayAsideLoad();
+        myPayCardsInfo(true);
       } else {
         toast('That line was not moved: its card is not logging it any more.', 5200);
       }
@@ -18403,7 +18764,7 @@
         myPayCardsInfo(true);
         saveFailed('cards:file', lastErr, backSay(failed));
       }
-      if (done.length) { if (keep) myPayInfo(id, true); else myPayAsideLoad(); }
+      if (done.length && keep) myPayInfo(id, true);
       if (keep && done.length) { topCat = null; markChips(); }
       if (keep && done.length && !quick) hornSplash('Expenses Logged', plural(done.length, 'charge') + ' added, ' + G.moneyCents(total));
       else if (!keep && done.length) toast(myPayAsideWords(done.length), 5200);
@@ -18580,7 +18941,6 @@
       catch (e) { delete myPayGoing[r.id]; r.armed = false; r.busy = false; r.redraw(); saveFailed('cards:file', e); return; }
       myPayGoing[r.id] = Date.now();
       toast(myPayAsideWords(1), 5200);
-      myPayAsideLoad();
       drop(r);
     }
     function rowEl(r) {
@@ -19246,8 +19606,9 @@
           return;
         }
         var fromList = !!id && S.route.name === 'tour' && S.route.id === id && !!S.route.list;
-        var to = t.book ? ((on && !framed && id) || fromList ? { name: 'tour', id: id, view: 'costs' } : budgetLanding(id))
+        var to = t.book ? (on && !framed && id ? { name: 'tour', id: id, view: 'costs' } : fromList ? tourBudget(id) : budgetLanding(id))
           : id ? { name: 'tour', id: id, view: t.view } : { name: 'offtour', view: t.view };
+        if (t.book && on && framed && bookSide(to.view)) { to = Object.assign({}, to, { view: 'costs' }); delete to.want; }
         var there = S.route.name === to.name && (S.route.id || null) === (to.id || null) && (S.route.view || 'details') === to.view &&
           (to.name !== 'offtour' || !to.artist || S.route.artist === to.artist);
         if (!on || !there) go(to);
@@ -19261,11 +19622,11 @@
       { label: away ? 'Greenroom' : 'Tour sections', cls: find ? 'all-dock' : null });
   }
   function budgetLanding(id) {
-    if (id && offFrameTour() !== id) return { name: 'tour', id: id, view: 'costs' };
+    if (id && offFrameTour() !== id) return tourBudget(id);
     var artist = offArtistFor(S.route && S.route.name === 'offtour' ? S.route.artist : '');
-    if (artist) return offRoute(artist, 'costs');
+    if (artist) return offRoute(artist, bookTabNow());
     if (seesBudgets()) return offRoute('', 'tours');
-    return id ? { name: 'tour', id: id, view: 'costs' } : offRoute('', 'mypay');
+    return id ? tourBudget(id) : offRoute('', 'mypay');
   }
   function tabButton(on, label, iconName, goThere, face) {
         var down = null;
@@ -19859,6 +20220,8 @@
       return h('div', { class: 'page tour has-tabs exp-page' }, tourBand(t, id, 'costs'), dbBanner(),
         h('p', { class: 'note pay-note' }, 'Loading\u2026'), tourTabs(id, 'costs'));
     }
+    var wanted = view === 'costs' ? bookWanted(id) : null;
+    if (wanted) { S.route.view = wanted; return viewTour(); }
     if (view === 'mypay' || (view === 'costs' && !canSeeMoney(id))) return viewMyPay(id, t);
     var c = G.calc(t);
     if (view === 'costs') {
@@ -19884,7 +20247,7 @@
       return h('div', { class: 'page tour has-tabs exp-page' },
         tourBand(t, id, 'daybyday'),
         h('h1', { class: 'tour-title' }, 'Day by day'),
-        bookStrip(id, 'costs'),
+        bookStrip(id, 'costs', null, null, true),
         dbBanner(),
         tabDays(id, t, c),
         tourTabs(id, 'costs'));
@@ -19893,7 +20256,7 @@
       return h('div', { class: 'page tour has-tabs exp-page' },
         tourBand(t, id, 'cashlog'),
         h('h1', { class: 'tour-title' }, 'MERCH CASH LOG'),
-        bookStrip(id, 'costs'),
+        bookStrip(id, 'costs', null, null, true),
         dbBanner(),
         cashLogBody(id, t),
         tourTabs(id, 'costs'));
@@ -20525,8 +20888,9 @@
       var hotelAddr = String((off && off.hotelAddress) || '').trim();
       when = offCity && kind !== 'Day off' ? kind : 'Today';
     }
+    var dayOff = restDay && kind === 'Day off';
     return [
-      restDay ? h('div', { class: 'ov-today' },
+      dayOff ? null : restDay ? h('div', { class: 'ov-today' },
         canEditTour(id) ? h('button', { class: 'iconbtn ov-edit', type: 'button',
           'aria-label': 'Edit today',
           onclick: function () { openTodaySheet(id, next ? next.id : null); } },
@@ -20552,16 +20916,21 @@
         next && next.venue ? h('div', { class: 'ov-venue' }, next.venue) : null,
         d.venueAddress ? h('a', { class: 'ov-addr', href: mapsHref(d.venueAddress),
           target: '_blank', rel: 'noopener' }, d.venueAddress) : null),
-      quote
+      quote && !dayOff
         ? h('div', { class: 'ov-msg' },
             h('span', { class: 'ov-msg-k' }, 'Tour Manager says'),
             h('blockquote', { class: 'ov-quote' }, h('p', null,
               '\u201c' + quote.replace(/^["\u201c\u201d']+|["\u201c\u201d']+$/g, '').trim() + '\u201d')))
         : null,
-      d.presale ? h('div', { class: 'ov-presale' },
+      d.presale && !dayOff ? h('div', { class: 'ov-presale' },
         h('span', { class: 'ov-msg-k' }, 'Pre-sale'),
         h('strong', { class: 'ov-presale-n num' }, d.presale)) : null,
-      h('div', { class: 'cal-open cal-grid cal-four' },
+      dayOff && canEditTour(id) ? h('div', { class: 'ov-offedit' },
+        h('button', { class: 'iconbtn ov-edit', type: 'button',
+          'aria-label': 'Edit the next show\u2019s message and pre-sale',
+          onclick: function () { openTodaySheet(id, next ? next.id : null); } },
+          icon('edit', 20))) : null,
+      h('div', { class: 'cal-open cal-grid cal-four' + (dayOff ? ' ov-dayoff' : '') },
         h('button', { class: 'btn quiet sm glow', type: 'button',
           onclick: function () { go({ name: 'tour', id: id, view: 'calendar' }); } },
           icon('calendar', 14), 'View calendar'),
@@ -20876,6 +21245,9 @@
     if (S.crewOut) { if (tourId) delete S.crewOut[tourId]; else S.crewOut = {}; }
     S.crewGen = S.crewGen || {};
     if (tourId) S.crewGen[tourId] = (S.crewGen[tourId] || 0) + 1; else S.crewGenAll = (S.crewGenAll || 0) + 1;
+    keptDrop('crew', tourId); keptDrop('fw', tourId);
+    if (S.fwKeptOf) { if (tourId) delete S.fwKeptOf[tourId]; else S.fwKeptOf = {}; }
+    if (S.membersShown) { if (tourId) delete S.membersShown[tourId]; else S.membersShown = {}; }
     if (!S.crewCache) return;
     if (tourId) delete S.crewCache[tourId]; else S.crewCache = {};
   }
@@ -20968,6 +21340,135 @@
     lsSet(key, JSON.stringify(all));
     return n;
   }
+  var KEEP_TOURS = 6, KEEP_MAX = 300e3;
+  function keptAll(what) {
+    var B = window.GR_BACKEND, uid = S.mode === 'db' && B && B.uid ? B.uid() : '';
+    if (!uid) return { key: '', all: {} };
+    var key = 'gr-keep-' + what + ':' + uid;
+    S.keptMem = S.keptMem || {};
+    if (!S.keptMem[key]) {
+      var got = null;
+      try { got = JSON.parse(lsGet(key) || 'null'); } catch (e) { got = null; }
+      S.keptMem[key] = G.isObj(got) ? got : {};
+    }
+    return { key: key, all: S.keptMem[key] };
+  }
+  function keptGet(what, tourId) {
+    var k = keptAll(what), e = tourId ? k.all[tourId] : null;
+    if (!G.isObj(e)) return null;
+    if (S.loaded && !getTour(tourId)) { keptDrop(what, tourId); return null; }
+    keptTouch(k, tourId);
+    return e.v == null ? null : e.v;
+  }
+  function keptTouch(k, tourId) {
+    var ks = Object.keys(k.all);
+    if (!k.key || ks[ks.length - 1] === tourId || !G.isObj(k.all[tourId])) return;
+    var e = k.all[tourId];
+    delete k.all[tourId];
+    k.all[tourId] = e;
+    S.keptSeen = S.keptSeen || {};
+    if (S.keptSeen[k.key + '|' + tourId]) return;
+    S.keptSeen[k.key + '|' + tourId] = true;
+    lsSet(k.key, JSON.stringify(k.all));
+  }
+  function fwSlim(v) {
+    if (!G.isObj(v) || !G.isObj(v.data) || !Array.isArray(v.data.people)) return v;
+    return { data: Object.assign({}, v.data, { people: v.data.people.map(function (p) { return G.isObj(p) && p.avatar ? Object.assign({}, p, { avatar: '' }) : p; }) }), tiers: v.tiers };
+  }
+  function keptPut(what, tourId, v) {
+    var k = keptAll(what);
+    if (!k.key || !tourId || v == null) return;
+    if (S.loaded && !getTour(tourId)) { keptDrop(what, tourId); return; }
+    var text = JSON.stringify(v);
+    if (G.isObj(k.all[tourId]) && JSON.stringify(k.all[tourId].v) === text) { keptTouch(k, tourId); return; }
+    delete k.all[tourId];
+    if (what === 'fw') Object.keys(k.all).forEach(function (x) { if (G.isObj(k.all[x])) k.all[x].v = fwSlim(k.all[x].v); });
+    k.all[tourId] = { v: JSON.parse(text), at: Date.now() };
+    var ks = Object.keys(k.all);
+    ks.slice(0, Math.max(0, ks.length - KEEP_TOURS)).forEach(function (x) { delete k.all[x]; });
+    if (lsSet(k.key, JSON.stringify(k.all))) return;
+    var one = {};
+    one[tourId] = k.all[tourId];
+    S.keptMem[k.key] = one;
+    if (!lsSet(k.key, JSON.stringify(one))) { S.keptMem[k.key] = {}; try { window.localStorage.removeItem(k.key); } catch (e) {   } }
+  }
+  function keptDrop(what, tourId) {
+    var k = keptAll(what);
+    if (!k.key) return;
+    if (!tourId) {
+      S.keptMem[k.key] = {};
+      try { window.localStorage.removeItem(k.key); } catch (e) {   }
+      return;
+    }
+    if (!G.isObj(k.all[tourId])) return;
+    delete k.all[tourId];
+    if (!lsSet(k.key, JSON.stringify(k.all))) { try { window.localStorage.removeItem(k.key); } catch (e) {   } }
+  }
+  function keptPrune() {
+    if (!S.loaded || S.dbError) return;
+    ['crew', 'fw'].forEach(function (what) {
+      var k = keptAll(what);
+      if (!k.key) return;
+      var gone = Object.keys(k.all).filter(function (id) { return !getTour(id); });
+      if (!gone.length) return;
+      gone.forEach(function (id) { delete k.all[id]; });
+      if (!lsSet(k.key, JSON.stringify(k.all))) { S.keptMem[k.key] = {}; try { window.localStorage.removeItem(k.key); } catch (e) {   } }
+    });
+  }
+  var CREW_KEPT = ['owner', 'role', 'manager', 'userId', 'name', 'username', 'tourRole', 'joined'];
+  function crewKeptRows(rows) {
+    if (!Array.isArray(rows) || !rows.every(function (m) { return G.isObj(m) && (m.name || m.username); })) return null;
+    return rows.map(function (m) {
+      var o = {};
+      CREW_KEPT.forEach(function (f) { if (m[f] != null) o[f] = m[f]; });
+      if (m.invitedEmail) o.invited = true;
+      return o;
+    });
+  }
+  function crewKept(tourId) {
+    var e = keptGet('crew', tourId);
+    return G.isObj(e) && Array.isArray(e.rows) ? e : null;
+  }
+  function crewKeep(tourId, rows, muteKnown, mute) {
+    S.crewMuteSeen = S.crewMuteSeen || {};
+    if (muteKnown) S.crewMuteSeen[tourId] = !!mute;
+    var kr = crewKeptRows(rows);
+    if (!kr) { keptDrop('crew', tourId); return; }
+    var was = S.crewMuteSeen[tourId];
+    if (was == null) { var old = crewKept(tourId); was = !!(old && old.mute); }
+    keptPut('crew', tourId, { rows: kr, mute: !!was });
+  }
+  function crewMuteSeen(tourId) {
+    if (S.crewMuteSeen && S.crewMuteSeen[tourId] != null) return S.crewMuteSeen[tourId];
+    var e = crewKept(tourId);
+    return !!(e && e.mute);
+  }
+  function crewRowsShown(tourId) {
+    var c = S.crewCache && S.crewCache[tourId];
+    if (c) return c.rows;
+    var rows = S.crewShown && S.crewShown[tourId];
+    if (Array.isArray(rows)) return rows;
+    var e = crewKept(tourId);
+    return e ? e.rows : null;
+  }
+  function fwShown(id) {
+    var B = window.GR_BACKEND, data = B.flowersFor(id);
+    if (data && !data.error) {
+      var tc = S.roadTiers && S.roadTiers[id], tiers = (tc && tc.by) || null;
+      S.fwKeptOf = S.fwKeptOf || {};
+      var was = S.fwKeptOf[id];
+      if (!was || was.data !== data || was.tiers !== tiers || S.fwKeptLast !== id) {
+        S.fwKeptOf[id] = { data: data, tiers: tiers };
+        S.fwKeptLast = id;
+        var v = { data: data, tiers: tiers };
+        if (JSON.stringify(v).length > KEEP_MAX) v = fwSlim(v);
+        keptPut('fw', id, v);
+      }
+      return data;
+    }
+    var kept = keptGet('fw', id);
+    return kept && G.isObj(kept.data) && Array.isArray(kept.data.people) ? kept.data : data;
+  }
   function sizeNameColumn(list, boxW) {
     var rowsEl = list.querySelectorAll('.crew-row');
     if (!rowsEl.length) return;
@@ -21049,9 +21550,14 @@
       list.style.removeProperty('--crew-side');
       sizeColumns();
     }
-    var shownRows = null, actsWait = false;
+    var shownRows = null, actsWait = false, muteLookOnly = false;
     function draw(rows) {
       shownRows = rows;
+      var server = S.crewCache && S.crewCache[tourId];
+      if (server && server.rows === rows) {
+        crewKeep(tourId, rows, !canEditTour(tourId) || buyoutRole(tourId) === 'track' || !!myActs().list, muteMayTap(tourId));
+      }
+      muteLookOnly = !server && !muteMayTap(tourId) && crewMuteSeen(tourId);
       if (!actsWait && canEditTour(tourId) && !myActs().list) {
         actsWait = true;
         var acts = myActs(), prevLoad = acts.onLoad;
@@ -21068,12 +21574,12 @@
       marks.ask(resizeColumns);
       list.replaceChildren.apply(list, rows.map(function (m) {
         var row = crewRow(m);
-        if (!manages || m.owner || !m.invitedEmail) return row;
+        if (!manages || m.owner || !(m.invitedEmail || m.invited)) return row;
         if (m.manager && !owns) return row;
         var who = m.name || m.username || m.email;
         return swipeable(row, null, who, { open: 196, cls: 'in-list kick', actions: [
-          { text: 'Edit', cls: 'edit', onClick: function () { openCrewEdit(tourId, m); } },
-          { text: 'Kick Off Tour', cls: 'kick', onClick: function () { kickOff(tourId, m.invitedEmail, who); } }
+          { text: 'Edit', cls: 'edit', onClick: function () { if (m.invitedEmail) openCrewEdit(tourId, m); } },
+          { text: 'Kick Off Tour', cls: 'kick', onClick: function () { if (m.invitedEmail) kickOff(tourId, m.invitedEmail, who); } }
         ] });
       }));
       requestAnimationFrame(sizeColumns);
@@ -21098,7 +21604,11 @@
       }
     }
     function muteIcon(m, title) {
-      if (!muteMayTap(tourId)) return null;
+      if (!muteMayTap(tourId)) {
+        if (!muteLookOnly) return null;
+        var was = muteRowHeld(tourId, m);
+        return h('button', { class: 'crew-call crew-mute' + (was ? ' on' : ''), type: 'button', tabindex: '-1', 'aria-hidden': 'true' }, icon('mute', 17));
+      }
       var held = muteRowHeld(tourId, m);
       var cls = 'crew-call crew-mute' + (held ? ' on' : '');
       return h('button', { class: cls, type: 'button', 'aria-pressed': held ? 'true' : 'false',
@@ -21112,7 +21622,7 @@
       var canOpen = !pending && m.userId && socialOn();
       var face = personPhoto({ name: title, avatar: (m.userId && faces[m.userId]) || '' }, 'xs crew-face');
       var named = nameWith(title, pending ? null : marks.mark(m.userId, false));
-      return h('div', { class: 'row crew-row' + (muteMayTap(tourId) && muteRowHeld(tourId, m) ? ' muted' : '') },
+      return h('div', { class: 'row crew-row' + ((muteMayTap(tourId) || muteLookOnly) && muteRowHeld(tourId, m) ? ' muted' : '') },
         h('div', { class: 'row-label crew-label' },
           canOpen ? h('button', { class: 'crew-face-btn', type: 'button', tabindex: '-1', 'aria-hidden': 'true',
             onclick: function () { openProfile(m.userId); } }, face) : face,
@@ -21137,10 +21647,9 @@
     var showing = null, leave = leaveTourLink(tourId, owns);
     function paint() {
       if (leave) leave.leaveFill();
-      var c = S.crewCache && S.crewCache[tourId];
-      var rows = c ? c.rows : (S.crewShown && S.crewShown[tourId]) || null;
+      var rows = crewRowsShown(tourId);
       var miss = S.crewMiss && S.crewMiss[tourId];
-      var now = rows ? JSON.stringify(rows) : miss && miss.n >= 2 ? 'failed' : 'loading';
+      var now = rows ? JSON.stringify(rows) + (S.crewCache && S.crewCache[tourId] ? '' : '|kept') : miss && miss.n >= 2 ? 'failed' : 'loading';
       if (now === showing) return;
       showing = now;
       if (rows) {
@@ -22343,11 +22852,11 @@
       if (sel) rail.scrollLeft = sel.offsetLeft - (rail.clientWidth - sel.offsetWidth) / 2;
     });
     return [
-      h('div', { class: 'sec-head', style: 'margin-top:8px;text-align:center;margin-bottom:4px' },
-        h('p', { class: 'gl-when glow' }, s.date === today ? 'Today\u2019s' : dayLong(s.date)),
-        h('h2', { class: 'sec-title hdr' }, 'Guest List')),
-      s.date === today ? null : h('p', { class: 'note', style: 'margin:0 2px 2px;text-align:center' },
-        [String(s.city || '').trim(), String(s.venue || '').trim()].filter(Boolean).join(' · ')),
+      h('div', { class: 'gl-top' },
+        h('h2', { class: 'gl-kicker' }, 'Guest List'),
+        h('p', { class: 'gl-when glow' }, s.date === today ? 'Today' : dayLong(s.date)),
+        s.date === today ? null : h('p', { class: 'gl-where' },
+          [String(s.city || '').trim(), String(s.venue || '').trim()].filter(Boolean).join(' · '))),
       lastCallRow(id, t),
       rowsOut.length
         ? guestLedger(rowsOut)
@@ -22377,7 +22886,7 @@
       acts.onLoad = function () { S.lcActsWait = false; if (prevLoad) prevLoad(); render(true); };
     }
     if (!lastCallMaySet(id)) {
-      return words ? h('p', { class: 'note gl-lc-note', style: 'margin:2px 2px 12px;text-align:center' },
+      return words ? h('p', { class: 'note gl-lc-note' },
         'Last call: ' + words + ', set for the whole tour') : null;
     }
     var r = G.lastCallRule(t);
@@ -22517,6 +23026,10 @@
       var spots = list.querySelectorAll('.' + k);
       var used = Array.prototype.some.call(spots, function (c) { return !c.classList.contains('empty'); });
       if (!used) Array.prototype.forEach.call(spots, function (c) { c.remove(); });
+    });
+    Array.prototype.forEach.call(rowsEl, function (r) {
+      var calls = r.querySelectorAll('.gl-mail, .gl-phone');
+      r.classList.toggle('gl-free', calls.length > 0 && Array.prototype.every.call(calls, function (c) { return c.classList.contains('empty'); }));
     });
     var measure = function (el, how) {
       if (!el) return 0;
@@ -23018,6 +23531,7 @@
     var B = window.GR_BACKEND;
     S.roadTiers = S.roadTiers || {};
     var c = S.roadTiers[tourId] || (S.roadTiers[tourId] = { by: null, at: 0, asking: false });
+    if (!c.by && !c.asking && !c.at) { var kept = keptGet('fw', tourId); if (kept && G.isObj(kept.tiers)) c.by = kept.tiers; }
     if (S.mode !== 'db' || !B || !B.roadTiers) return c;
     if (!c.asking && (!c.by || Date.now() - c.at > 300e3)) {
       c.asking = true;
@@ -23338,7 +23852,7 @@
   }
   function viewStats(id, t) {
     var B = window.GR_BACKEND, me = B && B.uid ? B.uid() : null;
-    var data = flowersOn() ? B.flowersFor(id) : null;
+    var data = flowersOn() ? fwShown(id) : null;
     var body = !flowersOn()
       ? emptyState('Flowers are for a signed-in tour', 'Once everyone’s signed in, each of you gets ' + FLOWERS_EACH + ' to give.')
       : !data ? fwLoading('Picking the flowers…')
@@ -23797,7 +24311,7 @@
   function daySheetNodes(s, off, o) {
     var lines = s ? sheetLinesShown(s) : G.offDayLines(off || {});
     if (o && o.onlySet && s) lines = lines.filter(function (x) { return !/^(Address|Venue phone): /.test(x); });
-    if (o && o.onlySet && !s) lines = lines.filter(function (x) { return !/^Hotel address: /.test(x); });
+    if (o && o.onlySet && !s) lines = lines.filter(function (x) { return !/^Hotel( address)?: /.test(x); });
     if (!lines.length) return null;
     var d = s && G.isObj(s.daySheet) ? s.daySheet : {};
     off = off || {};
@@ -23890,44 +24404,39 @@
         }))
       ];
     } else {
-      var offRows = [];
-      var offRow = function (label, v) {
-        if (!String(v || '').trim()) return;
-        offRows.push(h('div', { class: 'row ds-row' },
-          h('span', { class: 'row-label' }, label),
-          h('span', { class: 'ds-val' }, String(v).trim())));
+      var offHotel = String(off.hotel || '').trim(), offAddr = String(off.hotelAddress || '').trim();
+      var hotelSec = null;
+      if ((offHotel || offAddr) && !(o && o.onlySet)) {
+        hotelSec = h('section', { class: 'ds-sec' }, h('h3', { class: 'ds-sec-h' }, 'Hotel'),
+          h('div', { class: 'ledger' }, h('div', { class: 'row ds-row ds-hotel' },
+            h('a', { class: 'ds-val ds-link', target: '_blank', rel: 'noopener',
+              href: mapsHref(offHotel ? offHotel + (offAddr ? ', ' + offAddr : off.city ? ', ' + off.city : '') : offAddr) },
+              offHotel || offAddr),
+            offHotel && offAddr ? h('a', { class: 'vh-addr', target: '_blank', rel: 'noopener', href: mapsHref(offAddr) }, offAddr) : null)));
+      }
+      var offWords = function (title, v) {
+        v = String(v || '').trim();
+        return v ? h('section', { class: 'ds-sec' }, h('h3', { class: 'ds-sec-h' }, title), h('p', { class: 'ds-notes' }, v)) : null;
       };
-      if (String(off.hotel || '').trim()) {
-        var offAddr = String(off.hotelAddress || '').trim();
-        offRows.push(h('div', { class: 'row ds-row' },
-          h('span', { class: 'row-label' }, 'Hotel'),
-          h('a', { class: 'ds-val ds-link', target: '_blank', rel: 'noopener',
-            href: mapsHref(String(off.hotel).trim() + (offAddr ? ', ' + offAddr : off.city ? ', ' + off.city : '')) },
-            String(off.hotel).trim())));
-      }
-      offRow('Wifi', off.wifi);
-      offRow('Wifi password', off.wifiPass);
-      offRow('Rooms', off.rooms);
-      if (G.cleanTime(off.busCall)) {
-        offRows.push(h('div', { class: 'row ds-row' },
-          h('span', { class: 'row-label' }, 'Bus call'),
-          h('span', { class: 'ds-time num' }, G.cleanTime(off.busCall))));
-      }
-      var planRows = (Array.isArray(off.plans) ? off.plans : []).filter(function (r) {
-        return r && (String(r.label || '').trim() || String(r.time || '').trim());
-      }).map(function (r) {
-        return h('div', { class: 'row ds-row' },
-          h('span', { class: 'row-label' }, r.label || 'Plan'),
-          h('span', { class: 'ds-time num' }, r.time || 'TBA'));
-      });
+      var offBus = G.cleanTime(off.busCall);
       body = [
-        offRows.length ? h('div', { class: 'ledger' }, offRows) : null,
-        planRows.length ? [h('h3', { class: 'sh-h3' }, 'Reservations & plans'),
-          h('div', { class: 'ledger' }, planRows)] : null,
-        String(off.notes || '').trim() ? h('p', { class: 'note' }, off.notes) : null
+        hotelSec,
+        offWords('Flight', off.flight),
+        offWords('Activities', off.activities),
+        offBus ? h('section', { class: 'ds-sec' }, h('h3', { class: 'ds-sec-h' }, 'Schedule'),
+          h('div', { class: 'ledger ds-block' }, h('div', { class: 'row ds-row' },
+            h('span', { class: 'row-label' }, 'Bus call'),
+            h('span', { class: 'ds-time num' }, offBus)))) : null
       ];
     }
     return body;
+  }
+  function offNextShow(show) {
+    var city = String(show.city || '').trim(), venue = String(show.venue || '').trim();
+    return h('div', { class: 'ds-venue ds-next' },
+      h('span', { class: 'ds-next-k' }, 'NEXT SHOW'),
+      h('span', { class: 'ds-next-c' }, city || 'Show'),
+      venue ? h('span', { class: 'ds-next-v' }, venue) : null);
   }
   function detailsBody(id, t, only) {
     var got = overviewDays(t);
@@ -23980,7 +24489,12 @@
         disabled: S.dsIndex >= days.length - 1,
         onclick: function () { S.dsIndex += 1; render(true); } }, icon('chevron', 22)));
     var body = daySheetNodes(ss, off);
-    if (!body) {
+    var runShows = days.filter(function (x) { return x.show; });
+    var realOff = !s && !isRehearsalDay(t, entry.date) && runShows.length > 0 &&
+      entry.date > runShows[0].date && entry.date < runShows[runShows.length - 1].date;
+    var offBlank = realOff && !lines.length && !String(off.city || '').trim();
+    var nextShow = offBlank ? (runShows.filter(function (x) { return x.date > entry.date; })[0] || {}).show || null : null;
+    if (!body && !realOff) {
       body = emptyState('No day sheet added.', null);
       body.classList.add('ds-empty');
     }
@@ -23997,9 +24511,9 @@
           toast(ok ? 'Copied. Paste it in the group chat.' : 'Press and hold to copy');
         }
       }, icon('copy', 18));
-      var heads = s ? [].concat(body).map(function (n) { return n && n.querySelector ? n.querySelector('h3.ds-sec-h') : null; })
-        .filter(function (x) { return x && x.textContent.trim(); }) : [];
-      var head = heads.filter(function (x) { return x.textContent.trim() === 'Schedule'; })[0] || heads[0];
+      var heads = [].concat(body).map(function (n) { return n && n.querySelector ? n.querySelector('h3.ds-sec-h') : null; })
+        .filter(function (x) { return x && x.textContent.trim(); });
+      var head = (s ? heads.filter(function (x) { return x.textContent.trim() === 'Schedule'; })[0] : null) || heads[0];
       if (head) {
         var headRow = h('div', { class: 'ds-sec-hrow' });
         head.parentNode.insertBefore(headRow, head);
@@ -24050,19 +24564,21 @@
             icon('edit', 18), 'Fill in the off day')) : null;
     var importRow = canEditTour(id) ? h('div', { class: 'btnrow ov-actions', style: 'margin-top:14px' },
       tourImportControl(id)) : null;
-    var placeName = s ? String(s.venue || '').trim() : String((off && off.hotel) || '').trim();
-    var trashBtn = canEditTour(id) && lines.length ? h('button', {
+    var placeName = s ? String(s.venue || '').trim() : String((off && off.city) || '').trim();
+    var oldWords = !s && (['wifi', 'wifiPass', 'rooms', 'notes'].some(function (k) { return String(off[k] || '').trim(); }) ||
+      (Array.isArray(off.plans) ? off.plans : []).some(function (r) { return r && (String(r.label || '').trim() || String(r.time || '').trim()); }));
+    var trashBtn = canEditTour(id) && (lines.length || oldWords) ? h('button', {
       class: 'iconbtn sm ds-trash', type: 'button', 'aria-label': 'Clear this day sheet',
       onclick: function () { clearDaySheet(id, s, entry.date, off); } }, icon('trash', 18)) : null;
     var editBtn = canEditTour(id) ? h('button', {
       class: 'iconbtn sm ds-pencil', type: 'button', 'aria-label': lines.length ? 'Edit this day sheet' : 'Fill in this day sheet',
       onclick: function () { if (s) openDaySheetEditor(id, s.id); else openOffDaySheet(id, entry.date); } }, icon('edit', 18)) : null;
-    var dsAddr = s ? String((G.isObj(s.daySheet) ? s.daySheet : {}).venueAddress || '').trim()
-      : String((off && off.hotelAddress) || '').trim();
-    var offAddrOnly = !s && !placeName && !!dsAddr;
-    var placeEl = placeName || offAddrOnly || trashBtn || editBtn ? h('div', { class: 'ds-venue-row' },
-      editBtn, placeName || offAddrOnly ? h('div', { class: 'ds-venue glow' },
-        placeName ? h('span', { class: 'ds-venue-name' }, placeName) : null,
+    var dsAddr = s ? String((G.isObj(s.daySheet) ? s.daySheet : {}).venueAddress || '').trim() : '';
+    var offKind = !s && !placeName && lines.length ? (isRehearsalDay(t, entry.date) ? 'Rehearsal'
+      : realOff || !runShows.length ? 'Day off' : 'Travel day') : '';
+    var placeEl = placeName || nextShow || offKind || trashBtn || editBtn ? h('div', { class: 'ds-venue-row' + (!s && !body ? ' ds-alone' : '') },
+      editBtn, nextShow ? offNextShow(nextShow) : offKind ? h('div', { class: 'ds-venue ds-kind' }, offKind) : placeName ? h('div', { class: 'ds-venue glow' },
+        h('span', { class: 'ds-venue-name' }, placeName),
         dsAddr ? h('a', { class: 'vh-addr', href: mapsHref(dsAddr), target: '_blank', rel: 'noopener' }, dsAddr) : null,
         s && entry.date === today ? venueHistLine(id, s, true) : null) : null,
       trashBtn) : null;
@@ -24094,7 +24610,8 @@
         } else {
           patch = { offDays: {} };
           patch.offDays[date] = String(off.city || '').trim()
-            ? { city: off.city, hotel: '', hotelAddress: '', wifi: '', wifiPass: '', rooms: '', notes: '', plans: [] } : null;
+            ? { city: off.city, hotel: '', hotelAddress: '', flight: '', activities: '', busCall: '', wifi: '', wifiPass: '', rooms: '',
+              notes: '', plans: [] } : null;
         }
         var ok = await api.update(tourId, patch);
         if (ok) { toast('Day sheet cleared'); sendNotify(tourId, 'alarms', {}); }
@@ -24139,11 +24656,9 @@
     var t = getTour(tourId);
     var d0 = offDayFor(t, date);
     var f = {
-      city: d0.city || '', hotel: d0.hotel || '', wifi: d0.wifi || '', wifiPass: d0.wifiPass || '',
-      rooms: d0.rooms || '', notes: d0.notes || '', busCall: d0.busCall || '',
+      city: d0.city || '', hotel: d0.hotel || '', busCall: d0.busCall || '',
       hotelAddress: d0.hotelAddress || '',
-      plans: (Array.isArray(d0.plans) ? d0.plans : []).map(function (r) {
-        return { label: r.label || '', time: r.time || '' }; })
+      flight: d0.flight || '', activities: d0.activities || ''
     };
     var headName = h('p', { class: 'ds-ed-venue' }, '');
     var headAddr = h('span', { class: 'ds-ed-addr-t' }, '');
@@ -24173,32 +24688,23 @@
             if (key === 'city' || key === 'hotel' || key === 'hotelAddress') headSay();
           } });
       }
-      var plansHost = h('div', null);
-      function buildPlans() {
-        var kids = f.plans.map(function (r, i) {
-          return h('div', { class: 'af-row', style: 'margin-bottom:8px' },
-            h('input', { class: 'input', type: 'text', value: r.label, maxlength: 80,
-              placeholder: 'Dinner at\u2026', autocomplete: 'off',
-              oninput: function (e) { r.label = e.target.value; } }),
-            h('input', { class: 'input', type: 'text', value: r.time, maxlength: 20,
-              placeholder: 'Time', autocomplete: 'off', style: 'flex:0 0 110px',
-              oninput: function (e) { r.time = e.target.value; } }),
-            h('button', { class: 'iconbtn sm', type: 'button', 'aria-label': 'Remove',
-              onclick: function () { f.plans.splice(i, 1); buildPlans(); } }, icon('trash', 16)));
-        });
-        kids.push(h('button', { class: 'btn quiet block', type: 'button', style: 'min-height:42px',
-          onclick: function () { f.plans.push({ label: '', time: '' }); buildPlans(); } },
-          '+ Add a reservation or plan'));
-        plansHost.replaceChildren.apply(plansHost, kids);
+      function wordsIn(key, ph, rows) {
+        var fit = function (el) {
+          if (!el || !el.style || !el.scrollHeight) return;
+          el.style.height = 'auto';
+          el.style.height = (el.scrollHeight + 2) + 'px';
+        };
+        var ta = h('textarea', { class: 'input', rows: rows, maxlength: 500, value: f[key], placeholder: ph || '',
+          oninput: function (e) { f[key] = e.target.value; fit(e.target); } });
+        requestAnimationFrame(function () { fit(ta); });
+        return ta;
       }
       var submit = async function (e) {
         e.preventDefault();
         blurActive();
         var sheet = {
-          city: f.city.trim(), hotel: f.hotel.trim(), hotelAddress: f.hotelAddress.trim(), wifi: f.wifi.trim(),
-          wifiPass: f.wifiPass.trim(), rooms: f.rooms.trim(), notes: f.notes.trim(), busCall: String(f.busCall || '').trim(),
-          plans: f.plans.filter(function (r) { return r.label.trim() || r.time.trim(); })
-            .map(function (r) { return { label: r.label.trim(), time: r.time.trim() }; })
+          city: f.city.trim(), hotel: f.hotel.trim(), hotelAddress: f.hotelAddress.trim(), flight: f.flight.trim(),
+          activities: f.activities.trim(), busCall: String(f.busCall || '').trim()
         };
         var patch = { offDays: {} };
         patch.offDays[date] = sheet;
@@ -24207,21 +24713,16 @@
           if (sheet.busCall !== String(d0.busCall || '').trim() || sheet.city !== String(d0.city || '').trim()) sendNotify(tourId, 'alarms', {});
         }
       };
-      buildPlans();
       return [
         h('h2', { class: 'sh-title clean' }, 'Off day'),
         head,
         h('p', { class: 'sh-sub clean' }, 'Where the day lands, where everyone sleeps, and what\u2019s planned. Blank fields just don\u2019t show.'),
         h('form', { class: 'sh-form ds-editor', onsubmit: submit, novalidate: true },
-          field('City', textIn('city', 'Salt Lake City, UT')),
           field('Hotel', textIn('hotel', 'Hotel name')),
           field('Hotel address', textIn('hotelAddress', '250 W 600 S, Salt Lake City, UT')),
-          h('div', { class: 'field-row' },
-            field('Wifi', textIn('wifi', 'Network name')),
-            field('Rooms', textIn('rooms', 'Under D. Oliver'))),
-          field('Wifi password', textIn('wifiPass', 'Password')),
-          field('Reservations & plans', plansHost),
-          field('Anything else', textIn('notes', 'Optional')),
+          field('Flight', wordsIn('flight', 'Airline, flight number, times', 3)),
+          field('City we are staying in', textIn('city', 'Salt Lake City, UT')),
+          field('Activities', wordsIn('activities', 'What the day holds', 3)),
           h('h3', { class: 'ds-sec-h' }, 'Bus Check'),
           h('div', { class: 'field-row' },
             field('Bus call', clockIn(function () { return f.busCall; }, function (v) { f.busCall = v; }, '1', 'AM')), h('div', null)),
@@ -27479,16 +27980,25 @@
       return (nm && String(c.name || '').trim().toLowerCase() === nm) || (em && String(c.email || '').trim().toLowerCase() === em);
     });
   }
-  async function addToCrewExpenses(tourId, name, tourRole, email, member, ridesBus) {
+  function seatTypedName(m) {
+    return G.isObj(m) && !m.owner && typeof m.nameTyped === 'string' ? m.nameTyped.trim() : '';
+  }
+  function seatListName(m, rows) {
+    var nm = G.isObj(m) && m.owner ? String(m.name || '').trim() : seatTypedName(m);
+    if (!nm || !Array.isArray(rows)) return nm;
+    var k = G.whoKey(nm);
+    return rows.some(function (r) { return r !== m && G.isObj(r) && G.whoKey(seatListName(r)) === k; }) ? '' : nm;
+  }
+  async function addToCrewExpenses(tourId, name, tourRole, email, member, ridesBus, typed) {
     var t = getTour(tourId);
-    var nm = String(name || '').trim();
-    if (!t || !nm || NOT_CREW.test(String(tourRole || '')) || crewListed(t, nm, email)) return false;
+    var nm = String(name || '').trim(), byName = typeof typed === 'string' ? typed.trim() : nm;
+    if (!t || !nm || NOT_CREW.test(String(tourRole || '')) || crewListed(t, byName, email)) return false;
     var patch = { crew: {}, crewSeen: {} };
     var row = { name: nm, title: String(tourRole || '').trim(), pay: 0,
       email: String(email || '').trim().toLowerCase(), createdAt: Date.now() };
     if (member === true || member === false) row.member = member;
     if (ridesBus === false) row.ridesBus = false;
-    var was = helperNamed(t, nm);
+    var was = byName ? helperNamed(t, byName) : null;
     patch.crew[was ? was.id : newId()] = was ? helperTakeover(row) : row;
     patch.crewSeen[crewSeenKey(nm, email)] = true;
     return api.update(tourId, patch);
@@ -27515,8 +28025,9 @@
         var k = crewSeenKey(nm, em);
         if (!nm || NOT_CREW.test(String(m.tourRole || '')) || seen[k]) return;
         patch.crewSeen[k] = true;
-        if (crewListed(t, nm, em)) return;
-        var was = helperNamed(t, nm);
+        var by = seatListName(m, rows);
+        if (crewListed(t, by, em)) return;
+        var was = by ? helperNamed(t, by) : null;
         var joinRow = { name: nm, title: String(m.tourRole || '').trim(), pay: 0,
           email: String(em || '').trim().toLowerCase(), createdAt: Date.now() };
         patch.crew[was ? was.id : newId()] = was ? helperTakeover(joinRow) : joinRow;
@@ -27687,17 +28198,27 @@
               } }, icon('close', 16)));
         })));
     }
+    S.membersShown = S.membersShown || {};
+    var held = S.membersShown[tourId], drawn = false;
     function refresh() {
       B.members(tourId).then(function (rows) {
+        drawn = true;
+        var keep = S.membersShown[tourId] = { rows: rows, past: (S.membersShown[tourId] || {}).past || null };
         renderMembers(rows);
         if (runs && B.pastCrew) {
-          B.pastCrew().then(function (people) { renderPast(people, rows); })
+          B.pastCrew().then(function (people) { if (S.membersShown[tourId] === keep) keep.past = people; renderPast(people, rows); })
             .catch(function () { past.replaceChildren(); });
         }
       }).catch(function () {
+        if (drawn) return;
         list.replaceChildren(h('div', { class: 'row' },
           h('span', { class: 'hint' }, 'Couldn’t load the guest list.')));
       });
+    }
+    if (held && Array.isArray(held.rows)) {
+      drawn = true;
+      renderMembers(held.rows);
+      if (runs && held.past) renderPast(held.past, held.rows);
     }
     refresh();
     var formBox = h('div', null);
@@ -27899,16 +28420,24 @@
     if (!(S.mode === 'db' && B && B.crew && B.notify)) return;
     var cached = S.crewCache && S.crewCache[tourId] && S.crewCache[tourId].rows;
     Promise.resolve(cached || B.crew(tourId)).then(function (rows) {
-      var em = String(p.email || '').trim().toLowerCase(), nm = String(p.name || '').trim().toLowerCase();
-      var hit = (rows || []).filter(function (r) {
-        var re = String(r.invitedEmail || r.email || '').trim().toLowerCase();
-        return em && re === em;
-      })[0] || (rows || []).filter(function (r) {
-        var rn = String(r.name || r.username || '').trim().toLowerCase();
-        return nm && rn === nm;
-      })[0];
-      if (hit && hit.userId) sendNotify(tourId, 'payment', { to: hit.userId, id: String(line || '') });
+      var hit = crewPaidSeat(getTour(tourId), rows, p);
+      if (hit) sendNotify(tourId, 'payment', { to: hit.userId, id: String(line || '') });
     }).catch(function () {   });
+  }
+  function crewPaidSeat(t, rows, p) {
+    var low = function (v) { return String(v || '').trim().toLowerCase(); };
+    var em = low(p && p.email), nm = low(p && p.name);
+    var seats = (Array.isArray(rows) ? rows : []).filter(G.isObj);
+    var hits;
+    if (em) hits = seats.filter(function (r) { return low(r.invitedEmail || r.email) === em; });
+    else {
+      var crew = t && G.isObj(t.crew) ? t.crew : {};
+      var alike = Object.keys(crew).filter(function (k) {
+        return G.isObj(crew[k]) && !low(crew[k].email) && low(crew[k].name) === nm;
+      }).length;
+      hits = nm && alike === 1 ? seats.filter(function (r) { return low(seatTypedName(r)) === nm; }) : [];
+    }
+    return hits.length === 1 && hits[0].userId ? hits[0] : null;
   }
   function alertsBell(tourId) {
     var B = window.GR_BACKEND;
@@ -29971,7 +30500,8 @@
                 accounted: false, importId: importId, createdAt: Date.now() + k },
                 !extra && x.category === 'crew' && x.crewId && (where === offId && x.dest === 'off' ? x.offWho : crewPerson(getTour(where), x.crewId))
                   ? { crewId: where === offId && x.dest === 'off' ? x.offWho : x.crewId } : {},
-                extra ? extra(x) : {});
+                extra ? extra(x) : {},
+                offByOf(where));
               sum += G.num(x.amount);
             });
             var wt = getTour(where) || {};
@@ -31355,9 +31885,9 @@
   var MY_PAY_NOT_READY = 'Linking your own card isn\u2019t ready yet. Try again soon.';
   function feedProblemKnown(code) {
     var words = {
-      ITEM_LOGIN_REQUIRED: 'A bank needs you to sign in again. Open Settings, then Linked Cards, and tap Reconnect next to it.',
-      PENDING_EXPIRATION: 'A bank connection is about to expire. Open Settings, then Linked Cards, and tap Reconnect next to it.',
-      not_connected: 'No bank is connected yet. Open Settings, then Linked Cards, to connect one.',
+      ITEM_LOGIN_REQUIRED: 'A bank needs you to sign in again. Open the menu (the three lines), then Linked Cards, and tap Reconnect next to it.',
+      PENDING_EXPIRATION: 'A bank connection is about to expire. Open the menu (the three lines), then Linked Cards, and tap Reconnect next to it.',
+      not_connected: 'No bank is connected yet. Open the menu (the three lines), then Linked Cards, to connect one.',
       not_set_up: 'The Plaid keys aren\u2019t in place yet.',
       not_allowed: 'This account can\u2019t connect cards.',
       lock_changed: 'The lock password in Supabase changed, so Greenroom can\u2019t open the bank connections. Put the old one back, or disconnect and reconnect the banks.',
@@ -31412,33 +31942,19 @@
       dot, label, x.n != null ? h('span', { class: 'fp-n' }, String(x.n)) : null, icon('chevron', 16));
     return h('div', { class: 'row fp-row', role: x.tone === 'bad' ? 'status' : null }, dot, label, x.act || null);
   }
-  function feedMoreOpen() {
-    if (S.feedMore === undefined) S.feedMore = lsGet('gr-feedmore') === '1';
-    return !!S.feedMore;
-  }
   function feedPanel(o) {
     var keep = function (list) { return (list || []).filter(Boolean); };
-    var alerts = keep(o.alerts), rows = keep(o.rows), more = keep(o.more);
-    var tone = alerts.some(function (x) { return x.tone === 'bad'; }) ? 'bad'
-      : o.busy || alerts.length || rows.some(function (x) { return x.tone === 'ask'; }) ? '' : 'ok';
-    var sum = null, open = false;
-    if (o.at) {
-      open = more.length > 0 && feedMoreOpen();
-      var inner = [h('span', { class: 'fp-dot' + (tone ? ' ' + tone : ''), 'aria-hidden': 'true' }),
-        h('div', { class: 'row-label' }, o.at, o.calm ? h('span', { class: 'hint' }, o.calm) : null)];
-      sum = more.length
-        ? h('button', { class: 'row rowbtn fp-row fp-sum' + (open ? ' open' : ''), type: 'button', 'aria-expanded': open ? 'true' : 'false',
-            onclick: function () { S.feedMore = !open; lsSet('gr-feedmore', open ? '' : '1'); render(true); } },
-            inner, h('span', { class: 'fp-more' }, 'Details', icon('chevron', 14)))
-        : h('div', { class: 'row fp-row fp-sum' }, inner);
-    }
-    if (!sum && !alerts.length && !rows.length) return null;
-    return h('div', { class: 'ledger feed-panel' }, sum, alerts.map(fpRow), rows.map(fpRow),
-      open ? h('div', { class: 'fp-details' }, more.map(fpRow)) : null);
+    var alerts = keep(o.alerts), rows = keep(o.rows);
+    if (!alerts.length && !rows.length) return null;
+    return h('div', { class: 'ledger feed-panel' }, alerts.map(fpRow), rows.map(fpRow));
   }
-  function feedCheckedWords(iso) {
-    var ago = feedAgo(iso);
-    return ago === 'not yet' ? 'Not checked yet' : 'Last checked ' + ago;
+  function cardsLinks(links) {
+    return (links || []).filter(Boolean).map(function (l) {
+      return h('button', { class: 'linkbtn', type: 'button', style: 'display:block;margin-top:10px', onclick: l[1] }, l[0]);
+    });
+  }
+  function bankLinesLink(id) {
+    return acctOn() && createdTour(id) ? ['Bank lines', function () { openBankLines(id, null); }] : null;
   }
   function feedEntry(id) {
     var B = window.GR_BACKEND;
@@ -31456,37 +31972,25 @@
     }
     var row = S.feed.row || {};
     if (!row.switched_on) return addCard(function () { openFeedSheet(id); });
-    var n = feedWaiting(id).length;
     var label = h('span', null, 'Refresh Card');
-    var sw = cardsSwitch(id, getTour(id));
-    var pile = sw && sw.side === 'off' ? sw.bookId : id;
     var refreshBtn = h('button', { class: 'btn quiet glow feed-refresh', type: 'button',
-      onclick: function () { if (feedLogs(id)) refreshCards(id, refreshBtn, label, pile); else openFeedSheet(id); } },
+      onclick: function () { if (feedLogs(id)) refreshCards(id, refreshBtn, label); else openFeedSheet(id); } },
       icon('refresh', 18), label);
     if (incomeReady(id)) ensureIncomeNew(id);
     var depositsItem = null;
     if (incomeReady(id) && S.incomeNew && S.incomeNew.failed && !S.incomeBusy) {
-      depositsItem = { tone: 'bad', text: 'Couldn\u2019t check the deposits.',
+      depositsItem = { tone: 'bad', text: 'Couldn’t check the deposits.',
         act: fpAct('Try again', function () { S.incomeNew = null; ensureIncomeNew(id); render(true); }) };
     }
     var acct = acctParts(id);
     var alerts = [S.feed.failed ? feedFailedItem() : null].concat(acct.alerts, [depositsItem]);
-    if (!isOffTour(getTour(id))) {
-      return h('div', { class: 'feed-entry' },
-        h('div', { class: 'feed-bar' }, refreshBtn),
-        feedPanel({ alerts: alerts, rows: acct.rows.filter(function (x) { return !x.also; }) }),
-        sw ? cardsSwitchRow(sw) : null,
-        cardActivityButton(pile),
-        depositsLoggedLink(id));
-    }
+    var book = isOffTour(getTour(id));
     return h('div', { class: 'feed-entry' },
       h('div', { class: 'feed-bar' }, refreshBtn),
-      feedPanel({ at: feedCheckedWords(row.last_run), calm: acct.calm, busy: acct.busy,
-        alerts: alerts,
-        rows: acct.rows,
-        more: acct.more.concat([{ text: 'Catch up on missed payments', go: function () { openCatchUp(id); } }]) }),
+      feedPanel({ alerts: alerts, rows: book ? acct.rows : acct.rows.filter(function (x) { return !x.also; }) }),
       cardActivityButton(id),
-      depositsLoggedLink(id));
+      depositsLoggedLink(id),
+      book ? cardsLinks([bankLinesLink(id)]) : null);
   }
   var LOGIN_CODES = { ITEM_LOGIN_REQUIRED: true, PENDING_EXPIRATION: true };
   var PASSING_CODES = { INSTITUTION_DOWN: true, INSTITUTION_NOT_RESPONDING: true, RATE_LIMIT_EXCEEDED: true, PRODUCT_NOT_READY: true };
@@ -31530,7 +32034,8 @@
   }
   function acctSentence(d) {
     var by = G.isObj(d.by_status) ? d.by_status : {};
-    var bits = [[by.filed, 'on tours'], [by.waiting, 'waiting'], [by.left_out, 'left out'], [by.skipped, 'set aside'], [by.mypay, 'in MY PAY']]
+    var look = G.isObj(d.look) ? d.look : {}, held = typeof look.my_pay_held === 'number' ? Math.max(0, Math.min(G.num(by.filed), look.my_pay_held)) : 0;
+    var bits = [[G.num(by.filed) - held, 'on tours'], [by.waiting, 'waiting'], [by.left_out, 'left out'], [by.skipped, 'set aside'], [G.num(by.mypay) + held, 'in MY PAY']]
       .filter(function (x) { return G.num(x[0]) > 0; }).map(function (x) { return G.num(x[0]) + ' ' + x[1]; });
     if (!bits.length) return G.num(d.total) > 0 ? 'Bank lines in Greenroom: ' + G.num(d.total) + '.' : 'No bank lines are in Greenroom yet.';
     return (acctComplete(d) ? 'Every line your banks have sent is accounted for: ' : 'Bank lines in Greenroom: ') + bits.join(', ') + '.';
@@ -31579,7 +32084,7 @@
     if (a) openAccountQuestions([a], 0, tourId); else openFeedSheet(tourId);
   }
   function acctParts(id) {
-    var out = { alerts: [], rows: [], more: [], calm: '', busy: false };
+    var out = { alerts: [], rows: [] };
     if (!acctOn() || !createdTour(id)) return out;
     ensureAcct();
     var t = getTour(id), d = acctData(), last = feedLastStatus();
@@ -31603,9 +32108,7 @@
           render(true);
         });
       }));
-    } else if (!d) out.busy = true;
-    if (!d) out.calm = out.busy ? 'Checking the bank lines…' : '';
-    else if (acctComplete(d)) out.calm = 'Every line accounted for';
+    }
     if (t && !isOffTour(t) && !feedLogs(id) && G.tourStart(t)) {
       out.rows.push({ tone: 'ask', text: 'No card dates yet',
         sub: acctNewFeed(d) ? 'This tour’s bank lines are waiting under Off Tour or are left out.' : 'No bank lines come to this tour until they are set.',
@@ -31620,7 +32123,6 @@
         else go({ name: 'tour', id: x.id, view: 'cards' });
       } });
     });
-    out.more = acctMore(id);
     return out;
   }
   function acctMore(id, back) {
@@ -31720,11 +32222,14 @@
       open: function () { bankTaskOpen(tourId, where); } };
   }
   function bankTaskOpen(tourId, where) {
-    if (createdTour(tourId)) { go({ name: 'tour', id: tourId, view: 'cards' }); return; }
+    var mine = createdTour(tourId);
+    if (mine && where.some(function (x) { return x.id === tourId || x.kind === 'none' || x.kind === 'gone'; })) {
+      go({ name: 'tour', id: tourId, view: 'cards' }); return;
+    }
     var to = where.filter(function (x) { return (x.kind === 'tour' || x.kind === 'offtour') && createdTour(x.id); })
       .sort(function (a, b) { return b.n - a.n; })[0];
     if (to && to.kind === 'offtour') { go(offRoute(artistOf(getTour(to.id)), 'cards')); return; }
-    var own = to ? to.id : (allTourEntries(false).filter(function (e) { return createdTour(e[0]); })[0] || [])[0];
+    var own = to ? to.id : mine ? tourId : (allTourEntries(false).filter(function (e) { return createdTour(e[0]); })[0] || [])[0];
     if (own) go({ name: 'tour', id: own, view: 'cards' }); else openFeedSheet(null);
   }
   function offHeldFeeds() {
@@ -31733,7 +32238,7 @@
     var all = myPayAllLoad(), books = myPayBooksHeld(), ids = {};
     Object.keys(books).forEach(function (tid) {
       var en = G.isObj(books[tid].entries) ? books[tid].entries : {}, t = getTour(tid);
-      if (t && !isOffTour(t)) return;
+      if (t && (!isOffTour(t) || !createdTour(tid))) return;
       Object.keys(en).forEach(function (k) {
         var m = G.isObj(en[k]) ? en[k].moved : null;
         if (G.isObj(m) && m.book === tid && m.feed) ids[String(m.feed)] = true;
@@ -31902,7 +32407,9 @@
     }
     function lookPart(d) {
       var look = G.isObj(d.look) ? d.look : {};
-      var nGone = G.num(look.bank_gone), nChanged = G.num(look.bank_changed), nNone = G.num(look.no_tour);
+      var held = typeof look.my_pay_held === 'number';
+      var nGone = G.num(look.bank_gone), nChanged = G.num(look.bank_changed);
+      var nNone = held ? Math.max(0, G.num(look.no_tour) - G.num(look.my_pay_held)) : G.num(look.no_tour);
       if (!(nGone + nChanged + nNone > 0)) return null;
       var kids = [h('h3', { class: 'wn-h' }, 'Needs a look')];
       if (!st.look && !st.lookBusy && !st.lookFailed) loadLook(nNone > 0);
@@ -31942,7 +32449,7 @@
             : h('div', { class: 'row' }, h('span', { class: 'hint' }, 'Loading…'))));
       } else if (nNone > 0) {
         var orphanSet = orphanRows(mv), orphans = orphanSet.rows;
-        var nLost = typeof look.my_pay_moved === 'number' ? nNone : Math.max(0, nNone - orphanSet.moved);
+        var nLost = held ? nNone : Math.max(0, nNone - orphanSet.moved);
         var listed = Math.min(orphans.length, LO_PAGE);
         if (nLost > 0 || orphans.length) kids.push(h('div', { class: 'ledger rb-list' },
           head('Filed but on no tour', 'Marked as added to a tour, but no tour has it. Put it back and it waits in your card charges.'),
@@ -32063,8 +32570,8 @@
         kids.push(h('p', { class: 'sh-sub' }, 'Greenroom was leaving out money sent from your bank accounts: Zelle, wires and transfers. This reads each bank again from the start, as far back as the bank gives (about six months before you linked it), and brings in what was missed.'));
         kids.push(h('p', { class: 'sh-sub' }, 'Nothing already here comes in twice, and nothing is added to a tour until you sort it. It can take a minute.'));
         kids.push(h('p', { class: 'hint cu-before' }, acctNewFeed(acctData())
-          ? 'Before you start: every tour needs its card dates set (Settings, Linked Cards, Card dates). A payment outside every tour’s dates is not put in the pile: it is listed under Left out and set aside.'
-          : 'Before you start: every tour needs its card dates set (Settings, Linked Cards, Card dates). Payments outside every tour’s dates are not brought in.'));
+          ? 'Before you start: every tour needs its card dates set (in Settings, search Card dates). A payment outside every tour’s dates is not put in the pile: it is listed under Left out and set aside.'
+          : 'Before you start: every tour needs its card dates set (in Settings, search Card dates). Payments outside every tour’s dates are not brought in.'));
         kids.push(h('div', { class: 'stack', 'aria-busy': st.busy ? 'true' : null },
           h('button', { class: 'btn primary block', type: 'button', disabled: st.busy || null, onclick: run },
             st.busy ? 'Reading the bank…' : 'Read the bank again'),
@@ -33063,10 +33570,7 @@
     }, { label: sheetName, onClose: chargeInfoClose });
   }
   function tabCards(id, t) {
-    var home = id, sw = cardsSwitch(home, t);
-    if (sw && sw.side === 'off') { id = sw.bookId; t = getTour(id); }
     syncCards(id);
-    if (id !== home) syncCards(home);
     var waiting = feedWaiting(id);
     var cards = tourCards(t);
     if (isOffTour(t) && createdTour(id)) {
@@ -33128,8 +33632,8 @@
       h('div', { class: 'row-label' }, plural(unasked.length, 'new account'),
         h('span', { class: 'hint' }, 'Needs your answers')),
       icon('chevron', 18)));
-    var entry = feedEntry(home);
-    var loading = !!(S.pileBusy && S.pileBusy[home]) || (S.mode === 'db' && createdTour(home) && S.feed === undefined);
+    var entry = feedEntry(id);
+    var loading = !!(S.pileBusy && S.pileBusy[id]) || (S.mode === 'db' && createdTour(id) && S.feed === undefined);
     return [
       entry,
       rows.length ? h('div', { class: 'ledger cards-list' }, rows)
@@ -33195,7 +33699,7 @@
       feedPanel({
         alerts: [P.failed ? again() : null, feedItem],
         rows: [t && !isOffTour(t) && !feedLogs(id) && G.tourStart(t)
-          ? { tone: 'ask', text: 'No card dates yet', sub: 'No bank lines come to this tour until its creator sets them in Settings, Linked Cards.' } : null] }),
+          ? { tone: 'ask', text: 'No card dates yet', sub: 'No bank lines come to this tour until its creator sets them in the menu (the three lines), Linked Cards.' } : null] }),
       cardActivityButton(id));
   }
   async function tmRefresh(id, btn, label) {
@@ -33212,9 +33716,8 @@
     toast(feedResult(r));
     render(true);
   }
-  async function refreshCards(id, btn, label, into) {
+  async function refreshCards(id, btn, label) {
     var B = window.GR_BACKEND;
-    var pile = into || id;
     if (btn.disabled) return;
     btn.disabled = true;
     label.textContent = 'Checking the cards\u2026';
@@ -33231,8 +33734,15 @@
     }
     if (!r.test) await celebratePayments(id, G.num(r.paidOff));
     if (incomeReady(id)) { S.incomeNew = null; ensureIncomeNew(id); }
-    if (!r.test && feedWaiting(pile).length) openFeedReview(pile);
-    else toast(feedResult(r));
+    if (!r.test && feedWaiting(id).length) openFeedReview(id);
+    else {
+      var away = !r.test && G.num(r.waiting) > 0 ? feedElsewhereWords(id) : '';
+      toast(feedResult(r) + (away ? ' \u00b7 ' + away : ''), away ? 5200 : undefined);
+    }
+  }
+  function feedElsewhereWords(id) {
+    return feedWaitingWhere().filter(function (x) { return (x.kind === 'tour' || x.kind === 'offtour') && x.id !== id && createdTour(x.id); })
+      .map(function (x) { return x.n + ' waiting on ' + x.name; }).join(' \u00b7 ');
   }
   function openFeedReview(tourId, done, only, after) {
     var cards = [];
@@ -33263,35 +33773,6 @@
     var P = S.pile && S.pile[id];
     var unsure = createdTour(id) ? !!(S.feed && S.feed.failed) || !!(incomeReady(id) && S.incomeNew && S.incomeNew.failed) : !!(P && P.failed);
     return { charges: charges, deposits: deposits, unsure: unsure };
-  }
-  function cardsSwitch(id, t) {
-    if (!t || isOffTour(t) || S.mode !== 'db' || !createdTour(id) || !(S.feed && S.feed.row && S.feed.row.switched_on)) return null;
-    var artist = artistOf(t), book = artist ? offTourOf(artist) : null;
-    if (book && !createdTour(book)) book = null;
-    var pick = S.cardsSide;
-    return { id: id, bookId: book, side: book && pick && pick.id === id && pick.side === 'off' ? 'off' : 'on',
-      on: cardActivityCounts(id), off: book ? cardActivityCounts(book) : null };
-  }
-  function cardsSwitchRow(sw) {
-    var said = function (word, c) {
-      if (!c) return word + ', nothing waiting';
-      var n = c.charges + c.deposits;
-      return word + (n ? ', ' + n + ' waiting' : c.unsure ? ', could not be checked' : ', nothing waiting');
-    };
-    var tab = function (word, c) {
-      var n = c ? c.charges + c.deposits : 0;
-      return [h('span', { class: 'cd-w' }, word),
-        h('span', { class: 'cd-n' + (n ? ' on' : ''), 'aria-hidden': 'true' }, !n && c && c.unsure ? '\u2013' : String(n))];
-    };
-    var seg = segmented([tab('On Tour', sw.on), tab('Off Tour', sw.off)], sw.side === 'off' ? 1 : 0, function (i) {
-      S.cardsSide = { id: sw.id, side: i && sw.bookId ? 'off' : 'on' };
-      render(true);
-    }, 'Which new card activity to show');
-    var tabs = seg.querySelectorAll('.seg-b');
-    tabs[0].setAttribute('aria-label', said('On Tour', sw.on));
-    tabs[1].setAttribute('aria-label', said('Off Tour', sw.off));
-    if (!sw.bookId) tabs[1].disabled = true;
-    return h('div', { class: 'cd-seg' }, seg);
   }
   function openCardActivity(id) {
     var c = cardActivityCounts(id);
@@ -33587,35 +34068,87 @@
     await new Promise(function (r) { setTimeout(r, reduced() ? 2300 : 2900); });
     return true;
   }
-  function lcHead(title, back) {
+  function lcHead(title, back, gear) {
     return h('div', { class: 'lc-bar' },
       h('button', { class: 'ccd-round', type: 'button', 'aria-label': 'Back',
         onclick: function () { if (typeof back === 'function') back(); else closeSheet(); } }, icon('back', 22)),
-      h('h2', { class: 'sh-title lc-title' }, title));
+      h('h2', { class: 'sh-title lc-title' }, title),
+      gear ? h('span', { class: 'lc-gear-at' }, gear) : null);
   }
-  function lcInitials(name) {
-    var words = String(name || '').replace(/[^A-Za-z0-9 ]+/g, ' ').split(/\s+/).filter(function (w) { return w && !/^(of|the|and)$/i.test(w); });
-    return words.slice(0, 2).map(function (w) { return w.charAt(0).toUpperCase(); }).join('') || '?';
+  function lcGearBtn(open, dot) {
+    return h('button', { class: 'ccd-round lc-gear', type: 'button', onclick: open,
+      'aria-label': 'Linked Cards settings' + (dot ? ', a tour has no card dates yet' : '') + '. How Linked Cards work' },
+      icon('gear', 22), h('span', { class: 'sr' }, 'How Linked Cards work'),
+      dot ? h('span', { class: 'tf-gear-dot', 'aria-hidden': 'true' }) : null);
+  }
+  function lcAdd(label, onTap, lead) {
+    return h('div', { class: 'lc-connect' },
+      h('button', { class: 'lc-add' + (lead ? ' lead' : ''), type: 'button', onclick: onTap }, label));
+  }
+  function lcLeadNote(text) {
+    return h('p', { class: 'note lc-lead-note' }, text);
   }
   function lcLogoSrc(logo) {
     var s = typeof logo === 'string' ? logo.replace(/\s+/g, '') : '';
     return s && s.length <= 60000 && s.indexOf('iVBORw0KGgo') === 0 && /^[A-Za-z0-9+/]+={0,2}$/.test(s) ? 'data:image/png;base64,' + s : null;
   }
-  function lcLogo(name, logo) {
-    var src = lcLogoSrc(logo);
-    if (!src) return h('span', { class: 'lc-logo', 'aria-hidden': 'true' }, lcInitials(name));
-    var box = h('span', { class: 'lc-logo pic', 'aria-hidden': 'true' });
-    box.append(h('img', { src: src, alt: '', onerror: function () {
+  function bankArt(name, ins) {
+    var ids = { ins_56: 'chase', ins_10: 'amex', ins_127989: 'bofa' };
+    if (ins && Object.prototype.hasOwnProperty.call(ids, ins)) return 'banks/' + ids[ins] + '.png';
+    var n = ' ' + String(name || '').toLowerCase().replace(/&/g, ' and ').replace(/[^a-z0-9]+/g, ' ').trim() + ' ';
+    if (n === '  ') return null;
+    var list = [
+      ['applecard', / apple card /], ['marcus', /^ marcus /], ['goldmansachs', /^ goldman sachs /],
+      ['firstcitizens', /^ first citizens( bank)?( and trust)?( company)?( n a)? $/], ['citizens', /^ citizens( bank)?( n a)?( online)? $/],
+      ['citi', /^ citi(bank)?( n a)?( online| cards?| mobile| retail services)? $/], ['chase', /^ (jp ?morgan )?chase( bank)?( n a)?( online| card| cards)? $/],
+      ['bofa', /^ bank of america /], ['wellsfargo', /^ wells fargo /], ['capitalone', /^ capital one /], ['usbank', /^ u ?s bank /],
+      ['pnc', /^ pnc /], ['truist', /^ (truist|suntrust|bb and t|bbt)( bank)? /], ['td', /^ td( bank)?( n a| us)? $/],
+      ['discover', /^ discover( bank| card| financial)? $/], ['ally', /^ ally( bank| financial| invest)? $/],
+      ['navyfederal', /^ navy federal /], ['usaa', /^ usaa /], ['schwab', / schwab /], ['sofi', /^ sofi /], ['chime', /^ chime /],
+      ['fifththird', /^ (fifth third|5 3|53)( bank)? /], ['keybank', /^ key( ?bank)? $/],
+      ['huntington', /^ (the )?huntington( national)?( bank)?( n a)? $/], ['regions', /^ regions( bank| financial)? $/],
+      ['mtb', /^ m and t( bank)? /], ['bmo', /^ bmo( harris)?( bank)? /], ['synchrony', / synchrony /],
+      ['barclays', /^ barclay(s|card) /], ['amex', /^ (american express|amex) /],
+      ['fidelity', /^ fidelity( investments)?( netbenefits)? $/], ['varo', /^ varo( bank| money)? $/], ['current', /^ current $/],
+      ['paypal', /^ paypal /], ['venmo', /^ venmo /], ['cashapp', /^ cash app /], ['hsbc', /^ hsbc /],
+      ['frost', /^ frost( bank)? $/], ['santander', /^ santander /]];
+    for (var k = 0; k < list.length; k++) if (list[k][1].test(n)) return 'banks/' + list[k][0] + '.png';
+    return null;
+  }
+  function bankInk(color) {
+    var m = /^#([0-9a-fA-F]{2})([0-9a-fA-F]{2})([0-9a-fA-F]{2})$/.exec(String(color || ''));
+    if (!m) return '#1c1c1e';
+    var lum = (0.2126 * parseInt(m[1], 16) + 0.7152 * parseInt(m[2], 16) + 0.0722 * parseInt(m[3], 16)) / 255;
+    return lum > 0.7 ? '#1c1c1e' : '#' + m[1] + m[2] + m[3];
+  }
+  function bankLetter(name) {
+    var w = String(name || '').replace(/[^A-Za-z0-9 ]+/g, ' ').split(/\s+/).filter(function (x) { return x && !/^the$/i.test(x); });
+    return w.length ? w[0].charAt(0).toUpperCase() : '?';
+  }
+  function lcLogo(name, logo, o) {
+    o = o || {};
+    if (o.other) return h('span', { class: 'lc-logo grp', 'aria-hidden': 'true' }, icon('bank', 18));
+    var box = h('span', { class: 'lc-logo', 'aria-hidden': 'true' });
+    var srcs = [lcLogoSrc(logo), bankArt(name, o.ins)].filter(Boolean);
+    var letter = function () {
       box.classList.remove('pic');
-      fillEl(box, lcInitials(name));
-    } }));
+      box.style.color = bankInk(o.color);
+      fillEl(box, bankLetter(name));
+    };
+    var next = function () {
+      var src = srcs.shift();
+      if (!src) { letter(); return; }
+      box.classList.add('pic');
+      fillEl(box, h('img', { src: src, alt: '', onerror: next }));
+    };
+    next();
     return box;
   }
   function lcAcctLine(mask, kind) {
     return (mask ? '\u2022\u2022\u2022' + mask + ' | ' : '') + kind;
   }
   function lcAcctRow(o) {
-    var line = lcAcctLine(o.mask, o.kind) + (o.off ? ' \u00b7 Not logged' : '');
+    var line = lcAcctLine(o.mask, o.kind) + (o.off ? ' \u00b7\u00a0Not\u00a0logged' : '');
     return h('button', { class: 'lc-acct', type: 'button', onclick: o.open,
       'aria-label': o.name + ', ' + line + (o.said ? ', ' + o.said : o.ask ? ', needs your answers' : '') + '. Its answers' },
       h('span', { class: 'lc-acct-ic', 'aria-hidden': 'true' }, icon(o.kind === 'Credit' ? 'card' : 'bank', 22)),
@@ -33630,7 +34163,7 @@
     var said = o.name + (o.tag ? ' (' + o.tag + ')' : '');
     return h('section', { class: 'lc-card', 'aria-label': said },
       h('div', { class: 'lc-bank' },
-        lcLogo(o.name, o.logo),
+        lcLogo(o.name, o.logo, { ins: o.ins, color: o.color, other: o.other }),
         h('span', { class: 'lc-bank-t' },
           h('span', { class: 'lc-bank-name' }, o.name),
           o.trouble ? h('span', { class: 'lc-sync over' }, o.trouble)
@@ -33639,7 +34172,7 @@
       o.rows && o.rows.length ? h('div', { class: 'lc-accts' }, o.rows) : null,
       o.unlink || o.add ? h('div', { class: 'lc-foot' },
         o.unlink ? h('button', { class: 'lc-unlink', type: 'button', 'aria-label': 'Unlink ' + said, onclick: o.unlink }, 'Unlink') : h('span'),
-        o.add ? h('button', { class: 'lc-pill', type: 'button', onclick: o.add }, 'Add Account') : null) : null);
+        o.add ? h('button', { class: 'lc-add', type: 'button', onclick: o.add }, 'Add Account') : null) : null);
   }
   function lcRow(label, sub, go_, o) {
     o = o || {};
@@ -33652,16 +34185,15 @@
     return code === 'ITEM_LOGIN_REQUIRED' || code === 'PENDING_EXPIRATION' ? 'Needs you to sign in again'
       : code === 'lock_changed' ? 'Can\u2019t be opened (lock password changed)' : 'Having trouble \u2014 try Refresh';
   }
-  function lcFoot(about) {
-    return h('div', { class: 'lc-foot-note' },
-      h('p', null, 'Read-only through Plaid: Greenroom can see charges, never move money.'),
-      h('button', { class: 'lc-link', type: 'button', onclick: about }, 'How Linked Cards work'));
-  }
-  function openLinkedAbout(back, myPay) {
+  function openLinkedGear(o) {
+    var title = 'Linked Cards settings', back = o.back, myPay = o.myPay;
+    var rows = (o.rows || []).filter(Boolean), quiet = (o.quiet || []).filter(Boolean);
     var p = function (t) { return h('p', null, t); };
     openSheet(function () {
       return [
-        lcHead('How Linked Cards work', back),
+        lcHead(title, back),
+        rows.length ? h('div', { class: 'lc-group' }, rows) : null,
+        h('h3', { class: 'sh-h3 lc-about-h' }, 'How Linked Cards work'),
         h('div', { class: 'lc-about' },
           myPay ? p('Greenroom reads what your own cards spend through Plaid and lists it for you to file in your MY PAY. ' +
               'Only you see these cards: they never reach the tour’s books.')
@@ -33669,9 +34201,13 @@
                 'A tour’s Tour Manager can sort its charges with you. Money coming in is only matched to shows on accounts you mark for income.'),
               p('Your MY PAY cards: only you see these. What they spend goes into your own MY PAY, never a tour’s books.')],
           p('Read-only through Plaid: Greenroom can see charges, never move money. Your bank password goes only to Plaid or your bank.'),
-          h('a', { href: IN_SHELL ? SITE_URL + 'privacy.html' : 'privacy.html', target: '_blank', rel: 'noopener' }, 'How Greenroom handles your card data'))
+          h('a', { href: IN_SHELL ? SITE_URL + 'privacy.html' : 'privacy.html', target: '_blank', rel: 'noopener' }, 'How Greenroom handles your card data')),
+        quiet.length ? h('div', { class: 'lc-group lc-acts' }, quiet) : null
       ];
-    }, { label: 'How Linked Cards work', cls: 'lc-sheet', onClose: function () { sheetBack(back); } });
+    }, { label: title, cls: 'lc-sheet', onClose: function () { sheetBack(back); } });
+  }
+  function lcAct(label, onTap, danger) {
+    return h('button', { class: 'lc-act' + (danger ? ' danger' : ''), type: 'button', onclick: onTap }, label);
   }
   function waitingCleared(lead, calm) {
     var n = S.feed && !S.feed.failed && Array.isArray(S.feed.items) ? Math.max(S.feed.items.length, G.num(S.feed.total)) : null;
@@ -33700,7 +34236,7 @@
       var trouble = bk.status && bk.status !== 'ok';
       var mine = accts.filter(function (a) { return a.bank && a.bank === bk.id; });
       mine.forEach(function (a) { used[a.id] = true; });
-      return lcBankCard({ name: bk.name || 'Bank', logo: bk.logo, synced: trouble ? '' : feedBankSynced(bk, st), trouble: trouble ? bankNote(bk.status) : '',
+      return lcBankCard({ name: bk.name || 'Bank', logo: bk.logo, ins: bk.ins, color: bk.color, synced: trouble ? '' : feedBankSynced(bk, st), trouble: trouble ? bankNote(bk.status) : '',
         reconnect: trouble ? function () { closeSheet(); connectCards(tourId, bk.id); } : null,
         rows: mine.map(row),
         unlink: function () {
@@ -33722,7 +34258,7 @@
         add: function () { closeSheet(); connectCards(tourId, null, { addTo: bk.name || '' }); } });
     });
     var rest = accts.filter(function (a) { return !used[a.id]; });
-    if (rest.length) out.push(lcBankCard({ name: 'Other accounts', rows: rest.map(row) }));
+    if (rest.length) out.push(lcBankCard({ name: 'Other accounts', rows: rest.map(row), other: true }));
     return out;
   }
   function openFeedSheet(tourId, askNew, o) {
@@ -33826,12 +34362,11 @@
       body.classList.remove('busy');
       await load();
     }
-    function connectBtn(label, cls) {
-      return h('button', { class: 'btn ' + (cls || 'primary') + ' block', type: 'button',
-        onclick: function () { closeSheet(); connectCards(tourId); } }, icon('card', 18), label);
+    function connectBtn(label, lead) {
+      return lcAdd(label, function () { closeSheet(); connectCards(tourId); }, lead);
     }
     function disconnectAll() {
-      return h('button', { class: 'lc-link danger', type: 'button', onclick: function () {
+      return lcAct('Disconnect every bank', function () {
         var c = S.myPayCards, keepsMine = !!(c && !c.none && (c.banks || []).length);
         confirmSheet({
           title: 'Disconnect every bank?',
@@ -33839,6 +34374,7 @@
               'Greenroom tells Plaid to delete each connection right away.') +
             'Charges already on your tours stay. You can connect again anytime.' +
             (keepsMine ? ' Your MY PAY cards stay connected.' : ''),
+          onClose: function () { sheetBack(back); },
           action: 'Disconnect', danger: true,
           onConfirm: async function () {
             var r = await B.feedCall('disconnect');
@@ -33846,19 +34382,38 @@
             return true;
           }
         });
-      } }, 'Disconnect every bank');
+      }, true);
     }
     var back = function () { openFeedSheet(tourId, false, o); };
-    var foot = lcFoot(function () { openLinkedAbout(back); });
-    function mine() { return tourId ? null : [myPayLinkedNode(back), linkedMoreNode(back)]; }
+    function mine() { return tourId ? null : myPayLinkedNode(back); }
+    function banksUp() { return !!(st && st.ok && !st.needsConnect); }
+    function gearRows() { return tourId || !banksUp() ? null : cardDatesRow(back); }
+    function openGear() {
+      openLinkedGear({ back: back, rows: [gearRows()], quiet: banksUp() ? [
+        st.switchedOn ? lcAct('Turn linked cards off', function (e) {
+          var btn = e.currentTarget;
+          btn.disabled = true;
+          B.feedCall('setup', { on: false }).then(function (r) { return r; }, function () { return null; }).then(function (r) {
+            toast(r && r.ok ? 'Linked cards are off. Charges already filed stay put.' : feedProblem('unavailable'));
+            if (!btn.isConnected) return;
+            closeSheet();
+            back();
+          });
+        }) : null,
+        disconnectAll()] : [] });
+    }
+    var gearBtn = h('span', { class: 'lc-gear-box' });
+    function gearNow() { fillEl(gearBtn, lcGearBtn(openGear, !!gearRows())); }
+    gearNow();
     function draw() {
       if (askNew && st && st.ok && !st.needsConnect) {
         askNew = false;
         var fresh = (st.accounts || []).filter(function (a) { return !a.asked; });
         if (fresh.length) { openAccountQuestions(fresh, 0, tourId); return; }
       }
+      gearNow();
       if (!st || !st.ok) {
-        body.replaceChildren(h('div', null, h('p', { class: 'note' }, feedProblem(st && (st.status || st.error))), mine(), foot));
+        body.replaceChildren(h('div', null, h('p', { class: 'note' }, feedProblem(st && (st.status || st.error))), mine()));
         return;
       }
       var parts = [];
@@ -33869,16 +34424,15 @@
       if (st.needsConnect) {
         var mayConnect = st.allowed === true || (st.allowed == null && st.source === 'plaid');
         if (mayConnect) parts.push(
-          h('p', { class: 'note' }, 'No bank or card is connected yet.'),
-          h('div', { class: 'stack lc-connect' }, connectBtn('Connect a bank or card')));
+          lcLeadNote('No bank or card is connected yet.'),
+          connectBtn('Connect a bank or card', true));
         else parts.push(h('p', { class: 'note' }, feedProblemKnown('not_allowed')));
-        parts.push(mine(), foot);
+        parts.push(mine());
         body.replaceChildren(h('div', null, parts));
         return;
       }
       if (st.switchedOn && st.lastStatus && st.lastStatus !== 'ok') parts.push(h('p', { class: 'note lc-warn' }, feedProblem(st.lastStatus)));
-      parts.push(feedBankCards(st, tourId),
-        h('div', { class: 'stack lc-connect' }, connectBtn('Connect a bank or card', 'ghost')));
+      parts.push(feedBankCards(st, tourId), connectBtn('Connect a bank or card'));
       if (!tourId) parts.push(myPayLinkedNode(back));
       if (t && G.tourStart(t)) {
         parts.push(logSection());
@@ -33890,22 +34444,12 @@
       } else if (t) {
         parts.push(h('p', { class: 'note' }, 'Add this tour\u2019s shows first, then choose its logging dates here.'));
       }
-      var lines = feedLinesRow(tourId, back);
-      parts.push(tourId ? (lines ? h('div', { class: 'lc-group' }, lines) : null) : linkedMoreNode(back, [cardDatesRow(back), lines]));
-      parts.push(h('div', { class: 'lc-quiet' },
-        st.switchedOn ? h('button', { class: 'lc-link', type: 'button', onclick: function () {
-          run('off', async function () {
-            var r = await B.feedCall('setup', { on: false });
-            toast(r && r.ok ? 'Linked cards are off. Charges already filed stay put.' : feedProblem('unavailable'));
-          });
-        } }, 'Turn linked cards off') : null,
-        disconnectAll()), foot);
       body.replaceChildren(h('div', null, parts));
     }
     openSheet(function () {
       load();
       return [
-        lcHead(settingUp ? 'Link a card' : 'Linked Cards', tourId ? o.back : function () { openSettingsSheet(); }),
+        lcHead(settingUp ? 'Link a card' : 'Linked Cards', tourId ? o.back : null, gearBtn),
         body
       ];
     }, { label: settingUp ? 'Link a card' : 'Linked Cards', cls: 'lc-sheet' });
@@ -33918,15 +34462,14 @@
     var payTour = currentTourId();
     return h('div', { class: 'lc-mypay' },
       h('h3', { class: 'sh-h3' }, 'Your MY PAY cards'),
-      h('p', { class: 'note lc-note' }, 'Only you see these.'),
       myPayBankCards(c, payTour, back, back));
   }
   function cardDatesRow(back) {
     var mine = allTourEntries().filter(function (e) { return createdTour(e[0]); });
     var none = mine.filter(function (e) { return G.tourStart(e[1]) && !G.cardWindow(e[1]); }).length;
-    var sub = none ? (none === 1 ? '1 tour has no card dates yet' : none + ' tours have no card dates yet')
-      : mine.length ? 'Each tour logs between its own dates' : 'Set here once you make a tour';
-    return lcRow('Card dates', sub, function () { openCardDates(back); }, { over: none > 0 });
+    if (!none) return null;
+    return lcRow('Card dates', none === 1 ? '1 tour has no card dates yet' : none + ' tours have no card dates yet',
+      function () { openCardDates(back); }, { over: true });
   }
   function openCardDates(back) {
     var again = function () { openCardDates(back); };
@@ -33949,13 +34492,6 @@
           icon('chevron', 18));
       })));
   }
-  function feedLinesRow(tourId, back) {
-    if (!acctOn()) return null;
-    var d = acctData(), failed = !d && !!(S.acct && S.acct.failed);
-    var sub = failed ? 'Couldn’t check the bank lines.' : !d ? 'Checking the bank lines…'
-      : acctComplete(d) ? 'Every line accounted for' : 'What came in, and what was left out';
-    return lcRow('Bank lines', sub, function () { openBankLines(tourId, back); }, { over: failed });
-  }
   function openBankLines(tourId, back) {
     var box = h('div');
     var again = function () { openBankLines(tourId, back); };
@@ -33970,15 +34506,9 @@
   }
   function linkedMoreOn() { return S.mode === 'local' || allTourEntries().some(function (e) { return canEditTour(e[0]); }); }
   function linkedMoreLabels() { return linkedMoreOn() ? ['Card statement history', 'Learned labels'] : []; }
-  function linkedMoreNode(back, lead) {
-    var rows = (lead || []).filter(Boolean), more = linkedMoreLabels();
-    if (more.length) rows.push(
-      lcRow(more[0], 'Statements brought into your tours, and a way to undo one', function () { openStatementHistory(back); }),
-      lcRow(more[1], 'The category Greenroom fills in for each merchant', function () { openLabelsSheet(back); }));
-    return rows.length ? h('div', { class: 'lc-group' }, rows) : null;
-  }
   function linkedCardsItems(kind) {
-    if (!kind || kind === 'connect') return [];
+    if (!kind) return [];
+    if (kind === 'connect') return linkedMoreLabels();
     var c = S.myPayCards, mine = c && !c.none ? myPayBankNames(c) : [];
     var connect = kind === 'local' || (kind === 'mypay' && !connectsOwnCards()) ? [] : ['Connect a bank or card'];
     var lead = kind === 'feed' ? ['Card dates'].concat(acctOn() ? ['Bank lines'] : []) : [];
@@ -33997,24 +34527,19 @@
   function openLinkedStart(o) {
     o = o || {};
     var back = function () { openLinkedStart(o); };
+    var gear = function () { openLinkedGear({ back: back }); };
     openSheet(function () {
       return [
-        lcHead('Linked Cards', function () { openSettingsSheet(); }),
-        h('p', { class: 'note' }, 'No bank or card is connected yet.'),
-        o.local ? null : h('div', { class: 'stack lc-connect' }, h('button', { class: 'btn primary block', type: 'button', onclick: function () { closeSheet(); connectCards(null); } },
-          icon('card', 18), 'Connect a bank or card')),
-        myPayLinkedNode(back),
-        linkedMoreNode(back),
-        lcFoot(function () { openLinkedAbout(back); })
+        lcHead('Linked Cards', null, lcGearBtn(gear)),
+        o.local ? h('p', { class: 'note' }, 'No bank or card is connected yet.') : lcLeadNote('No bank or card is connected yet.'),
+        o.local ? null : lcAdd('Connect a bank or card', function () { closeSheet(); connectCards(null); }, true),
+        myPayLinkedNode(back)
       ];
     }, { label: 'Linked Cards', cls: 'lc-sheet' });
   }
   function linkedHasMore() {
     var c = S.myPayCards;
-    if (c && !c.none && ((c.accounts || []).length || (c.banks || []).length)) return true;
-    if (!linkedMoreOn()) return false;
-    if (allTourEntries().some(function (e) { return canEditTour(e[0]) && G.rows(e[1].imports).length; })) return true;
-    return Object.keys(S.labels || {}).some(function (k) { return !/^(crew|alogo|artist|profile|who):/.test(k); });
+    return !!(c && !c.none && ((c.accounts || []).length || (c.banks || []).length));
   }
   function openStatementHistory(back) {
     var again = function () { openStatementHistory(back); };

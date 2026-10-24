@@ -51,6 +51,7 @@
   var srKnown = null, srProbing = false;
   var ssKnown = null;
   var ctKnown = null;
+  var seatMarks = 2;
   var VH_FRESH = 600e3, VH_RETRY = 60e3;
   var fsCache = Object.create(null), fsAsk = Object.create(null), fsKnown = null, fsProbing = false;
   var FS_FRESH = 600e3, FS_RETRY = 60e3;
@@ -103,6 +104,7 @@
     tours.data.forEach(function (r) { full[r.id] = true; });
     var rows = tours.data.concat(ga.error ? [] : ga.data.filter(function (r) { return !full[r.id]; }));
     var before = cache.tours, stale = false;
+    if (!ga.error) await buyoutsMine(ga.data.filter(function (r) { return !full[r.id]; }), before);
     if (ga.error && before) before.forEach(function (doc, id) { if (!full[id]) rows.push({ id: id, owner_id: doc._ownerId, doc: doc, kept: true }); });
     cache.tours = new Map(rows.map(function (r) {
       if (r.kept) return [r.id, r.doc];
@@ -141,11 +143,66 @@
   async function loadReimbursements() {
     try {
       var rb = await sb.from('reimbursements')
-        .select('id, tour_id, user_id, requester_name, amount, what, spent_on, status, paid_at, paid_by, paid_by_name, paid_how, feed_id, closed_by_name, closed_at, created_at')
+        .select(REIMB_COLS)
         .order('created_at', { ascending: false }).limit(1000);
-      if (!rb.error && Array.isArray(rb.data)) { cache.reimb = rb.data; reimbReadOnce = true; return true; }
+      if (rb.error || !Array.isArray(rb.data)) return false;
+      var marks = await reimbursementMarks();
+      if (!marks) return false;
+      cache.reimb = rb.data.map(function (r) {
+        var m = r && marks[r.id];
+        return Object.assign({}, r, { paid_by: m ? m.paid_by || null : null, feed_id: m ? m.feed_id || '' : '' });
+      });
+      reimbReadOnce = true;
+      return true;
     } catch (e) {   }
     return false;
+  }
+  var REIMB_COLS = 'id, tour_id, user_id, requester_name, amount, what, spent_on, status, paid_at, paid_by_name, paid_how, closed_by_name, closed_at, created_at';
+  async function reimbursementMarks() {
+    var out = {};
+    var q = await sb.rpc('reimbursement_marks');
+    if (q.error) {
+      if (!fnMissing(q.error)) return null;
+      var old = await sb.from('reimbursements').select('id, paid_by, feed_id').order('created_at', { ascending: false }).limit(1000);
+      if (old.error || !Array.isArray(old.data)) return null;
+      old.data.forEach(function (r) { if (r && r.id) out[r.id] = { paid_by: r.paid_by || null, feed_id: r.feed_id || '' }; });
+      return out;
+    }
+    (Array.isArray(q.data) ? q.data : []).forEach(function (r) { if (r && r.id) out[r.id] = { paid_by: r.paid_by || null, feed_id: r.feed_id || '' }; });
+    return out;
+  }
+  var boMineMiss = 0;
+  async function buyoutsMine(rows, before) {
+    var want = (rows || []).filter(function (r) { return r && isObj(r.doc) && carriesBuyouts(r.doc); });
+    if (!want.length) return;
+    var q = null;
+    try { q = await sb.rpc('my_buyouts', { t_ids: want.map(function (r) { return r.id; }) }); } catch (e) { q = { error: e || {} }; }
+    var got = q && !q.error && isObj(q.data) ? q.data : null;
+    want.forEach(function (r) {
+      var mine = got ? got[r.id] : before && before.has(r.id) ? mineOf(before.get(r.id)) : null;
+      if (isObj(mine)) putMine(r.doc, mine);
+    });
+    if (got) boMineMiss = 0;
+    else if (boMineMiss < 5) { boMineMiss += 1; scheduleRefetch(1000 * Math.pow(2, boMineMiss - 1)); }
+  }
+  function carriesBuyouts(doc) {
+    if (isObj(doc.buyoutSettings) && !isObj(doc.buyoutSettings.people)) return true;
+    var sh = isObj(doc.shows) ? doc.shows : {};
+    return Object.keys(sh).some(function (k) { return isObj(sh[k]) && isObj(sh[k].buyoutSplit) && !isObj(sh[k].buyoutSplit.people); });
+  }
+  function putMine(doc, mine) {
+    if (isObj(doc.buyoutSettings)) doc.buyoutSettings.people = isObj(mine.people) ? clone(mine.people) : {};
+    var sh = isObj(doc.shows) ? doc.shows : {}, sp = isObj(mine.splits) ? mine.splits : {};
+    Object.keys(sh).forEach(function (k) {
+      if (isObj(sh[k]) && isObj(sh[k].buyoutSplit)) sh[k].buyoutSplit.people = isObj(sp[k]) ? clone(sp[k]) : {};
+    });
+  }
+  function mineOf(doc) {
+    if (!isObj(doc)) return null;
+    var out = { people: isObj(doc.buyoutSettings) && isObj(doc.buyoutSettings.people) ? doc.buyoutSettings.people : {}, splits: {} };
+    var sh = isObj(doc.shows) ? doc.shows : {};
+    Object.keys(sh).forEach(function (k) { if (isObj(sh[k]) && isObj(sh[k].buyoutSplit) && isObj(sh[k].buyoutSplit.people)) out.splits[k] = sh[k].buyoutSplit.people; });
+    return out;
   }
   var refetchOwed = false, refetchTries = 0, liveOnce = false;
   function scheduleRefetch(wait) {
@@ -321,6 +378,11 @@
     try {
       if (k.length) localStorage.setItem(SUGGEST_KEY, JSON.stringify({ email: String(email || '').toLowerCase(), kinds: k }));
       else localStorage.removeItem(SUGGEST_KEY);
+    } catch (e) {   }
+  }
+  function keptClear() {
+    try {
+      Object.keys(localStorage).forEach(function (k) { if (/^gr-keep-(crew|fw):/.test(k)) localStorage.removeItem(k); });
     } catch (e) {   }
   }
   function suggestClear() {
@@ -952,6 +1014,11 @@
       if (q.error) throw mapError(q.error);
       return q.data || null;
     },
+    myPayConfirm: async function (tourId, crewId, yes) {
+      var q = await sb.rpc('my_pay_confirm', { t_id: tourId, crew_id: crewId == null ? '' : String(crewId), yes: !!yes });
+      if (q.error) { if (fnMissing(q.error)) return { ok: false, why: 'missing' }; throw mapError(q.error); }
+      return isObj(q.data) ? q.data : { ok: false };
+    },
     myPayBook: async function (tourId) {
       var q = await sb.from('my_pay_books').select('doc').eq('tour_id', tourId).eq('user_id', session.user.id).maybeSingle();
       if (q.error) throw mapError(q.error);
@@ -961,6 +1028,18 @@
       var q = await sb.from('my_pay_books').select('tour_id, doc').eq('user_id', session.user.id).limit(200);
       if (q.error) throw mapError(q.error);
       return q.data || [];
+    },
+    myPayPast: async function () {
+      var q = await sb.rpc('my_pay_past');
+      if (q.error) { if (fnMissing(q.error)) return []; throw mapError(q.error); }
+      return (Array.isArray(q.data) ? q.data : []).filter(function (x) { return isObj(x) && x.tour_id; }).map(function (x) {
+        return { tourId: String(x.tour_id), gone: x.gone === true, tour: isObj(x.tour) ? x.tour : {}, book: isObj(x.book) ? x.book : {},
+          asks: (Array.isArray(x.asks) ? x.asks : []).filter(isObj).map(function (r) {
+            return { id: r.id, mine: true, name: r.name || '', amount: Number(r.amount) || 0, what: r.what || '', date: r.date || '', status: r.status || 'open',
+              paidAt: r.paid_at || null, how: r.paid_how || '', paidBy: r.paid_by_name || '', closedBy: r.closed_by_name || '',
+              closedAt: r.closed_at || null, createdAt: r.created_at || null };
+          }) };
+      });
     },
     saveMyPayBook: async function (tourId, doc) {
       var q = await sb.from('my_pay_books').upsert({ tour_id: tourId, user_id: session.user.id, doc: doc || {}, updated_at: new Date().toISOString() },
@@ -1740,9 +1819,13 @@
         : Promise.resolve(sb.rpc('seats_since', { t_id: tourId })).catch(function () { return null; });
       var contactsP = ctKnown === false ? Promise.resolve(null)
         : Promise.resolve(sb.rpc('crew_contacts', { t_id: tourId })).catch(function () { return null; });
-      var mq = await sb.from('members')
-        .select('invited_email, role, user_id, display_name, phone, tour_role, overrides, manager, created_at')
-        .eq('tour_id', tourId).order('created_at');
+      var seatCols = 'invited_email, role, user_id, display_name, phone, tour_role, overrides, manager, created_at';
+      var askSeats = function () {
+        return sb.from('members').select(seatCols + ['', ', from_artist', ', from_artist, name_by_manager'][seatMarks])
+          .eq('tour_id', tourId).order('created_at');
+      };
+      var mq = await askSeats();
+      while (mq.error && seatMarks > 0 && columnMissing(mq.error)) { seatMarks -= 1; mq = await askSeats(); }
       if (mq.error) throw mapError(mq.error);
       var rows = mq.data || [];
       var doc = cache.tours.get(tourId);
@@ -1783,6 +1866,8 @@
         out.push({
           owner: false, role: r.role, manager: !!r.manager && r.role === 'editor', userId: r.user_id || null,
           name: pr.full_name || r.display_name || '',
+          nameTyped: (r.name_by_manager != null ? r.name_by_manager : seatMarks >= 1 ? !r.from_artist : true)
+            ? String(r.display_name || '') : '',
           username: pr.username || '',
           email: ov.email || base.email,
           invitedEmail: r.invited_email,
@@ -1933,6 +2018,7 @@
       var out = isObj(q.data) ? q.data : { ok: false };
       if (out.ok) {
         try { Object.keys(localStorage).forEach(function (k) { if (/^sb-.*-auth-token/.test(k)) localStorage.removeItem(k); }); } catch (e) {   }
+        keptClear();
         setTimeout(function () { location.reload(); }, 900);
       }
       return out;
@@ -2525,6 +2611,7 @@
       if (sdKnown === null) sdProbe();
       return sdKnown === true;
     },
+    spotDetailsSoon: function () { return sdKnown === null && !!session; },
     spotDetails: function (id, cb, face) {
       id = Number(id);
       if (!session || !(id > 0) || sdKnown === false) { cb(null); return; }
@@ -2585,6 +2672,7 @@
       if (placeKnown === null) placeProbe();
       return placeKnown === true;
     },
+    placeSearchSoon: function () { return placeKnown === null && !!session; },
     placeSearch: function (q, near, cb) {
       if (typeof near === 'function') { cb = near; near = ''; }
       var qk = String(q || '').toLowerCase().replace(/\s+/g, ' ').trim();
@@ -3017,6 +3105,7 @@
           if (/^sb-.*-auth-token/.test(k)) localStorage.removeItem(k);
         });
       } catch (e) {   }
+      keptClear();
       suggestClear();
       legalDrop();
       location.replace(appUrl());
