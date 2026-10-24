@@ -19533,9 +19533,33 @@
     }, { label: 'Ari', onClose: function () { markAriRead(tourId); render(true); } });
   }
   var ARI_ADDRESS = '30bb39e4368b9e23ff77@cloudmailin.net';
-  function settlementAddress(tourId) {
+  function settlementAddress(tag) {
     var at = ARI_ADDRESS.indexOf('@');
-    return ARI_ADDRESS.slice(0, at) + '+' + tourId + ARI_ADDRESS.slice(at);
+    return ARI_ADDRESS.slice(0, at) + '+' + tag + ARI_ADDRESS.slice(at);
+  }
+  function mailboxRow(tourId) {
+    var B = window.GR_BACKEND;
+    var row = h('div', { class: 'mailrow', style: 'margin-bottom:14px' },
+      h('span', { class: 'note' }, 'Getting this tour\u2019s address\u2026'));
+    var failed = function () {
+      row.replaceChildren(h('span', { class: 'note' }, 'Couldn\u2019t get this tour\u2019s address. Close this and open it again.'));
+    };
+    if (!B || !B.tourMailbox) { failed(); return row; }
+    B.tourMailbox(tourId).then(function (tag) {
+      if (!/^[0-9a-f]{24}$/.test(String(tag || ''))) { failed(); return; }
+      var addr = settlementAddress(tag);
+      row.replaceChildren(
+        h('code', { class: 'mailcode' }, addr),
+        h('button', { class: 'btn quiet sm', type: 'button',
+          onclick: async function () {
+            var ta = h('textarea', { class: 'sr', readonly: true, value: addr });
+            document.body.appendChild(ta);
+            var okc = await copyText(addr, ta);
+            ta.remove();
+            toast(okc ? 'Address copied' : 'Press and hold to copy');
+          } }, icon('copy', 16), 'Copy'));
+    }, failed);
+    return row;
   }
   function ariPrompt(body, isImage, merchOnly) {
     return [
@@ -27836,18 +27860,9 @@
         h('h3', { class: 'sh-h3' }, h('img', { class: 'brand-logo', src: 'logo-atvenu.png', alt: '' }), 'atVenu'),
         S.mode === 'db' ? [
           h('p', { class: 'note', style: 'margin:2px 2px 10px' },
-            'Send this tour\u2019s atVenu settlements to this address and they log themselves \u2014 Ari breaks each one down in the chat.'),
-          h('div', { class: 'mailrow', style: 'margin-bottom:14px' },
-            h('code', { class: 'mailcode' }, settlementAddress(tourId)),
-            h('button', { class: 'btn quiet sm', type: 'button',
-              onclick: async function () {
-                var addr = settlementAddress(tourId);
-                var ta = h('textarea', { class: 'sr', readonly: true, value: addr });
-                document.body.appendChild(ta);
-                var okc = await copyText(addr, ta);
-                ta.remove();
-                toast(okc ? 'Address copied' : 'Press and hold to copy');
-              } }, icon('copy', 16), 'Copy'))
+            'Send this tour\u2019s atVenu settlements to this address and they log themselves \u2014 Ari posts each one in the chat. ' +
+            'The address is this tour\u2019s alone, and only email from atVenu itself is read.'),
+          mailboxRow(tourId)
         ] : null,
         h('p', { class: 'note', style: 'margin:2px 2px 10px' },
           'Or, after the show, upload the Settlement on the show you\u2019re logging. Net merch lands in income; the cash, ' +

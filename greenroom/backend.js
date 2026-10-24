@@ -1847,6 +1847,11 @@
       if (out && out.ok) { try { await refetch(); } catch (e) {   } }
       return out;
     },
+    tourMailbox: async function (tourId) {
+      var q = await sb.rpc('tour_mailbox', { t_id: tourId });
+      if (q.error) throw mapError(q.error);
+      return String(q.data || '');
+    },
     pastCrew: async function () {
       var q = await sb.from('past_crew').select('email, name, phone, role, tour_role').order('name');
       if (q.error) throw mapError(q.error);
