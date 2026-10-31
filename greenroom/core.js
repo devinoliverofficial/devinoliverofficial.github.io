@@ -256,16 +256,17 @@
     return ymd(d) === s ? d : null;
   }
   function tourToday(now, tz) {
-    var t = (now == null ? Date.now() : now) - ROLLOVER_HOURS * 3600e3;
+    var at = now == null ? Date.now() : now;
     if (tz) {
       try {
         var p = {};
         new Intl.DateTimeFormat('en-US', { timeZone: tz, year: 'numeric', month: '2-digit', day: '2-digit' })
-          .formatToParts(new Date(t)).forEach(function (x) { p[x.type] = x.value; });
+          .formatToParts(new Date(at - ROLLOVER_HOURS * 3600e3)).forEach(function (x) { p[x.type] = x.value; });
         return p.year + '-' + p.month + '-' + p.day;
       } catch (e) {   }
     }
-    return ymd(new Date(t));
+    var d = new Date(at);
+    return ymd(new Date(d.getFullYear(), d.getMonth(), d.getDate(), d.getHours() - ROLLOVER_HOURS, d.getMinutes()));
   }
   function addDays(s, n) {
     var d = parseDay(s) || new Date();
@@ -6086,6 +6087,579 @@
     var end = which === 'workbook' ? '_CPA-Workbook.xlsx' : which === 'ledger' ? '_Ledger.csv' : '_CPA-Summary.pdf';
     return String(year || '') + '_' + a + end;
   }
+  var HOME_DOW = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+  var HOME_KEYS = ['sun', 'mon', 'tue', 'wed', 'thu', 'fri', 'sat'];
+  var HOME_MONTHS = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
+  function homeMins(t) {
+    var m = /^(\d{1,2}):(\d{2})$/.exec(String(t == null ? '' : t).trim());
+    if (!m) return null;
+    var h = +m[1], mi = +m[2];
+    return h > 23 || mi > 59 ? null : h * 60 + mi;
+  }
+  function homeTime(mins) {
+    var m = ((Math.round(num(mins)) % 1440) + 1440) % 1440;
+    return pad(Math.floor(m / 60)) + ':' + pad(m % 60);
+  }
+  function homeHour12(mins) {
+    var h = Math.floor(mins / 60) % 24;
+    return { h: h % 12 === 0 ? 12 : h % 12, mi: mins % 60, pm: h >= 12 };
+  }
+  function homeClock(t) {
+    var m = typeof t === 'number' ? t : homeMins(t);
+    if (m == null) return '';
+    var x = homeHour12(((m % 1440) + 1440) % 1440);
+    return x.h + ':' + pad(x.mi) + ' ' + (x.pm ? 'PM' : 'AM');
+  }
+  function homeSpan(time, mins) {
+    var a = homeMins(time);
+    if (a == null) return '';
+    var len = Math.round(num(mins));
+    if (!(len > 0)) return homeClock(a);
+    var b = (a + len) % 1440, x = homeHour12(a), y = homeHour12(b);
+    return x.pm === y.pm && len < 720 ? x.h + ':' + pad(x.mi) + ' - ' + homeClock(b) : homeClock(a) + ' - ' + homeClock(b);
+  }
+  function whose(name) {
+    var n = String(name == null ? '' : name).trim();
+    return n + (/s$/i.test(n) ? '’' : '’s');
+  }
+  function homeMinsWords(mins) {
+    var m = Math.round(num(mins));
+    if (!(m > 0)) return '';
+    if (m < 60) return m + ' min';
+    if (m % 60 === 0) return (m / 60) + (m === 60 ? ' hour' : ' hours');
+    if (m % 30 === 0) return (m / 60) + ' hours';
+    return Math.floor(m / 60) + ' h ' + (m % 60) + ' min';
+  }
+  function homeDow(date) { var d = parseDay(date); return d ? d.getDay() : -1; }
+  function homeDateWords(date, today) {
+    var d = parseDay(date);
+    if (!d) return '';
+    var t = parseDay(today) ? today : tourToday(), n = daysBetween(t, date);
+    if (n === 0) return 'Today';
+    if (n === 1) return 'Tomorrow';
+    if (n === -1) return 'Yesterday';
+    if (n > 1 && n < 7) return HOME_DOW[d.getDay()];
+    var md = HOME_DOW[d.getDay()].slice(0, 3) + ', ' + HOME_MONTHS[d.getMonth()].slice(0, 3) + ' ' + d.getDate();
+    return String(date).slice(0, 4) === String(t).slice(0, 4) ? md : HOME_MONTHS[d.getMonth()].slice(0, 3) + ' ' + d.getDate() + ', ' + d.getFullYear();
+  }
+  function homeSmallHours(time) {
+    var m = homeMins(time);
+    return m != null && m < ROLLOVER_HOURS * 60;
+  }
+  function homeClockDay(date, time, today) {
+    return parseDay(date) && date !== today && homeSmallHours(time) ? addDays(date, 1) : date;
+  }
+  function homeNightDay(day, time, today) {
+    return parseDay(day) && day !== today && homeSmallHours(time) ? addDays(day, -1) : day;
+  }
+  function homeWhen(date, time, today) {
+    var t = parseDay(today) ? today : tourToday();
+    var day = date === t && homeSmallHours(time) ? 'Tonight' : homeDateWords(homeClockDay(date, time, t), t);
+    return [day, homeClock(time)].filter(Boolean).join(' · ');
+  }
+  function homeRepeatWords(rep) {
+    var r = String(rep || '');
+    if (r === 'day') return 'Every day';
+    if (r === 'weekdays') return 'Weekdays';
+    if (r === 'week') return 'Every week';
+    if (r === 'month') return 'Every month';
+    var i = HOME_KEYS.indexOf(r);
+    return i >= 0 ? 'Every ' + HOME_DOW[i] : '';
+  }
+  function homeDaysWords(days) {
+    var set = {};
+    (Array.isArray(days) ? days : []).forEach(function (d) { d = +d; if (d >= 0 && d <= 6 && d === Math.floor(d)) set[d] = true; });
+    var on = [0, 1, 2, 3, 4, 5, 6].filter(function (d) { return set[d]; });
+    if (!on.length) return 'Not scheduled';
+    if (on.length === 7) return 'Every day';
+    if (on.join() === '1,2,3,4,5') return 'Weekdays';
+    if (on.join() === '0,6') return 'Weekends';
+    return on.map(function (d) { return HOME_DOW[d].slice(0, 3); }).join(' ');
+  }
+  var HOME_MON_RE = '(jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|sep(?:t(?:ember)?)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)';
+  var HOME_WD_FULL = '(sunday|monday|tuesday|wednesday|thursday|friday|saturday)';
+  var HOME_WD_ABBR = '(sun|mon|tues?|weds?|thu(?:rs?)?|fri|sat)';
+  var HOME_TMRW = '(?:tomm?orr?ow|tmrw|tmw|tmr|2moro)', HOME_TONIGHT = '(?:tonight|tonite|2nite)';
+  var HOME_PART = '(\\s+(?:in\\s+the\\s+)?(?:morning|afternoon|evening|night))?';
+  var HOME_SAYS_WHEN = new RegExp('^\\s+(?:' + HOME_WD_FULL + '\\b|' + HOME_MON_RE + '\\.?\\s+\\d|today\\b|' + HOME_TONIGHT + '\\b|' + HOME_TMRW + '\\b|at\\b|on\\b|by\\b)', 'i');
+  var HOME_GOES_ON = new RegExp('^\\s+(?:about|after|also|and|backstage|before|behind|but|down|downstairs|downtown|every|for|from|here|if|in|inside|into|near|next|off|or|out|outside|over|please|pls|re|sharp|so|the|then|there|this|till|to|under|until|up|upstairs|via|with|' + HOME_WD_ABBR + ')\\b', 'i');
+  var HOME_NIGHT = new RegExp('\\b' + HOME_TONIGHT + '\\b|\\bat\\s+night\\b|\\b(?:' + HOME_TMRW + '|' + HOME_WD_FULL + '|' + HOME_WD_ABBR + ')\\s+night\\b');
+  var HOME_DAY_WORD = new RegExp('\\b(?:' + HOME_TMRW + '|' + HOME_WD_FULL + '|' + HOME_WD_ABBR + ')\\b', 'gi');
+  var HOME_WD_ANY = '(?:' + HOME_WD_FULL + '|' + HOME_WD_ABBR + ')s?';
+  var HOME_DAY_ANY = '(?:' + HOME_WD_ANY + '|today|' + HOME_TONIGHT + '|' + HOME_TMRW + ')';
+  var HOME_WD_NEXT = new RegExp('^\\s*,?\\s*(?:(?:and|or)\\s+|&\\s*)?' + HOME_DAY_ANY + '\\b', 'i');
+  var HOME_WD_BEFORE = new RegExp('\\b' + HOME_DAY_ANY + '\\s*,?\\s*(?:(?:and|or)\\s+|&\\s*)?$', 'i');
+  var HOME_METER = /^(?:[1-4]\/2|[1-7]\/4|[135679]\/8|12\/8|[13579]\/16|7\/11)$/;
+  var HOME_NOT_DATE = /(?:^\s*(?:invoice|inv|po|sold(?:\s+out)?|size|part|take|score|rank|song|quantize|snake|toms?)|\b(?:is|rated|cord|wire|cable|toms))\s*$/i;
+  var HOME_SLASH_DAYS = 92;
+  var HOME_DAY_NAME = /\b(?:manic|blue|stormy|ruby|black|cyber|bloody|good|lazy)\s*$/i;
+  var HOME_TITLE_END = '\\s+(?:covers?|remix|mashup|lyrics|chords|tabs)\\s*$';
+  var HOME_TITLE_TAIL = new RegExp("^(?:\\s+(?:[A-Z][\\w'’]*|on|in|of|the|and|my|a))*" + HOME_TITLE_END);
+  var HOME_TITLE_TAIL_ANY = new RegExp("^(?:\\s+[\\w'’]+)*" + HOME_TITLE_END, 'i');
+  var HOME_BAND_BEFORE = /\b(?:open(?:ing)?\s+for|support(?:ing)?(?:\s+for)?)\s*$/i;
+  var HOME_NOT_HOUR = /^\s*(?:set\s+(?:the\s+)?)?(?:capo|gain|volume|vol|mids?|treble|reverb|delay|tempo|knob|pedal|tips?|tax|rate|cap|limit|reorder|restock|shirts?|tees?|hoodies?|hats?|beanies|stickers?|buttons?|posters?|patches?|cds?|vinyl|tapes?)\s*$/i;
+  var HOME_LENGTH = /\b(?:length|run\s*time|runtime|runs?|is|gets?|mesa|boogie)\s*$/i;
+  var HOME_SET = /\b(?:set|intro|outro|encore|headliner|opener|support|track|changeover)\s*$/i;
+  var HOME_MON_NAME = /^(?:jan|apr(?:il)?|may|jun(?:e)?|aug(?:ust)?)$/i;
+  var HOME_GIVE = /\b(?:comp|give|pay|owe|tell|text)\s*$/i;
+  var HOME_DAY_ONLY = new RegExp('^\\s*(?:(?:on|next|this)\\s+)?(?:' + HOME_DAY_ANY + '|' + HOME_MON_RE + '\\.?\\s+\\d{1,2}(?:st|nd|rd|th)?|\\d{1,2}/\\d{1,2}(?:/\\d{2,4})?)\\s*$', 'i');
+  var HOME_BY_VERB = /\b(?:stop|swing|drop|come|pop|go|stand|walk|pass|drive|get|run)\s+by\s*$/i;
+  var HOME_IN_VERB = /\b(?:load|check|sign|turn|log|move|clock|hand|fill|pull|call)\s*$/i;
+  var HOME_IN_PHRASE = /\b(?:load|check|sign|turn|log|move|clock|hand|fill|pull|call)\s+in\s*$/i;
+  function homeWeekdayIndex(w) {
+    w = String(w).toLowerCase().slice(0, 3);
+    return HOME_KEYS.indexOf(w);
+  }
+  function homeMonthIndex(m) { return ['jan', 'feb', 'mar', 'apr', 'may', 'jun', 'jul', 'aug', 'sep', 'oct', 'nov', 'dec'].indexOf(String(m).toLowerCase().slice(0, 3)); }
+  function homeNextWeekday(today, dow, inclusive) {
+    var n = ((dow - homeDow(today)) + 7) % 7;
+    if (n === 0 && !inclusive) n = 7;
+    return addDays(today, n);
+  }
+  function homeWeekStart(date) { return addDays(date, -homeDow(date)); }
+  function homeSpanOf(m) {
+    var a = +m[1], b = +m[4], pm = /p/i.test(m[6]);
+    if (a < 1 || a > 12 || b < 1 || b > 12 || +(m[2] || 0) > 59 || +(m[5] || 0) > 59) return null;
+    var start = (a % 12) * 60 + +(m[2] || 0) + (m[3] ? (/p/i.test(m[3]) ? 720 : 0) : (pm ? 720 : 0));
+    var end = (b % 12) * 60 + +(m[5] || 0) + (pm ? 720 : 0);
+    if (start === end) return null;
+    if (!m[3] && start > end) start -= 720;
+    if (start < 0) start += 1440;
+    if (end <= start) end += 1440;
+    return { start: start, mins: end - start };
+  }
+  function parseTaskWords(text, now, dayIfNone, only, keep) {
+    var raw = String(text == null ? '' : text);
+    var n = now instanceof Date ? now.getTime() : (now == null ? Date.now() : +now);
+    if (!isFinite(n)) n = Date.now();
+    var today = tourToday(n), noDay = parseDay(dayIfNone) ? dayIfNone : today, thisYear = +today.slice(0, 4);
+    var s = raw, left = raw, date = '', time = '', repeat = '', spanMins = 0, found = false;
+    var cased = /[a-z]/.test(raw);
+    var asIs = { body: raw.trim(), date: '', time: '', repeat: '' };
+    var songVerb = /^\s*(?:learn(?:ing)?|cover(?:ing)?)\s+/i.exec(raw);
+    var songAt = songVerb && (!cased || /^[A-Z\d]/.test(raw.slice(songVerb[0].length))) ? songVerb[0].length : -1;
+    var inSong = function (m) {
+      if (songAt < 0 || m.index < songAt) return false;
+      var low = function (x) { return cased ? x : x.toLowerCase(); };
+      if (/^(?:at|on|by|next|this)\s/.test(low(m[0])) || /\b(?:at|on|by|due|until|till|before|after|from)\s*$/.test(low(s.slice(0, m.index)))) return false;
+      return /^[A-Z]/.test(m[0]) || /[AP]M\b/.test(m[0]) || (/^\d/.test(m[0]) && !s.slice(songAt, m.index).trim());
+    };
+    var nameGoesOn = function (end) {
+      var after = s.slice(end);
+      return cased && /^\s[A-Z]/.test(after) && !HOME_SAYS_WHEN.test(after);
+    };
+    var titled = function (m, end) {
+      var before = s.slice(0, m.index), after = s.slice(end);
+      return /^['’]s\b/i.test(after) || /\b(?:the|an?|my|our|called|named|titled)\s*$/i.test(before) || HOME_WD_NEXT.test(after) || HOME_WD_BEFORE.test(before) ||
+        HOME_DAY_NAME.test(before) || (cased ? HOME_TITLE_TAIL : HOME_TITLE_TAIL_ANY).test(after) || /^\s+night\s+(?:lights|football|live|fever)\b/i.test(after) ||
+        /^\s*(?:learn|cover)\s*$/i.test(before) || /\bevery\s+(?:other|second|2nd|third|3rd)\s*$/i.test(before) ||
+        (cased && /^[A-Z]/.test(m[0]) && (HOME_BAND_BEFORE.test(before) || /\b(?:After|Before)\s*$/.test(before)));
+    };
+    var wordNext = function (after) {
+      return (cased ? /^\s+[a-z]/ : /^\s+[a-z]/i).test(after) && !HOME_SAYS_WHEN.test(after) && !HOME_GOES_ON.test(after);
+    };
+    var isLed = function (m) { return /\b(?:at|by|before|after|until|till|from)\s*$/i.test(s.slice(0, m.index)); };
+    var lastOf = function (res, skip) {
+      var best = null, hits = [];
+      res.forEach(function (r) {
+        var re = new RegExp(r.re, 'gi'), m;
+        while ((m = re.exec(s))) {
+          if (m[0] === '') { re.lastIndex++; continue; }
+          if (only && (m.index >= only[1] || m.index + m[0].length <= only[0])) continue;
+          var stop = m.index + m[0].length, end = stop - (r.word ? (m[r.word] || '').length : 0);
+          if (inSong(m) || (skip && skip(m))) continue;
+          if (r.name && nameGoesOn(end)) continue;
+          if (r.title && titled(m, end)) continue;
+          if (r.ok && !r.ok(m)) continue;
+          if (r.v && !r.v(m)) continue;
+          var hit = { m: m, r: r, at: m.index };
+          hits.push(hit);
+          var bestEnd = best ? best.m.index + best.m[0].length : 0;
+          var holds = best && m.index <= best.m.index && stop >= bestEnd, held = best && m.index >= best.m.index && stop <= bestEnd;
+          if (!best || holds || (!held && m.index > best.m.index)) best = hit;
+        }
+      });
+      if (best) best.hits = hits;
+      return best;
+    };
+    var cutOut = function (hit, kind) {
+      var from = hit.m.index, to = from + hit.m[0].length, head = s.slice(0, from);
+      found = true;
+      if ((hit === span ? /\b(?:before|after)\s*$/i : /\b(?:before|after|until|till|from)\s*$/i).test(head)) return;
+      if (hit.r.inN && HOME_IN_VERB.test(head)) from += 2;
+      else if (!/^(?:at|on|by)\b/i.test(hit.m[0])) {
+        var lead = /(?:^|\s)(at|by|until|till|from|for|(?:on|by)\s+the)\s*$/i.exec(head);
+        if (lead && !(/^by$/i.test(lead[1]) && HOME_BY_VERB.test(head)) && !(/^for$/i.test(lead[1]) && /\S/.test(s.slice(to)))) from = lead.index;
+      }
+      var blank = new Array(to - from + 1).join(' ');
+      s = s.slice(0, from) + blank + s.slice(to);
+      if (!(keep && keep[kind])) left = left.slice(0, from) + blank + left.slice(to);
+    };
+    var said = cased ? raw.trim().replace(/^[A-Z]/, function (c) { return c.toLowerCase(); }) : raw.toLowerCase();
+    var hint = new RegExp('\\b(?:' + HOME_TONIGHT + '|evening|afternoon|night)\\b').test(said) ? 'pm' : /\bmorning\b/.test(said) ? 'am' : '';
+    var nightWord = HOME_NIGHT.test(said.replace(HOME_DAY_WORD, function (w) { return w.toLowerCase(); }));
+    var plainWord = function (m) { return /^every\s/i.test(m[0]) || !wordNext(s.slice(m.index + m[0].length)); };
+    var rep = lastOf([
+      { re: '\\bevery\\s*day\\b|\\bdaily\\b', name: true, title: true, ok: plainWord, v: function () { return 'day'; } },
+      { re: '\\bevery\\s+week\\s*days?\\b|\\bweek\\s*days\\b', name: true, title: true, ok: plainWord, v: function () { return 'weekdays'; } },
+      { re: '\\bevery\\s+(?:' + HOME_WD_FULL + '|' + HOME_WD_ABBR + ')s?\\b' + HOME_PART, name: true, word: 3, title: true, v: function (m) { return HOME_KEYS[homeWeekdayIndex(m[1] || m[2])]; } },
+      { re: '\\bevery\\s+week\\b|\\bweekly\\b', name: true, title: true, ok: plainWord, v: function () { return 'week'; } },
+      { re: '\\bevery\\s+month\\b|\\bmonthly\\b', name: true, title: true, ok: plainWord, v: function () { return 'month'; } }
+    ]);
+    if (rep) { repeat = rep.r.v(rep.m); cutOut(rep, 'repeat'); }
+    var chord = function (m) { return cased && /\s[AP]\.?m\.?$/.test(m[0]); };
+    var noonOk = function (m) {
+      var before = s.slice(0, m.index);
+      if (wordNext(s.slice(m.index + m[0].length)) || /\b(?:round|high)\s*$/i.test(before)) return false;
+      if (cased && m[0] !== m[0].toLowerCase() && /\b(?:After|Before|Till|Until)\s*$/.test(before)) return false;
+      return !cased || m[0] === m[0].toLowerCase() || isLed(m);
+    };
+    var span = lastOf([{ re: '\\b(\\d{1,2})(?::(\\d{2}))?\\s*(?:([ap])\\.?m\\.?)?\\s*(?:-|–|—|to)\\s*(\\d{1,2})(?::(\\d{2}))?\\s*([ap])\\.?m\\.?(?![a-z])',
+      ok: function (m) { return !chord(m) && !!homeSpanOf(m) && !new RegExp('\\b' + HOME_MON_RE + '\\.?\\s*$', 'i').test(s.slice(0, m.index)); } }]);
+    var apOk = function (m) { return !chord(m) && +m[1] >= 1 && +m[1] <= 12 && +(m[2] || 0) <= 59 && !/\d\s*(?:[-–—]|to)\s*$/.test(s.slice(0, m.index)); };
+    var tm = span ? null : lastOf([
+      { re: '\\b(?:at\\s+)?(\\d{1,2})(?:[:.](\\d{2}))?\\s*([ap])\\.?m\\.?(?![a-z])', kind: 'ap', ok: apOk },
+      { re: '\\b(?:at\\s+)?(\\d{1,2}):(\\d{2})([ap])(?![a-z\\d])', kind: 'ap', ok: apOk },
+      { re: '\\b(\\d{1,2}):(\\d{2})(?![\\d:])(?!\\s*[ap]\\.?m)', kind: 'colon', ok: function (m) {
+        var before = s.slice(0, m.index), after = s.slice(m.index + m[0].length), led = isLed(m);
+        if (+m[1] > 23 || +m[2] > 59 || /\b(?:to|the|an?|of)\s*$/i.test(before)) return false;
+        if (/[-–—]\s*$/.test(before) || /^\s*(?:[-–—]|to)\s*\d/.test(after)) return false;
+        if (/[\d:/]$/.test(before) || /^\//.test(after)) return false;
+        if (/^\s+club\b/i.test(after) || /^\s+to\s+[A-Z]/.test(after)) return false;
+        if (!led && (m[1] === '0' || HOME_LENGTH.test(before) || (+m[1] <= 2 && HOME_SET.test(before)))) return false;
+        return !wordNext(after) || !before.trim() || led; } },
+      { re: "\\bat\\s+(\\d{1,2})(?::(\\d{2}))?(?:\\s*o['’]?clock\\b)?(?![\\d:/a-z])(?!\\s*[-–—]\\s*\\d)(?!\\s*[ap]\\.?m)", kind: 'at', name: true, ok: function (m) {
+        var before = s.slice(0, m.index), after = s.slice(m.index + m[0].length);
+        if (m[2] != null ? +m[1] > 23 || +m[2] > 59 : +m[1] < 1 || +m[1] > 12) return false;
+        if (/^(?:%|[.,]\d|[-–—][a-z])/i.test(after) || (wordNext(after) && before.trim() && !HOME_DAY_ONLY.test(before))) return false;
+        return m[2] != null || !(HOME_NOT_HOUR.test(before) || /\b(?:sell(?:ing)?|sold|priced?)\b/i.test(before)); } },
+      { re: '\\bnoon\\b', kind: 'noon', name: true, title: true, ok: noonOk },
+      { re: '\\bmidnight\\b', kind: 'mid', name: true, title: true, ok: noonOk }
+    ]);
+    if (span) {
+      var sp = homeSpanOf(span.m);
+      time = homeTime(sp.start); spanMins = sp.mins;
+    } else if (tm) {
+      var mins, k = tm.r.kind, hr = +tm.m[1], mi = tm.m[2] != null ? +tm.m[2] : 0;
+      if (k === 'noon') mins = 720;
+      else if (k === 'mid') mins = 0;
+      else if (k === 'ap') mins = (hr % 12) * 60 + mi + (/p/i.test(tm.m[3]) ? 720 : 0);
+      else if (hr === 0 || hr >= 13) mins = hr * 60 + mi;
+      else if (nightWord && hr === 12) mins = mi;
+      else if (nightWord && hr <= 4) mins = hr * 60 + mi;
+      else if (hr === 12) mins = hint === 'am' ? mi : 720 + mi;
+      else if (hint === 'pm') mins = (hr + 12) * 60 + mi;
+      else if (hint === 'am') mins = hr * 60 + mi;
+      else mins = (hr <= 6 ? hr + 12 : hr) * 60 + mi;
+      time = homeTime(mins);
+    }
+    var clock = span || tm;
+    if (clock) {
+      var part = /^\s+(?:in\s+the\s+(?:morning|afternoon|evening)|at\s+night)\b/i.exec(s.slice(clock.m.index + clock.m[0].length));
+      if (part) clock.m[0] += part[0];
+      cutOut(clock, 'time');
+    }
+    var yearOf = function (mo, d, y) {
+      var yr = y ? (y.length === 2 ? 2000 + +y : +y) : thisYear;
+      if (y && (yr < thisYear || yr > thisYear + 5)) return '';
+      if (y) { var one = yr + '-' + pad(mo) + '-' + pad(d); return parseDay(one) ? one : ''; }
+      for (var k = 0; k < 5; k++) {
+        var c = (yr + k) + '-' + pad(mo) + '-' + pad(d);
+        if (parseDay(c) && c >= today) return c;
+      }
+      return '';
+    };
+    var weekday = function (m) {
+      var c = homeNextWeekday(today, homeWeekdayIndex(m[2]), /^this$/i.test(m[1] || ''));
+      if (/^next$/i.test(m[1] || '') && homeWeekStart(c) === homeWeekStart(today)) c = addDays(c, 7);
+      return c;
+    };
+    var yearRe = '(' + [0, 1, 2, 3, 4, 5].map(function (k) { return thisYear + k; }).join('|') + ')';
+    var noRange = '(?!\\s*(?:[-–—&+]|to\\b|thru\\b|through\\b)\\s*\\d)';
+    var monthOk = function (m, mon) {
+      var before = s.slice(0, m.index);
+      if (/^,\s*\d{4}\b/.test(s.slice(m.index + m[0].length))) return false;
+      return !(HOME_MON_NAME.test(mon) && !/^on\s/i.test(m[0]) && HOME_GIVE.test(before));
+    };
+    var nearClock = function (m) {
+      if (!clock) return false;
+      var at = clock.m.index, end = at + clock.m[0].length, stop = m.index + m[0].length;
+      return !s.slice(0, m.index).trim() || (stop <= at && !s.slice(stop, at).trim()) || (end <= m.index && !s.slice(end, m.index).trim());
+    };
+    var dt = lastOf([
+      { re: '\\b' + HOME_TONIGHT + '\\b|\\btoday\\b|\\bthis\\s+(?:morning|afternoon|evening)\\b', name: true, title: true, same: true, roll: 1, v: function () { return today; } },
+      { re: '\\b(?:the\\s+)?day\\s+after\\s+' + HOME_TMRW + '\\b', ok: function (m) { return !cased || !/[A-Z]/.test(m[0].slice(1)); }, v: function () { return addDays(today, 2); } },
+      { re: '\\b' + HOME_TMRW + '\\b' + HOME_PART, name: true, word: 1, title: true, roll: 1, v: function () { return addDays(today, 1); } },
+      { re: '^\\s*tom\\b', ok: function (m) { return !!clock && /^\s*tom$/.test(m[0]); }, roll: 1, v: function () { return addDays(today, 1); } },
+      { re: '\\bin\\s+(\\d{1,3})\\s+(day|days|week|weeks)\\b', inN: true, v: function (m) { return addDays(today, +m[1] * (/^w/i.test(m[2]) ? 7 : 1)); } },
+      { re: '\\b(?:on\\s+)?(?:(next|this)\\s+)?' + HOME_WD_FULL + '\\b' + HOME_PART, name: true, word: 3, title: true, wd: true, roll: 7, v: weekday },
+      { re: '\\b(?:on|(next|this))\\s+' + HOME_WD_ABBR + '\\b' + HOME_PART, name: true, word: 3, title: true, wd: true, roll: 7,
+        ok: function (m) { var after = s.slice(m.index + m[0].length); return !wordNext(after) && !/^\s+\d/.test(after); }, v: weekday },
+      { re: '\\b()' + HOME_WD_ABBR + '\\b' + HOME_PART, name: true, word: 3, title: true, wd: true, roll: 7, v: weekday,
+        ok: function (m) { return nearClock(m) || new RegExp('^,?\\s+(?:' + HOME_MON_RE + '\\.?\\s+\\d|\\d{1,2}/\\d)', 'i').test(s.slice(m.index + m[0].length)); } },
+      { re: '\\b(?:on\\s+)?' + HOME_MON_RE + '\\.?\\s+(\\d{1,2})(?:st|nd|rd|th)?(?![\\d/])' + noRange + '(?:,?\\s+' + yearRe + ')?\\b',
+        ok: function (m) { return monthOk(m, m[1]); }, v: function (m) { return yearOf(homeMonthIndex(m[1]) + 1, +m[2], m[3]); } },
+      { re: '\\b(?:on\\s+)?(\\d{1,2})(?:st|nd|rd|th)?\\s+(?:of\\s+)?' + HOME_MON_RE + '\\b(?:,?\\s+' + yearRe + ')?', name: true,
+        ok: function (m) { return !/[\d/\-–—]$/.test(s.slice(0, m.index)) && monthOk(m, m[2]); }, v: function (m) { return yearOf(homeMonthIndex(m[2]) + 1, +m[1], m[3]); } },
+      { re: '\\b(?:on\\s+)?(\\d{1,2})/(\\d{1,2})(?:/(\\d{4}|\\d{2}))?(?![\\d/])', ok: function (m) {
+        var before = s.slice(0, m.index), after = s.slice(m.index + m[0].length);
+        if (/[\d/#]$/.test(before) || /[-–—]\s*$/.test(before) || /^\s*[-–—]\s*\d/.test(after)) return false;
+        if (m[3] || /^on\s/i.test(m[0]) || (/\b(?:by|due|for)\s*$/i.test(before) && !HOME_BY_VERB.test(before))) return true;
+        if (HOME_METER.test(m[1] + '/' + m[2]) || HOME_NOT_DATE.test(before) || /\/\S*\s*$/.test(before)) return false;
+        if ((before.match(/\b\d{1,2}\/\d{1,2}\b/g) || []).some(function (x) { return !HOME_METER.test(x); })) return false;
+        if (/\b(?:in|at)\s*$/i.test(before) && !HOME_IN_PHRASE.test(before)) return false;
+        var day = yearOf(+m[1], +m[2]);
+        if (clock) return !!day;
+        return /^[\s,;:.!?)]*$/.test(after) && !!day && day <= addDays(today, HOME_SLASH_DAYS); },
+        v: function (m) { return yearOf(+m[1], +m[2], m[3]); } }
+    ].concat(repeat !== 'month' ? [] : [
+      { re: '\\b(?:on\\s+the\\s+|the\\s+|on\\s+)(\\d{1,2})(?:st|nd|rd|th)\\b(?:\\s+of\\b)?', name: true, ok: function (m) { return !wordNext(s.slice(m.index + m[0].length)); }, v: function (m) {
+        var d0 = parseDay(today);
+        for (var k = 0; k < 12; k++) {
+          var c = ymd(new Date(d0.getFullYear(), d0.getMonth() + k, +m[1]));
+          if (c >= today && +c.slice(8) === +m[1]) return c;
+        }
+        return ''; } }
+    ]), function (m) { return /\b(?:about|re|regarding)\s*$/i.test(s.slice(0, m.index)); });
+    if (dt) {
+      var days = dt.hits.filter(function (x) { return x === dt || x.m.index + x.m[0].length <= dt.m.index || x.m.index >= dt.m.index + dt.m[0].length; });
+      var led = days.filter(function (x) { return /^on\s/i.test(x.m[0]) || /\b(?:by|on|due)\s*$/i.test(s.slice(0, x.m.index)); });
+      var dates = days.filter(function (x) { return !x.r.wd; });
+      if (dates.length) dt = dates[dates.length - 1];
+      date = dt.r.v(dt.m);
+      var oneDay = days.every(function (x) { return x.r.v(x.m) === date || (x.r.wd && homeWeekdayIndex(x.m[2]) === homeDow(date)); });
+      if (!oneDay && led.length === 1 && days.every(function (x) { return x === led[0] || wordNext(s.slice(x.m.index + x.m[0].length)); })) {
+        dt = led[0]; days = led; date = dt.r.v(dt.m); oneDay = true;
+      }
+      if (!oneDay || (repeat && /\b(?:until|till|thru|through)\s*$/i.test(s.slice(0, dt.m.index)))) return asIs;
+      days.forEach(function (x) { cutOut(x, 'date'); });
+    }
+    var named = !!date && !dt.r.same, small = homeSmallHours(time);
+    if (small && named && !repeat && !nightWord && !(tm && tm.r.kind === 'mid') && addDays(date, -1) >= today) date = addDays(date, -1);
+    if (repeat && !date) {
+      var wi = HOME_KEYS.indexOf(repeat);
+      date = wi >= 0 ? homeNextWeekday(today, small ? (wi + 6) % 7 : wi, true) : noDay;
+    }
+    if (time && !date) date = homeNightDay(noDay, time, today);
+    var clockDay = ymd(new Date(n)), soFar = new Date(n).getHours() * 60 + new Date(n).getMinutes();
+    if (time && !small && !named && date === today && clockDay !== today) date = addDays(today, 1);
+    var twoTurns = !!tm && (tm.r.kind === 'at' || tm.r.kind === 'colon') && !hint && !small && homeMins(time) < 720 && tm.m[1].charAt(0) !== '0';
+    if (twoTurns && !repeat && date === today && clockDay === today && homeMins(time) < soFar && homeMins(time) + 720 >= soFar) time = homeTime(homeMins(time) + 720);
+    var lastTurn = time && !small ? homeMins(time) + spanMins + (twoTurns ? 720 : 0) : 0;
+    if (time && !small && !dt && !repeat && !only && date === today && clockDay === today && lastTurn < soFar) date = addDays(today, 1);
+    if (small && !repeat && (dt ? dt.r.roll : !only) && date === today && clockDay !== today && homeMins(time) < soFar) date = addDays(date, dt ? dt.r.roll : 1);
+    if (!found) return asIs;
+    var body = left.replace(/\s+/g, ' ').trim();
+    var edge = /^[\s,;:.\-–—]+/;
+    var tail = /(?:[\s,;:.\-–—]+|\s?\bat)$/i;
+    for (var i = 0; i < 6; i++) {
+      var b2 = body.replace(edge, '').replace(tail, '').trim();
+      if (b2 === body) break;
+      body = b2;
+    }
+    var out = { body: body, date: date, time: time, repeat: repeat };
+    if (spanMins) out.mins = spanMins;
+    return out;
+  }
+  function homeTaskRead(typed, o) {
+    o = isObj(o) ? o : {};
+    var raw = String(typed == null ? '' : typed), text = raw.trim();
+    var was = o.saved == null ? null : String(o.saved), only = null;
+    if (was !== null) {
+      if (text === was.trim()) return { body: text, date: '', time: '', repeat: '' };
+      var max = Math.min(raw.length, was.length), a = 0, z = 0;
+      while (a < max && raw[a] === was[a]) a++;
+      while (z < max - a && raw[raw.length - 1 - z] === was[was.length - 1 - z]) z++;
+      only = [a, raw.length - z];
+    }
+    var hand = o.hand === true ? { date: true, time: true, repeat: true } : o.hand;
+    var p = parseTaskWords(raw, o.now, o.day, only, hand);
+    if (o.hand === true) p.body = text;
+    return p;
+  }
+  var HOME_LIST_MAX = 100;
+  function splitPastedList(text) {
+    var out = [];
+    String(text == null ? '' : text).split(/\r\n|\r|\n|\u2028|\u2029/).forEach(function (line) {
+      var s = line.replace(/[\t ]+/g, ' ').trim();
+      for (var i = 0; i < 4 && s; i++) {
+        var b = s.replace(/^(?:\[[ xX✓✔]?\]|\([ xX✓✔]?\)|[•·▪▫◦‣⁃●○■□☐☑☒✓✔✗✘])\s*/, '')
+          .replace(/^(?:[-*+–—]+|\d{1,3}[.)\]:]|\(\d{1,3}\))(?:\s+|$)/, '').trim();
+        if (b === s) break;
+        s = b;
+      }
+      if (s) out.push(s);
+    });
+    return out.slice(0, HOME_LIST_MAX);
+  }
+  function routineOn(r, date) {
+    if (!r || !parseDay(date)) return false;
+    var days = Array.isArray(r.days) ? r.days : [];
+    if (days.map(Number).indexOf(homeDow(date)) < 0) return false;
+    var from = parseDay(r.from) ? r.from : (r.createdAt ? tourToday(+r.createdAt) : '');
+    return !from || date >= from;
+  }
+  function homeMonthDay(start, date) {
+    var s = parseDay(start), d = parseDay(date);
+    if (!s || !d) return false;
+    var last = new Date(d.getFullYear(), d.getMonth() + 1, 0).getDate();
+    return d.getDate() === Math.min(s.getDate(), last);
+  }
+  function taskOn(t, date) {
+    if (!t || !parseDay(date) || !parseDay(t.date)) return false;
+    var rep = String(t.repeat || '');
+    if (!rep) return t.date === date;
+    if (date < t.date) return false;
+    var dow = homeDow(homeSmallHours(t.time) ? addDays(date, 1) : date);
+    if (rep === 'day') return true;
+    if (rep === 'weekdays') return dow >= 1 && dow <= 5;
+    if (rep === 'week') return homeDow(date) === homeDow(t.date);
+    if (rep === 'month') return homeMonthDay(t.date, date);
+    var i = HOME_KEYS.indexOf(rep);
+    return i >= 0 && dow === i;
+  }
+  function taskDone(t, date) {
+    if (!t) return false;
+    return t.repeat ? (Array.isArray(t.doneDays) && t.doneDays.indexOf(date) >= 0) : !!t.doneAt;
+  }
+  function taskLate(t, today) {
+    return !!t && !t.repeat && !t.doneAt && parseDay(t.date) && parseDay(today) ? t.date < today : false;
+  }
+  function taskNext(t, from) {
+    if (!t || !parseDay(t.date) || !parseDay(from)) return '';
+    if (!t.repeat) return t.date >= from ? t.date : '';
+    var d = t.date > from ? t.date : from;
+    for (var i = 0; i < 400; i++, d = addDays(d, 1)) if (taskOn(t, d)) return d;
+    return '';
+  }
+  function taskBucket(t, today) {
+    if (!t) return 'someday';
+    if (t.repeat) {
+      if (!parseDay(t.date)) return 'someday';
+      if (taskOn(t, today)) return taskDone(t, today) ? 'done' : 'today';
+      return taskNext(t, today) ? 'upcoming' : 'done';
+    }
+    if (t.doneAt) return 'done';
+    if (!parseDay(t.date)) return 'someday';
+    return t.date <= today ? 'today' : 'upcoming';
+  }
+  function homeTimeKey(time) {
+    var m = homeMins(time);
+    return m == null ? 9999 : m < ROLLOVER_HOURS * 60 ? m + 1440 : m;
+  }
+  function homeGroups(tasks, today) {
+    var g = { today: [], upcoming: [], someday: [], done: [] };
+    (Array.isArray(tasks) ? tasks : []).forEach(function (t) { if (t) g[taskBucket(t, today)].push(t); });
+    var day = function (t) { return t.repeat ? (taskNext(t, today) || t.date || '') : (t.date || ''); };
+    var byDay = function (a, b) {
+      return String(day(a)).localeCompare(String(day(b))) || homeTimeKey(a.time) - homeTimeKey(b.time) || num(a.createdAt) - num(b.createdAt);
+    };
+    g.today.sort(byDay); g.upcoming.sort(byDay);
+    g.someday.sort(function (a, b) { return num(a.createdAt) - num(b.createdAt); });
+    g.done.sort(function (a, b) { return String(b.doneAt || '').localeCompare(String(a.doneAt || '')) || num(b.createdAt) - num(a.createdAt); });
+    return g;
+  }
+  function homeDay(o) {
+    o = isObj(o) ? o : {};
+    var date = o.date, day = isObj(o.day) ? o.day : {};
+    var hide = {};
+    (Array.isArray(day.hide) ? day.hide : []).forEach(function (id) { hide[id] = true; });
+    var doneR = {};
+    (Array.isArray(day.doneRoutines) ? day.doneRoutines : []).forEach(function (id) { doneR[id] = true; });
+    var items = [];
+    var ROLL = ROLLOVER_HOURS * 60;
+    var add = function (kind, id, title, sub, time, mins, done, due) {
+      if (hide[id]) return;
+      var start = homeMins(time), len = Math.round(num(mins));
+      var item = { id: id, key: id, kind: kind, title: String(title == null ? '' : title).trim(), sub: sub || '',
+        start: start, at: start == null ? null : (start < ROLL ? start + 1440 : start),
+        end: start != null && len > 0 ? (start < ROLL ? start + 1440 : start) + len : null, done: !!done, _o: items.length };
+      if (due) item.due = due;
+      items.push(item);
+    };
+    (Array.isArray(o.events) ? o.events : []).forEach(function (e) {
+      if (!isObj(e)) return;
+      add('event', 'event:' + e.id, e.title, e.place || 'Calendar', e.allDay ? '' : e.time, e.mins, false);
+    });
+    (Array.isArray(o.routines) ? o.routines : []).forEach(function (r) {
+      if (isObj(r) && routineOn(r, date)) add('routine', 'routine:' + r.id, r.title, 'Routine', r.time, r.mins, doneR[r.id]);
+    });
+    (Array.isArray(o.tasks) ? o.tasks : []).forEach(function (t) {
+      if (!isObj(t)) return;
+      var late = parseDay(o.today) && date === o.today && taskLate(t, o.today);
+      if (!taskOn(t, date) && !late) return;
+      var sub = t.artist || t.listName || (late ? 'Late' : 'Task');
+      add('task', t.key || 'task:' + t.id, t.body, sub, late ? '' : t.time, t.mins, taskDone(t, late ? o.today : date), late && !t.artist ? t.date : '');
+    });
+    (Array.isArray(day.extra) ? day.extra : []).forEach(function (x) {
+      if (isObj(x)) add('extra', 'extra:' + x.id, x.title, 'Added for today', x.time, x.mins, x.done);
+    });
+    var order = { event: 0, routine: 1, task: 2, extra: 3 };
+    var timed = items.filter(function (x) { return x.at != null; })
+      .sort(function (a, b) { return a.at - b.at || order[a.kind] - order[b.kind] || a._o - b._o; });
+    var open = items.filter(function (x) { return x.at == null; })
+      .sort(function (a, b) { return order[a.kind] - order[b.kind] || a._o - b._o; });
+    timed.concat(open).forEach(function (x) { delete x._o; });
+    return { date: parseDay(date) ? date : null, timed: timed, open: open };
+  }
+  function homeRowOver(hd, item, now) {
+    var d = isObj(hd) ? hd : {}, day = parseDay(d.date);
+    if (!day || !isObj(item) || item.at == null) return false;
+    var when = function (mins) { return new Date(day.getFullYear(), day.getMonth(), day.getDate(), 0, mins).getTime(); };
+    var t = now == null ? Date.now() : +now;
+    if (t < when(ROLLOVER_HOURS * 60) || t >= when(1440 + ROLLOVER_HOURS * 60)) return false;
+    if (item.end != null) return t >= when(item.end);
+    var next = (Array.isArray(d.timed) ? d.timed : []).filter(function (x) { return x && x.at > item.at; })[0];
+    return t >= when(next ? next.at : item.at);
+  }
+  function modeSplash(last, now, had) {
+    if (last === now) return '';
+    if (!last && !(now === 'off' && had)) return '';
+    return now === 'off' ? 'OFF TOUR MODE' : 'ON TOUR MODE';
+  }
+  function homeTimeline(hd, opts) {
+    var o = isObj(opts) ? opts : {};
+    var d = isObj(hd) ? hd : {};
+    var day = parseDay(d.date), tz = typeof o.tz === 'string' ? o.tz : '';
+    var steps = (Array.isArray(d.timed) ? d.timed : []).filter(function (x) { return x && x.at != null; }).map(function (x) {
+      var z = day && tz ? zoneMoment(d.date, x.at, tz) : null;
+      return { key: x.kind, label: x.title, sub: x.sub || '', name: x.title, band: '', mine: false, at: x.at, id: x.id, done: !!x.done,
+        ts: z != null ? z : day ? new Date(day.getFullYear(), day.getMonth(), day.getDate(), 0, x.at).getTime() : null };
+    });
+    return { date: day ? d.date : null, steps: steps, start: steps.length ? steps[0].ts : null, end: steps.length ? steps[steps.length - 1].ts : null };
+  }
+  function homeCountdown(today, start, first) {
+    var out = { left: null, right: null };
+    if (!parseDay(today) || !parseDay(start) || start < today) return out;
+    var chip = function (day, what) {
+      var n = daysBetween(today, day);
+      return { n: n, words: (n === 1 ? 'day until ' : 'days until ') + what, said: n + (n === 1 ? ' day until ' : ' days until ') + what };
+    };
+    var f = parseDay(first) && first >= start ? first : '';
+    if (!f || f === start) { out.left = chip(start, f ? 'first show' : 'tour'); return out; }
+    out.left = chip(start, 'tour');
+    out.right = chip(f, 'first show');
+    return out;
+  }
+  function homeMonthShift(date, n) {
+    var d = parseDay(date) || new Date();
+    return ymd(new Date(d.getFullYear(), d.getMonth() + (n || 0), 1));
+  }
+  function homeMonth(date) {
+    var d = parseDay(date);
+    if (!d) return { year: 0, month: 0, title: '', weeks: [] };
+    var first = new Date(d.getFullYear(), d.getMonth(), 1), last = new Date(d.getFullYear(), d.getMonth() + 1, 0);
+    var cur = new Date(first.getFullYear(), first.getMonth(), 1 - first.getDay()), weeks = [];
+    while (cur <= last) {
+      var wk = [];
+      for (var i = 0; i < 7; i++) {
+        wk.push({ date: ymd(cur), day: cur.getDate(), inMonth: cur.getMonth() === first.getMonth() });
+        cur = new Date(cur.getFullYear(), cur.getMonth(), cur.getDate() + 1);
+      }
+      weeks.push(wk);
+    }
+    return { year: first.getFullYear(), month: first.getMonth() + 1, title: HOME_MONTHS[first.getMonth()] + ' ' + first.getFullYear(), weeks: weeks };
+  }
   root.GR = {
     CATEGORIES: CATEGORIES,
     TYPED_CATEGORIES: TYPED_CATEGORIES,
@@ -6184,6 +6758,11 @@
     cpaTxRows: cpaTxRows, cpaWorkbook: cpaWorkbook, cpaPdfModel: cpaPdfModel, cpaReconcileLines: cpaReconcileLines, cpaCsvCell: cpaCsvCell,
     cpaCsvText: cpaCsvText, cpaCsvBytes: cpaCsvBytes, cpaFileName: cpaFileName,
     cpaPage1: cpaPage1, cpaPdfBytes: cpaPdfBytes, cpaPdfPages: cpaPdfPages,
-    cpaSpanWords: cpaSpanWords, cpaPlain: cpaPlain, cpaConfirmWords: cpaConfirmWords, cpaStateRules: cpaStateRules, CPA_PDF_STEPS: CPA_PDF_STEPS
+    cpaSpanWords: cpaSpanWords, cpaPlain: cpaPlain, cpaConfirmWords: cpaConfirmWords, cpaStateRules: cpaStateRules, CPA_PDF_STEPS: CPA_PDF_STEPS,
+    parseTaskWords: parseTaskWords, homeTaskRead: homeTaskRead, homeClockDay: homeClockDay, homeNightDay: homeNightDay, splitPastedList: splitPastedList, HOME_LIST_MAX: HOME_LIST_MAX, routineOn: routineOn, taskOn: taskOn, taskDone: taskDone,
+    taskLate: taskLate, taskNext: taskNext, taskBucket: taskBucket, homeTimeKey: homeTimeKey, homeGroups: homeGroups, homeDay: homeDay, homeRowOver: homeRowOver, homeTimeline: homeTimeline,
+    modeSplash: modeSplash, homeCountdown: homeCountdown, homeMonth: homeMonth, homeMonthShift: homeMonthShift, homeMins: homeMins, homeTime: homeTime, homeClock: homeClock,
+    homeSpan: homeSpan, whose: whose, homeMinsWords: homeMinsWords, homeDateWords: homeDateWords, homeWhen: homeWhen, homeRepeatWords: homeRepeatWords,
+    homeDaysWords: homeDaysWords, homeDow: homeDow, HOME_DOW: HOME_DOW, HOME_KEYS: HOME_KEYS, HOME_MONTHS: HOME_MONTHS
   };
 })(typeof globalThis !== 'undefined' ? globalThis : this);

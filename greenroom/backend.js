@@ -27,6 +27,8 @@
   var boAskCache = {}, boAskAsk = {}, boAskGen = {}, boAskKnown = null, boAskProbing = false;
   var boSelfKnown = null, boSelfProbing = false;
   var todoCache = {}, todoAsk = {}, todoGen = {}, todoKnown = null, todoProbing = false;
+  var todoRoles = null;
+  var teamFn = null;
   var myTodoCache = null, myTodoAsk = null, myTodoGen = 0;
   var TODO_COLS = 'id, artist_id, cat, body, assigned_to, due, done_at, created_by, created_at';
   var mySpotCache = null, mySpotAsk = null, mySpotGen = 0;
@@ -95,6 +97,8 @@
     });
   }
   var wroteAt = {}, tick = 0;
+  var labelsRead = false;
+  var toursWhole = false;
   async function refetch() {
     var asked = ++tick;
     var tours = await sb.from('tours').select('id, owner_id, doc');
@@ -114,9 +118,14 @@
       return [r.id, doc];
     }));
     if (stale) scheduleRefetch();
-    var labels = await sb.from('labels').select('id, doc');
-    if (labels.error) throw labels.error;
-    cache.labels = new Map(labels.data.map(function (r) { return [r.id, r.doc]; }));
+    var labels = await pageRows(function () {
+      return sb.from('labels').select('id, doc, owner_id', { count: 'exact' }).order('id').order('owner_id');
+    }, function (r) { return r.id + '|' + r.owner_id; });
+    if (!labels) throw err('unavailable');
+    var me = session ? session.user.id : null, labelRows = new Map();
+    labels.rows.forEach(function (r) { if (!labelRows.has(r.id) || r.owner_id === me) labelRows.set(r.id, r.doc); });
+    cache.labels = labelRows;
+    labelsRead = true;
     var guests = await sb.from('guests').select('*');
     cache.guests = guests.error ? cache.guests : guests.data;
     var notes = await sb.from('notes').select('*').order('created_at');
@@ -136,6 +145,7 @@
     var asks = await sb.from('ari_asks').select('*').order('created_at');
     if (!asks.error) cache.asks = asks.data;
     await loadReimbursements();
+    if (!ga.error) toursWhole = true;
     emit('tours'); emit('labels');
     legalFlush();
   }
@@ -238,6 +248,12 @@
         return d;
       }
       return {
+        get: async function () {
+          if (table !== 'labels') throw err('invalid_argument');
+          var q = await sb.from('labels').select('doc').eq('owner_id', session.user.id).eq('id', id).maybeSingle();
+          if (q.error) throw mapError(q.error);
+          return { exists: !!q.data, data: function () { return q.data ? q.data.doc : null; } };
+        },
         set: async function (doc) {
           var row = { id: id, doc: stripped(doc), updated_at: new Date().toISOString() };
           var q = table === 'tours'
@@ -533,6 +549,8 @@
   window.GR_BACKEND = {
     noteError: noteError,
     netTrouble: function () { return navigator.onLine === false || Date.now() - lastNetFail < 8000; },
+    labelsRead: function () { return labelsRead; },
+    toursWhole: function () { return toursWhole; },
     email: function () { return session && session.user ? session.user.email : null; },
     username: function () {
       var m = session && session.user ? session.user.user_metadata : null;
@@ -2481,6 +2499,7 @@
       var c = todoCache[artistId];
       return c && c.data && c.data.can ? c.data.invites : null;
     },
+    todoRolesOn: function () { return todoRoles === true; },
     todoAdd: async function (artistId, cat, body, more) {
       if (!session) throw err('unavailable');
       var m = isObj(more) ? more : {};
@@ -2520,13 +2539,20 @@
       if (myTodoCache && myTodoCache.data) myTodoCache.data = myTodoCache.data.filter(function (x) { return x.id !== id; });
       todoStale(); emit('tours');
     },
-    todoInvite: async function (artistId, userId, name) {
+    todoInvite: async function (artistId, userId, name, role) {
       if (!session) throw err('unavailable');
-      var q = await sb.from('todo_invites').insert({ artist_id: artistId, user_id: userId, invited_by: session.user.id });
+      var title = todoRoles === true ? String(role || '').trim().slice(0, 40) : '';
+      var row = { artist_id: artistId, user_id: userId, invited_by: session.user.id };
+      if (title) row.role = title;
+      var q = await sb.from('todo_invites').insert(row);
+      if (q.error && title && columnMissing(q.error)) {
+        todoRoles = false; title = '';
+        q = await sb.from('todo_invites').insert({ artist_id: artistId, user_id: userId, invited_by: session.user.id });
+      }
       if (q.error && q.error.code !== '23505') throw todoError(q.error);
       var c = todoCache[artistId];
       if (c && c.data && c.data.can && !c.data.invites.some(function (v) { return v.userId === userId; })) {
-        c.data.invites.push({ userId: userId, name: String(name || ''), invitedBy: session.user.id, at: new Date().toISOString() });
+        c.data.invites.push({ userId: userId, name: String(name || ''), role: title, invitedBy: session.user.id, at: new Date().toISOString() });
       }
       todoStale(); emit('tours');
     },
@@ -2543,6 +2569,36 @@
       var c = myTodoCache;
       if (!c || c.stale || fresh || Date.now() - c.at > FLOWERS_FRESH) loadMyTodos();
       return c ? c.data : null;
+    },
+    teamArtists: async function () {
+      if (!session) return [];
+      if (teamFn !== false) {
+        var t = await sb.rpc('my_team_artists');
+        if (!t.error) {
+          teamFn = true;
+          return (Array.isArray(t.data) ? t.data : []).filter(function (a) { return isObj(a) && a.id; }).map(function (a) {
+            return { id: a.id, name: String(a.name || ''), handle: String(a.handle || ''), avatar: String(a.avatar || '') };
+          });
+        }
+        if (!fnMissing(t.error)) throw mapError(t.error);
+        teamFn = false;
+      }
+      var inv = await sb.from('todo_invites').select('artist_id, invited_by').eq('user_id', session.user.id).order('at', { ascending: false }).limit(50);
+      if (inv.error) { if (tableMissing(inv.error)) return []; throw mapError(inv.error); }
+      var rows = inv.data || [];
+      if (!rows.length) return [];
+      var pages = await sb.from('artists').select('id, name, handle, avatar, verified, owner_id').in('id', rows.map(function (r) { return r.artist_id; }));
+      if (pages.error) throw mapError(pages.error);
+      if (modKnown === null) await modProbe();
+      var B = window.GR_BACKEND, page = {};
+      (pages.data || []).forEach(function (a) { page[a.id] = a; });
+      return rows.filter(function (r) {
+        var a = page[r.artist_id];
+        return !!a && a.verified === true && !B.isBlocked(a.owner_id) && !B.isBlocked(r.invited_by);
+      }).map(function (r) {
+        var a = page[r.artist_id];
+        return { id: a.id, name: String(a.name || ''), handle: String(a.handle || ''), avatar: String(a.avatar || '') };
+      });
     },
     spotsOn: function () {
       if (spotKnown === null) spotProbe();
@@ -3118,14 +3174,14 @@
   var FEED_PAGE = 1000;
   var FEED_LIST = 100;
   var FEED_LIST_COLS = 'id, tour_id, date, posted, merchant, amount, account, why, status, reason, decided_at, bank_amount, gone_on';
-  async function pageRows(make) {
+  async function pageRows(make, keyOf) {
     var rows = [], seen = {}, from = 0, total = null;
     for (var turn = 0; turn < 60; turn++) {
       var q = await make().range(from, from + FEED_PAGE - 1);
       if (q.error) return null;
       var got = q.data || [];
       if (typeof q.count === 'number') total = q.count;
-      got.forEach(function (r) { if (!seen[r.id]) { seen[r.id] = true; rows.push(r); } });
+      got.forEach(function (r) { var k = keyOf ? keyOf(r) : r.id; if (!seen[k]) { seen[k] = true; rows.push(r); } });
       from += got.length;
       if (!got.length || (total != null ? from >= total : got.length < FEED_PAGE)) break;
     }
@@ -3602,10 +3658,9 @@
   }
   function modProbe(again) {
     if (!session || !sb) return Promise.resolve();
-    if (modProbing) return Promise.resolve();
+    if (modProbing) return modProbing;
     if (modKnown === false && !again) return Promise.resolve();
-    modProbing = true;
-    return Promise.resolve(sb.rpc('my_blocks')).then(function (q) {
+    modProbing = Promise.resolve(sb.rpc('my_blocks')).then(function (q) {
       modProbing = false;
       if (q && !q.error && isObj(q.data)) {
         modUser = session && session.user ? session.user.id : modUser;
@@ -3618,6 +3673,7 @@
         modKnown = false;
       }
     }, function () { modProbing = false; });
+    return modProbing;
   }
   function favProbe() {
     if (favProbing || !session) return;
@@ -3727,9 +3783,17 @@
         return null;
       }
       if (q.data !== true) return { can: false };
+      var invitesAsk = function () {
+        return sb.from('todo_invites').select(todoRoles === false ? 'user_id, invited_by, at' : 'user_id, invited_by, at, role')
+          .eq('artist_id', artistId).order('at').then(function (iq) {
+            if (iq.error && todoRoles !== false && columnMissing(iq.error)) { todoRoles = false; return invitesAsk(); }
+            if (!iq.error && todoRoles === null) todoRoles = true;
+            return iq;
+          });
+      };
       return Promise.all([
         sb.from('todo_items').select(TODO_COLS).eq('artist_id', artistId).order('created_at'),
-        sb.from('todo_invites').select('user_id, invited_by, at').eq('artist_id', artistId).order('at')
+        invitesAsk()
       ]).then(function (qs) {
         if (qs[0].error || qs[1].error) {
           if (tableMissing(qs[0].error) || tableMissing(qs[1].error)) { todoKnown = false; delete todoCache[artistId]; emit('tours'); }
@@ -3744,7 +3808,7 @@
           (pq.data || []).forEach(function (x) { names[x.user_id] = x.full_name || x.username || ''; });
           return { can: true, names: names,
             items: (qs[0].data || []).map(function (r) { return todoShape(r, names); }),
-            invites: (qs[1].data || []).map(function (r) { return { userId: r.user_id, name: names[r.user_id] || '', invitedBy: r.invited_by, at: r.at }; }) };
+            invites: (qs[1].data || []).map(function (r) { return { userId: r.user_id, name: names[r.user_id] || '', role: String(r.role || ''), invitedBy: r.invited_by, at: r.at }; }) };
         });
       });
     }).then(function (data) {
@@ -5822,7 +5886,7 @@
     if (invited) passwordGate(owed);
     else if (mustPassDue()) newPasswordGate(true);
     else if (resetting) newPasswordGate();
-    try { await refetch(); } catch (e) {   }
+    try { await refetch(); } catch (e) { scheduleRefetch(3000); }
     try { await importLocalTours(); } catch (e) {   }
     sb.channel('greenroom')
       .on('postgres_changes', { event: '*', schema: 'public', table: 'tours' }, scheduleRefetch)

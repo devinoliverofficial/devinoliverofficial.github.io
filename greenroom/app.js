@@ -15,7 +15,7 @@
     route: { name: 'home' }, drafts: {}, lastNet: {}, lastState: {},
     restored: false, pendingRender: false, focusOnRender: false,
     io: null, scrub: null, runningLed: null,
-    labels: {}, sample: null, imageTypes: [], imageMax: 0
+    labels: {}, labelsIn: false, sample: null, imageTypes: [], imageMax: 0
   };
   var store = { db: null, local: null, lsOk: true, queues: {}, retries: 0, unsub: null, unsubLabels: null };
   function canWrite() { return !S.writeRefused && S.role !== 'viewer'; }
@@ -464,6 +464,9 @@
     if (S.loaded || (tries || 0) > 40) { fn(); return; }
     setTimeout(function () { whenLoaded(fn, (tries || 0) + 1); }, 150);
   }
+  var HOME_PREFIXES = ['task:', 'homelists:', 'routine:', 'homeday:', 'taskplan:', 'homeprefs:', 'modeseen:'];
+  var HOME_KIND = { task: 1, homelists: 1, routine: 1, homeday: 1, taskplan: 1, homeprefs: 1, modeseen: 1 };
+  var homeFlight = {};
   function subscribeLabels() {
     if (store.unsubLabels) { try { store.unsubLabels(); } catch (e) {   } }
     store.unsubLabels = store.db.collection('labels').onSnapshot(function (snap) {
@@ -473,14 +476,17 @@
         var v = d.data();
         if (G.isObj(v) && v.kind === 'seen') { if (G.num(v.at) >= seenShape(seen[d.id]).at) seen[d.id] = seenShape(v); return; }
         if (G.isObj(v) && (G.isObj(v.cats) || v.kind === 'crew' || v.kind === 'artistLogo' || v.kind === 'artist' || v.kind === 'profile' ||
-          v.kind === 'crewClues')) m[d.id] = v;
+          v.kind === 'crewClues' || (HOME_KIND[v.kind] === 1 && String(d.id).indexOf(v.kind + ':') === 0))) m[d.id] = v;
       });
+      Object.keys(homeFlight).forEach(function (k) { var r = homeFlight[k].rec; if (r) m[k] = r; else delete m[k]; });
       S.labels = m;
+      if (!homeUnread()) S.labelsIn = true;
       if (S.loaded) render();
     }, function () {   });
   }
   function loadLocalLabels() {
     try { S.labels = JSON.parse(lsGet(LS_LABELS) || '{}') || {}; } catch (e) { S.labels = {}; }
+    S.labelsIn = true;
   }
   function saveLocalLabels() { lsSet(LS_LABELS, JSON.stringify(S.labels)); }
   async function writeLabel(merchant, category) {
@@ -727,6 +733,9 @@
         ((S.route.name === 'tour' && S.route.id === route.id) || (S.route.name === 'offtour' && S.route.host === route.id))) {
       route = Object.assign({}, route, { list: S.route.list });
     }
+    if (route.name === 'tour' && !route.stay && S.route && S.route.name === 'tour' && S.route.id === route.id && S.route.stay) {
+      route = Object.assign({}, route, { stay: true });
+    }
     if (route.name === 'home') S.fromMap = {};
     var key = routeKey(route), prevKey = S.route ? routeKey(S.route) : '';
     if (key) {
@@ -778,6 +787,22 @@
   };
   document.addEventListener('touchend', fingerUp, { passive: true, capture: true });
   document.addEventListener('touchcancel', fingerUp, { passive: true, capture: true });
+  function keepPhotos(view, node, kept) {
+    if (!node || !node.querySelectorAll) return;
+    var up = {};
+    view.querySelectorAll('img[src^="data:"]').forEach(function (im) {
+      if (!im.complete || !im.naturalWidth) return;
+      var src = im.getAttribute('src');
+      (up[src] = up[src] || []).push(im);
+    });
+    node.querySelectorAll('img[src^="data:"]').forEach(function (im) {
+      if (kept && kept.contains(im)) return;
+      var was = (up[im.getAttribute('src')] || []).shift();
+      if (!was) return;
+      was.className = im.className;
+      im.replaceWith(was);
+    });
+  }
   function render(force) {
     var view = $('#view');
     if (!view) return;
@@ -815,7 +840,9 @@
     else node = viewHome();
     var oldBar = view.querySelector('nav.tabbar');
     var newBar = node && node.querySelector ? node.querySelector('nav.tabbar') : null;
-    if (oldBar && newBar && oldBar.getAttribute('data-sig') === newBar.getAttribute('data-sig')) newBar.replaceWith(oldBar);
+    var sameBar = !!(oldBar && newBar && oldBar.getAttribute('data-sig') === newBar.getAttribute('data-sig'));
+    if (sameBar) newBar.replaceWith(oldBar);
+    keepPhotos(view, node, sameBar ? oldBar : null);
     view.replaceChildren(node);
     if (motion) slideRedrawn(view);
     menuSwipeArm();
@@ -834,6 +861,7 @@
   function afterRender() {
     if (IN_SHELL) { dayBarSoon(); appPushSoon(); alarmSoon(); }
     if (todoSheetLive) todoSheetLive();
+    if (homeSheetLive) homeSheetLive();
     myPayRedraw();
     if (S.route.name === 'tour' || S.route.name === 'offtour') mountHero();
     var payChart = $('.pay-chart', $('#view'));
@@ -844,6 +872,7 @@
       var af = $('#view [autofocus]');
       if (af) af.focus({ preventScroll: true });
     }
+    modeWatch();
   }
   var toastTimer = 0;
   var toastNow = null;
@@ -4076,14 +4105,15 @@
     tick.onclick = async function () {
       if (tick.disabled) return;
       tick.disabled = true;
-      var was = item.doneAt;
+      var was = item.doneAt, saved = true;
       item.doneAt = done ? null : new Date().toISOString();
       render(true);
       try { await B.todoSave(item.id, { done: !done }); }
-      catch (x) { item.doneAt = was; saveFailed('task', x); }
+      catch (x) { item.doneAt = was; saved = false; saveFailed('task', x); }
       render(true);
+      if (saved && !done && o.onDone) o.onDone(item);
     };
-    var late = !done && item.due && item.due < G.ymd(new Date());
+    var late = !done && item.due && item.due < (o.today || G.ymd(new Date()));
     var sub = [];
     if (o.artist) sub.push(h('span', { class: 'td-aname' }, o.artist));
     if (item.due) sub.push(h('span', { class: 'td-due' + (late ? ' late' : '') }, 'Due ' + dayMD(item.due)));
@@ -4092,9 +4122,9 @@
     var card = S.actCards && S.actCards[artistId] ? S.actCards[artistId].card : null;
     var m = item.assignedTo ? ((card && card.members) || []).filter(function (x) { return x.userId === item.assignedTo; })[0] : null;
     var who = item.assignedTo ? { name: item.assignedName || (m && m.name) || 'Someone', avatar: (m && m.avatar) || '' } : null;
-    return h('li', { class: 'am-li td-li' }, tick,
-      h('button', { class: 'fl-row td-open', type: 'button', onclick: function () { openTodoEdit(artistId, artistName, item); } },
-        h('span', { class: 'crew-label td-doer' },
+    return h('li', { class: 'am-li td-li' + (o.mine ? ' ht-own' : '') }, tick,
+      h('button', { class: 'fl-row td-open', type: 'button', onclick: function () { openTodoEdit(artistId, artistName, item, o.sheet); } },
+        o.mine ? null : h('span', { class: 'crew-label td-doer' },
           who ? personPhoto(who, 'xs crew-face') : h('span', { class: 'pf-photo xs crew-face td-noone', 'aria-hidden': 'true' }),
           h('span', { class: 'crew-who' }, h('span', { class: 'crew-name' + (who ? '' : ' td-any') }, who ? who.name : 'Anyone'))),
         h('span', { class: 'lr-text td-task' },
@@ -4151,7 +4181,8 @@
         canRun && B.todoInvite ? h('button', { class: 'add-pill', type: 'button', onclick: function () { openTodoInvite(artistId, card); } },
           icon('people', 16), 'Invite someone') : null));
   }
-  function openTodoEdit(artistId, artistName, item) {
+  function openTodoEdit(artistId, artistName, item, o) {
+    o = o || {};
     var B = window.GR_BACKEND;
     actOf(artistId);
     var card = S.actCards && S.actCards[artistId] ? S.actCards[artistId].card : null;
@@ -4166,7 +4197,7 @@
       people.push({ id: item.assignedTo, name: item.assignedName || 'Someone' });
     }
     var f = { body: item ? item.body : '', cat: item ? item.cat : 'other',
-      assignedTo: item && item.assignedTo ? item.assignedTo : '', due: item && item.due ? item.due : '' };
+      assignedTo: item && item.assignedTo ? item.assignedTo : '', due: item && item.due ? item.due : (o.due || '') };
     var busy = false;
     openSheet(function () {
       var bodyIn = h('textarea', { class: 'input td-in', rows: 2, maxlength: 300, value: f.body,
@@ -4220,6 +4251,9 @@
         h('p', { class: 'note lf-note' }, 'Whoever it’s for sees it on their own To Do List. A due date is optional.'),
         h('div', { class: 'stack lf-acts' },
           h('button', { class: 'btn primary block', type: 'button', onclick: function (e) { save(e.currentTarget); } }, item ? 'Save' : 'Add task'),
+          o.plan ? h('button', { class: 'linkbtn rv-aside', type: 'button', onclick: function () {
+            closeSheet(true); setTimeout(function () { openHomePlan(o.plan); }, 60);
+          } }, o.plan.planned ? 'Change when you plan to do it' : 'Plan when you will do it') : null,
           item && B.todoDrop ? h('button', { class: 'linkbtn rv-aside td-del', type: 'button',
             onclick: async function (e) {
               var btn = e.currentTarget;
@@ -4234,10 +4268,13 @@
       ];
     }, { label: item ? 'Edit task' : 'Add a task' });
   }
-  function openTodoInvite(artistId, card) {
+  var TEAM_TITLES = ['Manager', 'Booking agent', 'Business manager', 'Publicist', 'Label', 'Lawyer', 'Assistant'];
+  function openTodoInvite(artistId, card, o) {
     var B = window.GR_BACKEND;
+    o = o || {};
+    var titled = !!(o.team && B.todoRolesOn && B.todoRolesOn()), role = '';
     var onPage = {};
-    ((card && card.members) || []).forEach(function (m) { if (m.userId && !m.pending) onPage[m.userId] = true; });
+    ((card && card.members) || []).forEach(function (m) { if (m.userId && !m.pending && m.kind === 'band') onPage[m.userId] = true; });
     var invited = function () { return B.todoInvites(artistId) || []; };
     var results = h('div', { class: 'am-results' });
     var invitedWrap = h('div', { class: 'td-invited' });
@@ -4252,7 +4289,7 @@
         btn.disabled = true;
         try {
           if (isIn) await B.todoUninvite(artistId, p.userId);
-          else await B.todoInvite(artistId, p.userId, p.name || '');
+          else await B.todoInvite(artistId, p.userId, p.name || '', titled ? role : '');
         } catch (x) { btn.disabled = false; saveFailed('invite', x); return; }
         paintInvited(); paint();
       };
@@ -4278,7 +4315,8 @@
           paintInvited(); paint();
         };
         return h('div', { class: 'fl-row am-row' }, personPhoto({ name: v.name || '?' }, 'xs'),
-          h('span', { class: 'lr-text' }, h('span', { class: 'lr-title fl-name' }, v.name || 'Someone', marks.mark(v.userId, false))),
+          h('span', { class: 'lr-text' }, h('span', { class: 'lr-title fl-name' }, v.name || 'Someone', marks.mark(v.userId, false)),
+            v.role ? h('span', { class: 'lr-sub' }, v.role) : null),
           x);
       }));
       marks.ask();
@@ -4299,9 +4337,27 @@
     openSheet(function () {
       paint('Type a name or an @username.');
       paintInvited();
+      var titleBox = null;
+      if (titled) {
+        var other = h('input', { class: 'input', type: 'text', maxlength: 40, placeholder: 'Their title', 'aria-label': 'Their job title', hidden: true,
+          oninput: function (e) { role = e.target.value.trim(); } });
+        var chips = h('div', { class: 'chips ht-pills', role: 'group', 'aria-label': 'Job title' });
+        var paintChips = function (otherOn) {
+          fillTo(chips, TEAM_TITLES.concat(['Other']).map(function (t) {
+            var on = t === 'Other' ? otherOn : (!otherOn && role === t);
+            return h('button', { class: 'chip', type: 'button', 'aria-pressed': String(on), onclick: function () {
+              if (t === 'Other') { role = other.value.trim(); other.hidden = false; paintChips(true); other.focus(); }
+              else { role = role === t ? '' : t; other.hidden = true; paintChips(false); }
+            } }, t);
+          }));
+        };
+        paintChips(false);
+        titleBox = h('div', { class: 'hm-titles' }, h('p', { class: 'ht-k' }, 'Their job'), chips, other);
+      }
       return [
-        h('h2', { class: 'sh-title clean' }, 'Invite onto the list'),
-        h('p', { class: 'sh-sub clean' }, 'They see ' + card.name + '’s To Do List and nothing else of the page. ' + card.name + '’s own people see it already.'),
+        h('h2', { class: 'sh-title clean' }, o.team ? 'Invite to the team' : 'Invite onto the list'),
+        h('p', { class: 'sh-sub clean' }, (o.team ? 'A manager, a booking agent, anyone who helps. ' : '') + 'They see ' + G.whose(card.name) + ' To Do List and nothing else. Members see it already.'),
+        titleBox,
         h('div', { class: 'rv-find am-find' }, icon('search', 17),
           h('input', { class: 'input rv-search', type: 'search', placeholder: 'Search name or @username', autocomplete: 'off',
             autocapitalize: 'none', autocorrect: 'off', spellcheck: 'false', 'aria-label': 'Search accounts',
@@ -4319,7 +4375,8 @@
     var mine = B.myTodos ? B.myTodos() : null;
     if (mine && mine.length) return true;
     var a = myActs().list;
-    return !!(a && a.some(function (x) { return x.mine || x.kind === 'band'; }));
+    if (a && a.some(function (x) { return x.mine || x.kind === 'band'; })) return true;
+    return teamArtists().length > 0;
   }
   var todoSheetLive = null;
   function openTodoSheet(artistId, name) {
@@ -4366,6 +4423,7 @@
     ((myActs().list) || []).forEach(function (a) {
       if (a && a.id && (a.mine || a.kind === 'band')) put(a.id, a.name, a.avatar);
     });
+    teamArtists().forEach(function (a) { put(a.id, a.name, a.avatar); });
     if (!mine.length && !byArtist.length) {
       return emptyState('Nothing on your lists', 'Tasks on your artists’ To Do Lists, and any task handed to you, show up here.');
     }
@@ -4390,6 +4448,1357 @@
         }))] : null,
       byArtist.length ? h('ul', { class: 'tour-list rows td-arts' }, byArtist.map(artRow)) : null
     ];
+  }
+  function fillTo(el) { return fillEl(el, Array.prototype.slice.call(arguments, 1)); }
+  function homeKey(k) {
+    k = String(k || '');
+    return HOME_PREFIXES.some(function (p) { return k.indexOf(p) === 0; });
+  }
+  var homeSeq = 0;
+  function homeId() { return 'h' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6) + (++homeSeq).toString(36); }
+  function homeRecs(prefix, kind) {
+    return Object.keys(S.labels).filter(function (k) { return k.indexOf(prefix) === 0 && G.isObj(S.labels[k]) && S.labels[k].kind === kind; })
+      .map(function (k) { return Object.assign({}, S.labels[k], { id: k.slice(prefix.length) }); });
+  }
+  function homeListsOf(r) {
+    return G.isObj(r) && r.kind === 'homelists' && Array.isArray(r.lists)
+      ? r.lists.filter(function (x) { return G.isObj(x) && x.id && String(x.name || '').trim(); }) : [];
+  }
+  function homeLists() { return homeListsOf(S.labels['homelists:me']); }
+  function homeListName(id) {
+    var l = homeLists().filter(function (x) { return x.id === id; })[0];
+    return l ? String(l.name) : '';
+  }
+  function homeTasks() {
+    return homeRecs('task:', 'task').map(function (t) {
+      t.listName = t.list ? homeListName(t.list) : '';
+      t.subs = Array.isArray(t.subs) ? t.subs : [];
+      t.doneDays = Array.isArray(t.doneDays) ? t.doneDays : [];
+      t.repeat = String(t.repeat || '');
+      return t;
+    });
+  }
+  function homeRoutines() {
+    return homeRecs('routine:', 'routine').map(function (r) { r.days = Array.isArray(r.days) ? r.days : []; return r; })
+      .sort(function (a, b) { return G.homeTimeKey(a.time) - G.homeTimeKey(b.time) || G.num(a.createdAt) - G.num(b.createdAt); });
+  }
+  function homeDayOf(r) {
+    r = G.isObj(r) && r.kind === 'homeday' ? r : {};
+    return { hide: Array.isArray(r.hide) ? r.hide : [], extra: Array.isArray(r.extra) ? r.extra : [],
+      doneRoutines: Array.isArray(r.doneRoutines) ? r.doneRoutines : [] };
+  }
+  function homeDayDoc(date) { return homeDayOf(S.labels['homeday:' + date]); }
+  function homePrefsOf(r) {
+    r = G.isObj(r) && r.kind === 'homeprefs' ? r : {};
+    return Object.assign({}, r, { wake: String(r.wake || ''), bed: String(r.bed || ''), planned: String(r.planned || ''), intro: !!r.intro });
+  }
+  function homePrefs() { return homePrefsOf(S.labels['homeprefs:me']); }
+  function homePlans() {
+    var out = {};
+    homeRecs('taskplan:', 'taskplan').forEach(function (r) { out[r.id] = r; });
+    return out;
+  }
+  function homeUnread() {
+    var B = window.GR_BACKEND;
+    return S.mode === 'db' && !!store.db && !!(B && B.labelsRead) && !B.labelsRead();
+  }
+  async function homeFly(key, rec, o) {
+    o = o || {};
+    if (homeUnread()) { if (o.failed) o.failed({ code: 'offline' }); else toast(NO_SIGNAL); return false; }
+    var f = homeFlight[key] || (homeFlight[key] = { out: 0, n: 0, was: S.labels[key], rec: null, turn: Promise.resolve(), owed: [], waiting: [] });
+    var show = function (r) { f.rec = r; if (r) S.labels[key] = r; else delete S.labels[key]; };
+    var answer = function (ok) { f.waiting.splice(0).forEach(function (res) { res(ok); }); };
+    var n = ++f.n, ready = f.turn, free = null, handed = null;
+    show(rec);
+    f.out += 1;
+    f.turn = new Promise(function (res) { free = res; });
+    await ready;
+    if (o.after) await o.after;
+    try {
+      if (S.mode === 'db' && store.db) {
+        var ref = store.db.doc('labels/' + key), snap = null;
+        if (o.fresh && ref.get) {
+          try { snap = await ref.get(); } catch (x) {   }
+          if (snap) {
+            rec = o.fresh(f.owed.reduce(function (doc, make) { return make(doc); }, snap.exists ? snap.data() : null));
+            if (n === f.n) show(rec);
+          }
+        }
+        await (rec ? ref.set(rec) : ref.delete());
+      } else saveLocalLabels();
+      f.was = rec;
+      f.owed = [];
+      answer(true);
+      return true;
+    } catch (e) {
+      if (n !== f.n) {
+        if (!o.fresh) return false;
+        f.owed.push(o.fresh);
+        handed = new Promise(function (res) { f.waiting.push(res); });
+      } else {
+        f.rec = f.was;
+        f.owed = [];
+        if (f.was) S.labels[key] = f.was; else delete S.labels[key];
+        answer(false);
+        if (o.failed) o.failed(e);
+        else { saveFailed('your list', e); render(true); }
+        return false;
+      }
+    } finally {
+      f.out -= 1;
+      if (!f.out) delete homeFlight[key];
+      free();
+    }
+    return handed;
+  }
+  function homePut(key, rec) { return homeFly(key, rec); }
+  function homeDel(key) { return homeFly(key, null); }
+  async function homePutMany(pairs) {
+    var runs = [], gate = null, bad = null;
+    var failed = function (e) { bad = e || new Error('save'); };
+    for (var i = 0; i < pairs.length; i += 10) {
+      var chunk = pairs.slice(i, i + 10).map(function (p) { return homeFly(p[0], p[1], { after: gate, failed: failed }); });
+      runs = runs.concat(chunk);
+      gate = Promise.all(chunk);
+    }
+    var res = await Promise.all(runs);
+    if (bad) saveFailed('your list', bad);
+    return pairs.filter(function (p, k) { return !res[k]; });
+  }
+  function homeSaveTask(id, patch) {
+    var cur = S.labels['task:' + id];
+    var rec = Object.assign({ kind: 'task', body: '', list: '', date: '', time: '', mins: 0, repeat: '', subs: [], doneAt: null, doneDays: [],
+      createdAt: Date.now() }, G.isObj(cur) ? cur : {}, patch);
+    delete rec.id; delete rec.listName;
+    return homePut('task:' + id, rec);
+  }
+  function homeSaveDay(date, change) {
+    var key = 'homeday:' + date;
+    var make = function (r) { var doc = homeDayOf(r); return Object.assign({ kind: 'homeday' }, doc, change(doc)); };
+    return homeFly(key, make(S.labels[key]), { fresh: make });
+  }
+  function homeSavePrefs(patch) {
+    var make = function (r) { return Object.assign({ kind: 'homeprefs' }, homePrefsOf(r), patch); };
+    return homeFly('homeprefs:me', make(S.labels['homeprefs:me']), { fresh: make });
+  }
+  function homeSaveLists(change) {
+    var make = function (r) { return { kind: 'homelists', lists: change(homeListsOf(r)) }; };
+    return homeFly('homelists:me', make(S.labels['homelists:me']), { fresh: make });
+  }
+  function homeSetRoutine(date, id, on) {
+    return homeSaveDay(date, function (doc) {
+      var rest = doc.doneRoutines.filter(function (x) { return x !== id; });
+      return { doneRoutines: on ? rest.concat([id]) : rest };
+    });
+  }
+  function homeEvents(date) {
+    return (Array.isArray(S.homeEvents) ? S.homeEvents : []).filter(function (e) { return G.isObj(e) && e.date === date; });
+  }
+  function homeOn() { return !!overviewRoute(); }
+  function homeOff() { return homeOn() && offNow() && !actingAs(); }
+  function homeViews() { return homeOff() ? ['details', 'day', 'stats'] : actingAs() && offNow() ? ['details'] : []; }
+  function calendarConnectRow() {
+    if (!IN_SHELL) return h('p', { class: 'note hm-quiet' }, 'Your phone’s calendar comes here with the next iPhone update.');
+    return h('div', { class: 'ledger' }, h('button', { class: 'row rowbtn hm-connect', type: 'button', onclick: calendarConnect },
+      h('span', { class: 'row-label' }, 'Connect your calendar', h('span', { class: 'hint' }, 'Google and Apple calendars')),
+      icon('chevron', 18)));
+  }
+  function calendarConnect() {
+    var f = window.GR_CALENDAR_CONNECT;
+    if (typeof f === 'function') { f(); return; }
+    toast('Calendar connects in the next update of the app.');
+  }
+  if (window.__harness) window.__harness.homeEvents = function (list) {
+    var today = G.tourToday();
+    S.homeEvents = (Array.isArray(list) ? list : []).map(function (e) { return Object.assign({ date: today }, e); });
+    render(true);
+  };
+  function homeScope(chip, today) {
+    var mine = homeTasks();
+    if (chip.indexOf('list:') === 0) return mine.filter(function (t) { return t.list === chip.slice(5); });
+    if (chip.indexOf('artist:') === 0) {
+      var B = window.GR_BACKEND, id = chip.slice(7), items = todosOn() && B.todoList ? B.todoList(id) : null, name = (actOf(id).card || {}).name || '';
+      var plans = homePlans();
+      return (items || []).map(function (x) { return homeArtistShape(x, name, plans); });
+    }
+    return mine.concat(homeArtistTasks());
+  }
+  function homeArtistShape(x, name, plans) {
+    var p = (plans || {})[x.id] || {};
+    return { id: 'todo' + x.id, key: 'todo:' + x.id, src: 'artist', todoId: x.id, artistId: x.artistId || null, artist: name || x.artistName || '',
+      body: x.body, date: p.date || x.due || '', time: p.date ? String(p.time || '') : '', mins: p.date ? G.num(p.mins) : 0, due: x.due || '', planned: !!p.date,
+      doneAt: x.doneAt || null, createdAt: Date.parse(x.createdAt) || 0, raw: x };
+  }
+  function homeArtistTasks() {
+    var B = window.GR_BACKEND;
+    if (!todosOn() || !B.myTodos) return [];
+    var all = B.myTodos(), me = B.uid ? B.uid() : null, plans = homePlans();
+    return (all || []).filter(function (x) { return me && x.assignedTo === me; }).map(function (x) { return homeArtistShape(x, x.artistName, plans); });
+  }
+  function teamArtists() {
+    var B = window.GR_BACKEND;
+    if (!todosOn() || !B.teamArtists) return [];
+    return kept('aq:teamartists', function () { return B.teamArtists(); }).val || [];
+  }
+  function homeInvited(list) {
+    var B = window.GR_BACKEND, have = {}, out = [];
+    if (!todosOn() || !B.myTodos) return out;
+    list.forEach(function (a) { have[a.id] = true; });
+    teamArtists().forEach(function (a) {
+      if (!a.id || have[a.id]) return;
+      have[a.id] = true;
+      out.push({ id: a.id, name: a.name || 'Artist', avatar: a.avatar || '' });
+    });
+    (B.myTodos() || []).forEach(function (x) {
+      if (!x.artistId || have[x.artistId]) return;
+      have[x.artistId] = true;
+      if (B.todoList(x.artistId)) out.push({ id: x.artistId, name: x.artistName || 'Artist' });
+    });
+    return out;
+  }
+  function homeArtists() {
+    if (!todosOn()) return [];
+    var list = ((myActs().list) || []).filter(function (a) { return a && a.id && (a.mine || a.kind === 'band'); });
+    return list.concat(homeInvited(list));
+  }
+  function homeOnToday(t, day, today) { return day === today && G.homeGroups([t], today).today.length > 0; }
+  function homeHorns(today) {
+    var hd = homeDayFor(today, false);
+    if (G.homeGroups(homeScope('all', today), today).today.length) return;
+    if (hd.timed.concat(hd.open).some(function (x) { return x.kind !== 'event' && !x.done; })) return;
+    hornSplash('Today is clear', null);
+  }
+  async function homeTick(t, day) {
+    var today = G.tourToday(), rep = !!t.repeat, was = rep ? G.taskDone(t, day) : !!t.doneAt;
+    var horns = !was && homeOnToday(t, day, today), patch;
+    if (rep) {
+      var days = (t.doneDays || []).filter(function (d) { return d !== day; });
+      patch = { doneDays: was ? days : days.concat([day]) };
+    } else patch = { doneAt: was ? null : new Date().toISOString() };
+    var saving = homeSaveTask(t.id, patch);
+    render(true);
+    var ok = await saving;
+    render(true);
+    if (ok && horns) homeHorns(today);
+    return ok;
+  }
+  function homeTaskRow(t, today, o) {
+    o = o || {};
+    var day = o.day || (o.upcoming && t.repeat ? G.taskNext(t, today) || today : today);
+    var done = G.taskDone(t, day) || (!t.repeat && !!t.doneAt);
+    var late = G.taskLate(t, today);
+    var tick = h('button', { class: 'td-tick' + (done ? ' on' : ''), type: 'button', 'aria-label': (done ? 'Mark not done: ' : 'Mark done: ') + t.body },
+      done ? icon('check', 14) : null);
+    tick.onclick = function () { homeTick(t, day); };
+    var sub = [];
+    if (t.listName && o.showList) sub.push(h('span', { class: 'td-aname' }, t.listName));
+    if (t.repeat) sub.push(h('span', { class: 'td-due' }, G.homeRepeatWords(t.repeat) + (t.time ? ' · ' + G.homeClock(t.time) : '')));
+    else if (t.date && (o.showDay || t.time || late)) sub.push(h('span', { class: 'td-due' + (late ? ' late' : '') },
+      late ? 'Due ' + dayMD(t.date) : G.homeWhen(t.date, t.time, today)));
+    if (t.subs && t.subs.length) sub.push(h('span', { class: 'td-due' }, t.subs.filter(function (s) { return s.done; }).length + ' of ' + t.subs.length));
+    var line = [];
+    sub.forEach(function (s, i) { if (i) line.push(' · '); line.push(s); });
+    var face = h('div', { class: 'am-li td-li ht-own' }, tick,
+      h('button', { class: 'fl-row td-open', type: 'button', onclick: function () { openHomeTask(t); } },
+        h('span', { class: 'lr-text td-task' }, h('span', { class: 'lr-title td-body' + (done ? ' done' : '') }, t.body),
+          line.length ? h('span', { class: 'lr-sub' }, line) : null)));
+    return h('li', { class: 'ht-sw' }, swipeRow(face, [
+      h('button', { class: 'sw-undo', type: 'button', 'aria-label': 'Delete ' + t.body, onclick: async function () {
+        if (await homeDel('task:' + t.id)) { toast('Task deleted'); render(true); }
+      } }, icon('trash', 16), 'Delete')], { noTapOpen: true, tapOnlyCloses: true }));
+  }
+  function homeArtistRow(t, today, o) {
+    o = o || {};
+    var B = window.GR_BACKEND, me = B.uid ? B.uid() : null;
+    var li = todoRow(t.artistId, t.artist, t.raw, { artist: t.artist, mine: t.raw.assignedTo === me, today: today, sheet: mouseOnly() ? { plan: t } : null,
+      onDone: homeOnToday(t, today, today) ? function () { homeHorns(today); } : null });
+    var face = h('div', { class: li.className });
+    while (li.firstChild) face.appendChild(li.firstChild);
+    var planned = !!t.planned;
+    if (planned) face.querySelector('.td-task').appendChild(h('span', { class: 'lr-sub ht-plan' }, 'Planned for ' + G.homeWhen(t.date, t.time, today)));
+    return h('li', { class: 'ht-sw' }, swipeRow(face, [
+      h('button', { class: 'sw-edit', type: 'button', 'aria-label': 'Plan when you will do ' + t.body, onclick: function () { openHomePlan(t); } },
+        icon('clock', 16), planned ? 'Change' : 'Plan')], { noTapOpen: true, tapOnlyCloses: true }));
+  }
+  function homeRows(list, today, o) {
+    return h('ul', { class: 'rows td-list ht-list' }, list.map(function (t) {
+      return t.src === 'artist' ? homeArtistRow(t, today, o) : homeTaskRow(t, today, o);
+    }));
+  }
+  function homeGroupNodes(tasks, today, showList) {
+    var g = G.homeGroups(tasks, today), out = [], st = S.homeTodo || (S.homeTodo = {});
+    var section = function (title, list, o) {
+      if (!list.length) return;
+      out.push(h('h4', { class: 'td-cat' }, title));
+      out.push(homeRows(list, today, Object.assign({ showList: showList }, o)));
+    };
+    section('Today', g.today, {});
+    section('Upcoming', g.upcoming, { showDay: true, upcoming: true });
+    section('Someday', g.someday, {});
+    if (g.done.length) out.push(h('details', { class: 'tf-more td-done', open: st.doneOpen || null, ontoggle: function (e) { st.doneOpen = e.currentTarget.open; } },
+      h('summary', null, 'Done · ' + g.done.length),
+      h('ul', { class: 'rows td-list ht-list' }, g.done.map(function (t) {
+        return t.src === 'artist' ? homeArtistRow(t, today, {}) : homeTaskRow(t, today, { showList: showList, showDay: true });
+      }))));
+    return out;
+  }
+  function pfHomeTodo() {
+    var st = S.homeTodo || (S.homeTodo = { chip: 'all', view: 'list', month: '', sel: '' });
+    var today = G.tourToday();
+    var artists = homeArtists(), lists = homeLists();
+    var chips = [{ key: 'all', label: 'All' }]
+      .concat(artists.map(function (a) { return { key: 'artist:' + a.id, label: a.name }; }))
+      .concat(lists.map(function (l) { return { key: 'list:' + l.id, label: l.name }; }));
+    if (!chips.some(function (c) { return c.key === st.chip; })) st.chip = 'all';
+    var chip = st.chip, isArtist = chip.indexOf('artist:') === 0, isList = chip.indexOf('list:') === 0;
+    var pick = function (k) { st.chip = k; render(true); };
+    var chipRow = h('div', { class: 'ht-chiprow' },
+      h('div', { class: 'ht-chips', role: 'tablist', 'aria-label': 'Lists' }, chips.map(function (c) {
+        return h('button', { class: 'ht-chip' + (c.key === chip ? ' on' : ''), type: 'button', role: 'tab', 'aria-selected': c.key === chip ? 'true' : 'false',
+          onclick: function () { if (c.key !== chip) pick(c.key); } }, c.label);
+      })),
+      h('button', { class: 'ht-addlist', type: 'button', 'aria-label': 'Add a list', onclick: function () { openHomeList(null); } }, icon('plus', 18)));
+    var month = st.view === 'month';
+    var bar = h('div', { class: 'ht-bar' },
+      h('button', { class: 'iconbtn sm ht-ib', type: 'button', 'aria-label': month ? 'Show the list' : 'Show the month',
+        onclick: function () { st.view = month ? 'list' : 'month'; if (!st.month) { st.month = today; st.sel = today; } render(true); } },
+        icon(month ? 'tabsheet' : 'calendar', 21)),
+      h('button', { class: 'iconbtn sm ht-ib', type: 'button', 'aria-label': 'More', onclick: function () { openHomeMore(chip); } }, icon('more', 21)));
+    var body;
+    if (month) body = homeMonthNodes(st, homeScope(chip, today), today, chip);
+    else if (isArtist) {
+      var id = chip.slice(7), c = actOf(id);
+      body = c.card ? (todoBlock(id, c.card) || emptyState('No list here', 'This list opens for the people on it.'))
+        : h('p', { class: 'note' }, c.failed ? 'Couldn’t load this list. Check your signal and try again.' : 'Loading…');
+    } else {
+      var tasks = homeScope(chip, today);
+      body = tasks.length ? homeGroupNodes(tasks, today, !isList)
+        : h('div', { class: 'ht-empty' }, emptyState(isList ? 'Nothing on this list' : 'Nothing to do yet',
+            'Tap + and type it the way you say it: “Call Mom tonight at 8”.'));
+    }
+    requestAnimationFrame(function () {
+      var on = chipRow.querySelector('.ht-chip.on'), strip = chipRow.querySelector('.ht-chips');
+      if (on && strip) strip.scrollLeft = Math.max(0, on.offsetLeft - strip.clientWidth / 2 + on.offsetWidth / 2);
+    });
+    var add = function () {
+      if (isArtist) { var cc = actOf(chip.slice(7)).card; openTodoEdit(chip.slice(7), cc ? cc.name : '', null, { due: month ? st.sel : '' }); }
+      else openHomeTask(null, { list: isList ? chip.slice(5) : '', date: month ? st.sel : today });
+    };
+    return [bar, chipRow,
+      h('section', { class: 'tf-block td-block ht-wrap ht-room', 'aria-label': 'To Do List' }, body),
+      h('button', { class: 'ht-fab', type: 'button', 'aria-label': 'Add a task', onclick: add }, icon('plus', 28))];
+  }
+  function homeMonthNodes(st, tasks, today, chip) {
+    var m = G.homeMonth(st.month || today), sel = st.sel || today;
+    var has = {};
+    m.weeks.forEach(function (w) { w.forEach(function (d) {
+      if (tasks.some(function (t) { return G.taskOn(t, d.date) && !G.taskDone(t, d.date); })) has[d.date] = true;
+    }); });
+    var move = function (n) { st.month = G.homeMonthShift(st.month || today, n); render(true); };
+    var grid = h('div', { class: 'ht-grid', role: 'grid', 'aria-label': m.title },
+      G.HOME_DOW.map(function (d) { return h('span', { class: 'ht-dow', role: 'columnheader' }, d.slice(0, 3)); }),
+      m.weeks.map(function (w) {
+        return w.map(function (d) {
+          return h('button', { class: 'ht-day' + (d.inMonth ? '' : ' out') + (d.date === today ? ' today' : '') + (d.date === sel ? ' sel' : ''), type: 'button',
+            'aria-label': dayLong(d.date) + (has[d.date] ? ', has tasks' : ''), 'aria-pressed': d.date === sel ? 'true' : 'false',
+            onclick: function () { st.sel = d.date; if (!d.inMonth) st.month = d.date; render(true); } },
+            h('span', { class: 'ht-dn num' }, String(d.day)), has[d.date] ? h('span', { class: 'ht-dot', 'aria-hidden': 'true' }) : null);
+        });
+      }));
+    var day = tasks.filter(function (t) { return G.taskOn(t, sel) || (sel === today && G.taskLate(t, today)); })
+      .sort(function (a, b) { return G.homeTimeKey(a.time) - G.homeTimeKey(b.time); });
+    return [
+      h('div', { class: 'ht-mhead' },
+        h('button', { class: 'iconbtn sm', type: 'button', 'aria-label': 'Last month', onclick: function () { move(-1); } }, icon('back', 20)),
+        h('h3', { class: 'ht-mtitle' }, m.title),
+        h('button', { class: 'iconbtn sm', type: 'button', 'aria-label': 'Next month', onclick: function () { move(1); } }, icon('chevron', 20))),
+      grid,
+      h('h4', { class: 'td-cat' }, G.homeDateWords(sel, today) === 'Today' ? 'Today' : dayLong(sel)),
+      day.length ? homeRows(day, today, { showList: true, day: sel })
+        : h('p', { class: 'note ht-nothing' }, 'Nothing on this day. Tap + to add something.')
+    ];
+  }
+  function openHomeMore(chip) {
+    var isList = chip.indexOf('list:') === 0;
+    var row = function (label, sub, fn) {
+      return h('button', { class: 'row rowbtn', type: 'button', onclick: function () { closeSheet(true); setTimeout(fn, 60); } },
+        h('span', { class: 'row-label' }, label, sub ? h('span', { class: 'hint' }, sub) : null), icon('chevron', 18));
+    };
+    openSheet(function () {
+      return [
+        h('h2', { class: 'sh-title clean' }, 'To Do List'),
+        h('div', { class: 'ledger lf-card' },
+          row('Paste a list', 'One task to a line, from Notes or anywhere', function () { openHomePaste(chip); }),
+          row('Calendar', 'See your tasks by the month', function () {
+            var st = S.homeTodo || (S.homeTodo = { chip: 'all' });
+            st.view = 'month'; st.month = st.month || G.tourToday(); st.sel = st.sel || G.tourToday(); render(true);
+          }),
+          isList ? row('Rename this list', null, function () { openHomeList(chip.slice(5)); }) : null),
+        h('div', { class: 'stack lf-acts' }, h('button', { class: 'btn plain block', type: 'button', onclick: function () { closeSheet(); } }, 'Close'))
+      ];
+    }, { label: 'To Do List options' });
+  }
+  function openHomeList(id) {
+    var cur = id ? homeLists().filter(function (l) { return l.id === id; })[0] : null;
+    var busy = false;
+    openSheet(function () {
+      var input = h('input', { class: 'input', type: 'text', maxlength: 24, value: cur ? cur.name : '', placeholder: 'Errands, Songs, Gift ideas',
+        'aria-label': 'Name of the list', autofocus: true, autocomplete: 'off', autocapitalize: 'words' });
+      var save = async function (btn) {
+        var name = input.value.replace(/\s+/g, ' ').trim();
+        if (!name) { toast('Name the list first.'); return; }
+        var all = homeLists();
+        if (all.some(function (l) { return l.id !== id && l.name.toLowerCase() === name.toLowerCase(); })) { toast('You already have a list called ' + name + '.'); return; }
+        if (busy) return;
+        busy = true; btn.disabled = true;
+        var nid = id || homeId();
+        var ok = await homeSaveLists(function (lists) {
+          return id ? lists.map(function (l) { return l.id === id ? { id: id, name: name } : l; }) : lists.concat([{ id: nid, name: name }]);
+        });
+        busy = false; btn.disabled = false;
+        if (!ok) return;
+        if (!id) (S.homeTodo || (S.homeTodo = { chip: 'all' })).chip = 'list:' + nid;
+        closeSheet(); render(true);
+      };
+      input.addEventListener('keydown', function (e) { if (e.key === 'Enter') { e.preventDefault(); save(go2); } });
+      var go2 = h('button', { class: 'btn primary block', type: 'button', onclick: function (e) { save(e.currentTarget); } }, cur ? 'Save' : 'Add list');
+      return [
+        h('h2', { class: 'sh-title clean' }, cur ? 'Rename list' : 'New list'),
+        h('p', { class: 'sh-sub clean' }, 'Your own list of tasks, like Errands or Songs. Only you see it.'),
+        h('div', { class: 'ledger lf-card' }, rowField('Name', input)),
+        h('div', { class: 'stack lf-acts' }, go2,
+          cur ? h('button', { class: 'linkbtn rv-aside td-del', type: 'button', onclick: async function (e) {
+            var btn = e.currentTarget;
+            if (!btn.armed) { btn.armed = true; btn.textContent = 'Delete this list? Its tasks stay, with no list.'; return; }
+            if (busy) return;
+            busy = true; btn.disabled = true;
+            var ok = await homeSaveLists(function (lists) { return lists.filter(function (l) { return l.id !== id; }); });
+            busy = false;
+            if (!ok) { btn.disabled = false; return; }
+            (S.homeTodo || {}).chip = 'all';
+            closeSheet(); toast('List deleted'); render(true);
+          } }, 'Delete list') : null,
+          h('button', { class: 'btn plain block', type: 'button', onclick: function () { closeSheet(); } }, 'Cancel'))
+      ];
+    }, { label: cur ? 'Rename list' : 'New list' });
+  }
+  function homePills(options, value, onPick, label) {
+    var wrap = h('div', { class: 'chips ht-pills', role: 'group', 'aria-label': label || null }, options.map(function (o) {
+      return h('button', { class: 'chip', type: 'button', 'aria-pressed': String(o[0] === value), onclick: function () { onPick(o[0]); } }, o[1]);
+    }));
+    return wrap;
+  }
+  var HOME_LENGTHS = [[0, 'None'], [15, '15m'], [30, '30m'], [45, '45m'], [60, '1h'], [90, '1.5h'], [120, '2h']];
+  function openHomeTask(task, o) {
+    o = o || {};
+    var today = G.tourToday();
+    var base = task ? { date: task.date || '', time: task.time || '', repeat: task.repeat || '', mins: G.num(task.mins) }
+      : { date: o.date || today, time: '', repeat: '', mins: 0 };
+    var f = { date: base.date, time: base.time, repeat: base.repeat, mins: base.mins,
+      subs: task ? task.subs.map(function (s) { return { id: s.id, body: s.body, done: !!s.done }; }) : [], list: task ? (task.list || '') : (o.list || ''),
+      man: { date: false, time: false, repeat: false, mins: false }, panel: '' };
+    if (f.list && !homeListName(f.list)) f.list = '';
+    var busy = false;
+    openSheet(function () {
+      var bodyIn = h('textarea', { class: 'ht-in', rows: 3, maxlength: 300, value: task ? task.body : '', placeholder: 'Call Mom tonight at 8',
+        'aria-label': 'The task', autofocus: true, enterkeyhint: 'done' });
+      var chipsBox = h('div', { class: 'ht-sheetchips' });
+      var panelBox = h('div', { class: 'ht-panel' });
+      var okBtn = h('button', { class: 'ht-ok', type: 'button', 'aria-label': task ? 'Save' : 'Add the task', disabled: true }, icon('check', 24));
+      var catSel = h('select', { class: 'ht-cat', 'aria-label': 'Category', onchange: function (e) { f.list = e.target.value; } },
+        [h('option', { value: '' }, 'No Category')].concat(homeLists().map(function (l) { return h('option', { value: l.id }, l.name); })));
+      catSel.value = f.list;
+      var words = function () {
+        return G.homeTaskRead(bodyIn.value, { saved: task ? task.body : null, day: G.homeClockDay(base.date, base.time, today), hand: f.man });
+      };
+      var follow = function () {
+        var p = words();
+        if (!f.man.date) f.date = p.date || base.date;
+        if (!f.man.time) f.time = p.time || base.time;
+        if (!f.man.repeat) f.repeat = p.repeat || base.repeat;
+        if (!f.man.time && !f.man.mins) f.mins = p.mins || base.mins;
+        if (f.repeat && !f.date) f.date = today;
+        if (!f.time) f.mins = 0;
+        paintChips();
+      };
+      var pickDay = function (day) { f.man.date = true; f.date = G.homeNightDay(day, f.time, today); };
+      var pickTime = function (t) {
+        var next = G.homeNightDay(G.homeClockDay(f.date, f.time, today), t, today);
+        f.man.time = true; f.time = t;
+        if (!t) f.mins = 0;
+        if (next !== f.date) { f.date = next; f.man.date = true; }
+      };
+      var paintChips = function () {
+        var when = f.date ? G.homeWhen(f.date, f.time, today) : 'No date';
+        var can = !!words().body;
+        okBtn.disabled = !can;
+        okBtn.classList.toggle('on', can);
+        fillTo(chipsBox,
+          h('button', { class: 'ht-sc date' + (f.panel === 'date' ? ' open' : '') + (f.date ? ' set' : ''), type: 'button', 'aria-expanded': String(f.panel === 'date'),
+            onclick: function () { f.panel = f.panel === 'date' ? '' : 'date'; paintChips(); } }, icon('calendar', 18), h('span', null, when)),
+          h('button', { class: 'ht-sc' + (f.repeat ? ' set' : '') + (f.panel === 'repeat' ? ' open' : ''), type: 'button', 'aria-label': f.repeat ? G.homeRepeatWords(f.repeat) : 'Repeat',
+            'aria-expanded': String(f.panel === 'repeat'), onclick: function () { f.panel = f.panel === 'repeat' ? '' : 'repeat'; paintChips(); } },
+            icon('refresh', 18), f.repeat ? h('span', null, G.homeRepeatWords(f.repeat)) : null),
+          h('button', { class: 'ht-sc' + (f.subs.length ? ' set' : '') + (f.panel === 'subs' ? ' open' : ''), type: 'button',
+            'aria-label': f.subs.length ? plural(f.subs.length, 'sub-task') : 'Sub-tasks', 'aria-expanded': String(f.panel === 'subs'),
+            onclick: function () { f.panel = f.panel === 'subs' ? '' : 'subs'; paintChips(); } },
+            icon('tabsheet', 18), f.subs.length ? h('span', null, String(f.subs.length)) : null));
+        paintPanel();
+      };
+      var paintPanel = function () {
+        if (f.panel === 'date') {
+          var tomorrow = G.addDays(today, 1), shown = G.homeClockDay(f.date, f.time, today);
+          var dateIn = h('input', { class: 'input', type: 'date', value: shown, 'aria-label': 'Day', onchange: function (e) { pickDay(e.target.value); paintChips(); } });
+          var timeIn = h('input', { class: 'input', type: 'time', value: f.time, 'aria-label': 'Time', onchange: function (e) { pickTime(e.target.value); paintChips(); } });
+          fillTo(panelBox,
+            homePills([['today', 'Today'], ['tomorrow', 'Tomorrow'], ['week', 'Next week'], ['none', 'No date']],
+              shown === today ? 'today' : shown === tomorrow ? 'tomorrow' : shown === G.addDays(today, 7) ? 'week' : !shown ? 'none' : '',
+              function (k) {
+                pickDay(k === 'today' ? today : k === 'tomorrow' ? tomorrow : k === 'week' ? G.addDays(today, 7) : '');
+                if (!f.date) { f.repeat = ''; f.man.repeat = true; }
+                paintChips();
+              }, 'Day'),
+            h('div', { class: 'ht-two' }, rowFieldBare('Day', dateIn), rowFieldBare('Time', timeIn)),
+            f.time ? [h('p', { class: 'ht-k' }, 'How long'), homePills(HOME_LENGTHS, f.mins, function (m) { f.man.mins = true; f.mins = m; paintChips(); }, 'How long')] : null,
+            f.time ? h('button', { class: 'linkbtn ht-clear', type: 'button', onclick: function () { pickTime(''); paintChips(); } }, 'Clear the time') : null);
+        } else if (f.panel === 'repeat') {
+          fillTo(panelBox, homePills([['', 'Never'], ['day', 'Every day'], ['weekdays', 'Weekdays'], ['week', 'Every week'], ['month', 'Every month']]
+            .concat(G.HOME_KEYS.indexOf(f.repeat) >= 0 ? [[f.repeat, G.homeRepeatWords(f.repeat)]] : []), f.repeat,
+            function (k) { f.man.repeat = true; f.repeat = k; if (k && !f.date) f.date = today; paintChips(); }, 'Repeat'));
+        } else if (f.panel === 'subs') {
+          var rows = f.subs.map(function (s, i) {
+            var inp = h('input', { class: 'input ht-sub-in', type: 'text', maxlength: 120, value: s.body, 'aria-label': 'Sub-task ' + (i + 1),
+              oninput: function (e) { s.body = e.target.value; } });
+            var tk = h('button', { class: 'td-tick' + (s.done ? ' on' : ''), type: 'button', 'aria-label': s.done ? 'Not done' : 'Done',
+              onclick: function () { s.done = !s.done; paintPanel(); } }, s.done ? icon('check', 14) : null);
+            return h('div', { class: 'ht-sub' }, tk, inp,
+              h('button', { class: 'pe-x', type: 'button', 'aria-label': 'Remove sub-task', onclick: function () { f.subs.splice(i, 1); paintChips(); } }, icon('close', 14)));
+          });
+          fillTo(panelBox, rows, h('button', { class: 'add-pill', type: 'button', onclick: function () {
+            f.subs.push({ id: homeId(), body: '', done: false }); paintPanel();
+            var ins = panelBox.querySelectorAll('.ht-sub-in'); if (ins.length) ins[ins.length - 1].focus();
+          } }, icon('plus', 16), 'Add a sub-task'));
+        } else fillTo(panelBox);
+      };
+      var save = async function () {
+        var p = words();
+        if (!p.body) { toast('Write the task first.'); return; }
+        if (busy) return;
+        busy = true; okBtn.disabled = true;
+        follow();
+        var date = f.date, rep = f.repeat;
+        if (rep && !date) date = today;
+        var subs = f.subs.map(function (s) { return { id: s.id, body: String(s.body || '').trim().slice(0, 120), done: !!s.done }; }).filter(function (s) { return s.body; });
+        var rec = { body: p.body.slice(0, 300), list: f.list, date: date, time: f.time, mins: f.time ? f.mins : 0, repeat: rep, subs: subs };
+        var ok = await homeSaveTask(task ? task.id : homeId(), task ? rec : Object.assign(rec, { createdAt: Date.now(), doneAt: null, doneDays: [] }));
+        busy = false;
+        if (!ok) { okBtn.disabled = false; return; }
+        closeSheet(); render(true);
+      };
+      okBtn.onclick = save;
+      bodyIn.addEventListener('input', follow);
+      bodyIn.addEventListener('keydown', function (e) { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); save(); } });
+      follow();
+      return [
+        h('h2', { class: 'sh-title clean ht-title' }, task ? 'Edit task' : 'New task'),
+        bodyIn, chipsBox, panelBox,
+        h('div', { class: 'ht-foot' }, h('span', { class: 'ht-catwrap' }, catSel, icon('chevron', 14)), okBtn),
+        task ? h('div', { class: 'stack lf-acts' }, h('button', { class: 'linkbtn rv-aside td-del', type: 'button', onclick: async function (e) {
+          var btn = e.currentTarget;
+          if (!btn.armed) { btn.armed = true; btn.textContent = 'Delete this task for good?'; return; }
+          if (busy) return;
+          busy = true; btn.disabled = true;
+          var ok = await homeDel('task:' + task.id);
+          busy = false;
+          if (!ok) { btn.disabled = false; return; }
+          closeSheet(); toast('Task deleted'); render(true);
+        } }, 'Delete task')) : null
+      ];
+    }, { label: task ? 'Edit task' : 'New task', cls: 'ht-sheet' });
+  }
+  function rowFieldBare(label, control) {
+    return h('label', { class: 'ht-fld' }, h('span', { class: 'ht-k' }, label), control);
+  }
+  function openHomePlan(t) {
+    var today = G.tourToday(), plan = homePlans()[t.todoId] || null;
+    var f = { date: plan ? G.homeClockDay(plan.date, plan.time, today) : (t.due && t.due >= today ? t.due : today), time: plan ? String(plan.time || '') : '', mins: plan ? G.num(plan.mins) : 0 };
+    var busy = false;
+    openSheet(function () {
+      var dateIn = h('input', { class: 'input', type: 'date', value: f.date, 'aria-label': 'Day', onchange: function (e) { f.date = e.target.value; } });
+      var timeIn = h('input', { class: 'input', type: 'time', value: f.time, 'aria-label': 'Time', onchange: function (e) { f.time = e.target.value; paintLen(); } });
+      var lenBox = h('div', { class: 'ht-lenbox' });
+      var paintLen = function () {
+        fillTo(lenBox, f.time ? [h('p', { class: 'ht-k' }, 'How long'), homePills(HOME_LENGTHS, f.mins, function (m) { f.mins = m; paintLen(); }, 'How long')] : null);
+      };
+      paintLen();
+      return [
+        h('h2', { class: 'sh-title clean' }, 'When will you do it?'),
+        h('p', { class: 'sh-sub clean' }, t.body + '. This is yours alone: ' + (t.artist ? G.whose(t.artist) : 'the artist’s') + ' list does not change.'),
+        h('div', { class: 'ht-two' }, rowFieldBare('Day', dateIn), rowFieldBare('Time', timeIn)),
+        lenBox,
+        h('div', { class: 'stack lf-acts' },
+          h('button', { class: 'btn primary block', type: 'button', onclick: async function (e) {
+            var btn = e.currentTarget;
+            if (!G.parseDay(f.date)) { toast('Pick the day.'); return; }
+            if (busy) return;
+            busy = true; btn.disabled = true;
+            var ok = await homePut('taskplan:' + t.todoId, { kind: 'taskplan', date: G.homeNightDay(f.date, f.time, today), time: f.time, mins: f.time ? f.mins : 0 });
+            busy = false;
+            if (!ok) { btn.disabled = false; return; }
+            closeSheet(); render(true);
+          } }, 'Save plan'),
+          plan ? h('button', { class: 'linkbtn rv-aside td-del', type: 'button', onclick: async function () {
+            if (await homeDel('taskplan:' + t.todoId)) { closeSheet(); render(true); }
+          } }, 'Remove my plan') : null,
+          h('button', { class: 'btn plain block', type: 'button', onclick: function () { closeSheet(); } }, 'Cancel'))
+      ];
+    }, { label: 'When will you do it?' });
+  }
+  var HOME_LIST_PROMPT = 'This is a photo of a typed or handwritten to-do list. Answer with JSON only: {"tasks":["first task","second task"]}. ' +
+    'One entry for each line item, in the order they appear, without bullets, numbers or checkboxes. Leave out anything that is not a task.';
+  function openHomePaste(chip, o) {
+    o = o || {};
+    var artistId = chip && chip.indexOf('artist:') === 0 ? chip.slice(7) : '';
+    var artistName = artistId ? (actOf(artistId).card || {}).name || 'the artist' : '';
+    var f = { list: o.list != null ? o.list : chip && chip.indexOf('list:') === 0 ? chip.slice(5) : '' };
+    var busy = false;
+    openSheet(function () {
+      var ta = h('textarea', { class: 'ht-in ht-paste', rows: 6, value: o.text || '', placeholder: 'Paste your list here, one task to a line', 'aria-label': 'The list', autofocus: true });
+      var count = h('p', { class: 'note ht-count' }, 'Paste or type a list to begin.');
+      var addBtn = h('button', { class: 'btn primary block', type: 'button', disabled: true }, 'Add tasks');
+      var status = h('p', { class: 'note ht-count', hidden: true });
+      var catSel = artistId ? null : h('select', { class: 'ht-cat', 'aria-label': 'Category', onchange: function (e) { f.list = e.target.value; } },
+        [h('option', { value: '' }, 'No Category')].concat(homeLists().map(function (l) { return h('option', { value: l.id }, l.name); })));
+      if (catSel) catSel.value = f.list;
+      var lines = function () { return G.splitPastedList(ta.value); };
+      var paint = function () {
+        var n = lines().length;
+        count.textContent = n ? (n >= G.HOME_LIST_MAX ? 'The first ' + G.HOME_LIST_MAX + ' lines will be added.' : plural(n, 'task') + ' found.') : 'Paste or type a list to begin.';
+        addBtn.disabled = !n; addBtn.textContent = n ? 'Add ' + plural(n, 'task') : 'Add tasks';
+      };
+      ta.addEventListener('input', paint);
+      paint();
+      addBtn.onclick = async function () {
+        var list = lines();
+        if (!list.length || busy) return;
+        busy = true; addBtn.disabled = true;
+        var today = G.tourToday(), t0 = Date.now();
+        var left = artistId ? await homeTodoMany(artistId, list) : (await homePutMany(list.map(function (line, i) {
+          return ['task:' + homeId(), { kind: 'task', body: line.slice(0, 300), list: f.list, date: today, time: '', mins: 0, repeat: '', subs: [], doneAt: null, doneDays: [], createdAt: t0 + i }];
+        }))).map(function (p) { return p[1].body; });
+        busy = false;
+        if (left.length) { ta.value = left.join('\n'); paint(); render(true); return; }
+        closeSheet(); toast(plural(list.length, 'task') + ' added' + (artistId ? ' to ' + G.whose(artistName) + ' list' : '')); render(true);
+      };
+      var read = async function (file) {
+        status.hidden = false; status.textContent = 'Reading the photo…';
+        var out = null;
+        try { out = await S.sample.json(HOME_LIST_PROMPT, { images: file, cache: false }); }
+        catch (e) {
+          if (e && SAMPLE_GONE.indexOf(e.code) >= 0) S.sample = null;
+          status.textContent = e && e.code === 'rate_limited' ? 'The reader is busy. Try again in a minute.' : 'Couldn’t read that photo.';
+          return;
+        }
+        var got = G.isObj(out) && Array.isArray(out.tasks) ? out.tasks.map(function (x) { return String(x == null ? '' : x).trim(); }).filter(Boolean) : [];
+        if (!got.length) { status.textContent = 'No list found in that photo.'; return; }
+        status.hidden = true;
+        ta.value = (ta.value.trim() ? ta.value.replace(/\s+$/, '') + '\n' : '') + got.join('\n');
+        paint();
+      };
+      var photo = S.sample ? fileControl({ cls: 'btn ghost block', icon: 'flyer', label: 'Read a photo of a list', accept: imageAccept(),
+        onFiles: async function (files) {
+          var file = files[0];
+          if (!file) return;
+          if (S.imageMax && file.size > S.imageMax) { toast('That photo is too big to read. Try a screenshot of it.'); return; }
+          if (aiAsks()) {
+            var kept = ta.value, yes = await aiConsent();
+            openHomePaste(chip, { text: kept, list: f.list, file: yes ? file : null });
+            return;
+          }
+          read(file);
+        } }) : null;
+      if (o.file && S.sample) read(o.file);
+      return [
+        h('h2', { class: 'sh-title clean' }, 'Paste a list'),
+        h('p', { class: 'sh-sub clean' }, 'Copy a list from Notes or a text and paste it here. Bullets, numbers and checkboxes come off by themselves.'),
+        ta, count, status,
+        artistId ? h('p', { class: 'note ht-count' }, 'These go on ' + G.whose(artistName) + ' To Do List, where everyone on it sees them.')
+          : h('div', { class: 'ht-foot ht-foot-paste' }, h('span', { class: 'ht-catwrap' }, catSel, icon('chevron', 14))),
+        photo,
+        h('div', { class: 'stack lf-acts' }, addBtn, h('button', { class: 'btn plain block', type: 'button', onclick: function () { closeSheet(); } }, 'Cancel'))
+      ];
+    }, { label: 'Paste a list', cls: 'ht-sheet' });
+  }
+  async function homeTodoMany(artistId, lines) {
+    var B = window.GR_BACKEND, left = [], bad = null;
+    for (var i = 0; i < lines.length; i += 10) {
+      var chunk = lines.slice(i, i + 10);
+      var res = await Promise.all(chunk.map(function (line) {
+        return B.todoAdd(artistId, 'other', line).then(function () { return null; }, function (e) { return e || new Error('save'); });
+      }));
+      res.forEach(function (e, k) { if (e) { bad = e; left.push(chunk[k]); } });
+    }
+    if (bad && bad.code === 'full') toast(bad.message || 'This list already holds 500 tasks not done. Tick some off or delete some first.', 6000);
+    else if (bad) saveFailed('task', bad);
+    return left;
+  }
+  var HOME_SUGGEST = [['Answer emails', 'mail'], ['Rehearse', 'music'], ['Write songs', 'edit'], ['Go to the gym', 'heart'], ['Eat lunch', 'sun'],
+    ['Go for a walk', 'tabmap'], ['Practice', 'music'], ['Call Mom', 'phone'], ['Post online', 'share'], ['Plan the week', 'calendar'],
+    ['Edit video', 'flyer'], ['Clean up', 'refresh']];
+  var HOME_PILLS = [[1, '1m'], [15, '15m'], [30, '30m'], [45, '45m'], [60, '1h'], [90, '1.5h']];
+  var HOME_DAY_LETTERS = ['S', 'M', 'T', 'W', 'T', 'F', 'S'];
+  function pfRoutines() {
+    var today = G.tourToday(), routines = homeRoutines(), doc = homeDayDoc(today), prefs = homePrefs();
+    if (!routines.length && !prefs.intro && !S.rtAsked && S.loaded && !homeUnread()) {
+      S.rtAsked = true;
+      setTimeout(function () {
+        if (S.pfTab === 'routines' && !sheet && !document.querySelector('.hf')) openHomeFlow({});
+      }, 350);
+    }
+    var onToday = routines.filter(function (r) { return G.routineOn(r, today); }), other = routines.filter(function (r) { return !G.routineOn(r, today); });
+    var done = {};
+    doc.doneRoutines.forEach(function (id) { done[id] = true; });
+    var row = function (r, ticks) {
+      var tk = ticks ? h('button', { class: 'td-tick' + (done[r.id] ? ' on' : ''), type: 'button', 'aria-label': (done[r.id] ? 'Mark not done: ' : 'Mark done: ') + r.title,
+        onclick: async function () {
+          var saving = homeSetRoutine(today, r.id, homeDayDoc(today).doneRoutines.indexOf(r.id) < 0);
+          render(true);
+          await saving;
+          render(true);
+        } }, done[r.id] ? icon('check', 14) : null) : h('span', { class: 'td-tick ghost', 'aria-hidden': 'true' });
+      var face = h('div', { class: 'am-li td-li ht-own' }, tk,
+        h('button', { class: 'fl-row td-open', type: 'button', onclick: function () { openHomeRoutine(r); } },
+          h('span', { class: 'ht-ric', 'aria-hidden': 'true' }, icon(ICONS[r.icon] ? r.icon : 'clock', 17)),
+          h('span', { class: 'lr-text td-task' }, h('span', { class: 'lr-title td-body' + (done[r.id] ? ' done' : '') }, r.title),
+            h('span', { class: 'lr-sub' }, [r.time ? G.homeSpan(r.time, r.mins) : 'Any time', G.homeDaysWords(r.days)].join(' · ')))));
+      return h('li', { class: 'ht-sw' }, swipeRow(face, [
+        h('button', { class: 'sw-undo', type: 'button', 'aria-label': 'Delete ' + r.title, onclick: async function () {
+          if (await homeDel('routine:' + r.id)) { toast('Routine deleted'); render(true); }
+        } }, icon('trash', 16), 'Delete')], { noTapOpen: true, tapOnlyCloses: true }));
+    };
+    var shape = prefs.wake || prefs.bed ? h('p', { class: 'note ht-shape' },
+      [prefs.wake ? 'Up ' + G.homeClock(prefs.wake) : '', prefs.bed ? 'Bed ' + G.homeClock(prefs.bed) : ''].filter(Boolean).join(' · ')) : null;
+    return [
+      h('section', { class: 'tf-block td-block ht-wrap ht-room', 'aria-label': 'Routines' },
+        routines.length ? [shape,
+          onToday.length ? [h('h4', { class: 'td-cat' }, 'Today'), h('ul', { class: 'rows td-list ht-list' }, onToday.map(function (r) { return row(r, true); }))] : null,
+          other.length ? [h('h4', { class: 'td-cat' }, onToday.length ? 'Other days' : 'Not today'), h('ul', { class: 'rows td-list ht-list' }, other.map(function (r) { return row(r, false); }))] : null,
+          h('div', { class: 'am-more ht-plan-more' }, h('button', { class: 'add-pill', type: 'button', onclick: function () { openHomeFlow({}); } }, icon('sun', 16), 'Plan your day'))]
+        : h('div', { class: 'ht-empty' }, emptyState('No routines yet',
+            'A routine is something you do on set days, like stretching at 8 or practice at 3. It shows on your day sheet each time it comes round.'),
+            h('div', { class: 'stack' }, h('button', { class: 'btn primary block', type: 'button', onclick: function () { openHomeFlow({}); } }, icon('sun', 18), 'Plan your day')))),
+      h('button', { class: 'ht-fab', type: 'button', 'aria-label': 'Add a routine', onclick: function () { openHomeFlow({ from: 'next' }); } }, icon('plus', 28))
+    ];
+  }
+  function openHomeRoutine(r) {
+    var f = { title: r.title, time: r.time || '', mins: G.num(r.mins), days: r.days.slice() };
+    var busy = false;
+    openSheet(function () {
+      var titleIn = h('input', { class: 'input', type: 'text', maxlength: 60, value: f.title, 'aria-label': 'What it is', autocomplete: 'off', oninput: function (e) { f.title = e.target.value; } });
+      var timeIn = h('input', { class: 'input', type: 'time', value: f.time, 'aria-label': 'Time', onchange: function (e) { f.time = e.target.value; paintLen(); } });
+      var lenBox = h('div', { class: 'ht-lenbox' }), daysBox = h('div', { class: 'ht-daysbox' });
+      var paintLen = function () {
+        fillTo(lenBox, f.time ? [h('p', { class: 'ht-k' }, 'How long'), homePills(HOME_LENGTHS, f.mins, function (m) { f.mins = m; paintLen(); }, 'How long')] : null);
+      };
+      var paintDays = function () { fillTo(daysBox, homeDayPicker(f.days, function (next) { f.days = next; paintDays(); })); };
+      paintLen(); paintDays();
+      return [
+        h('h2', { class: 'sh-title clean' }, 'Edit routine'),
+        h('div', { class: 'ledger lf-card' }, rowField('Routine', titleIn), rowField('Time', timeIn)),
+        lenBox, h('p', { class: 'ht-k' }, 'Days'), daysBox,
+        h('div', { class: 'stack lf-acts' },
+          h('button', { class: 'btn primary block', type: 'button', onclick: async function (e) {
+            var btn = e.currentTarget, title = f.title.replace(/\s+/g, ' ').trim();
+            if (!title) { toast('Write the routine first.'); return; }
+            if (busy) return;
+            busy = true; btn.disabled = true;
+            var ok = await homePut('routine:' + r.id, { kind: 'routine', title: title, icon: r.icon || '', time: f.time, mins: f.time ? f.mins : 0, days: f.days,
+              from: r.from || '', createdAt: r.createdAt || Date.now() });
+            busy = false;
+            if (!ok) { btn.disabled = false; return; }
+            closeSheet(); render(true);
+          } }, 'Save'),
+          h('button', { class: 'linkbtn rv-aside td-del', type: 'button', onclick: async function (e) {
+            var btn = e.currentTarget;
+            if (!btn.armed) { btn.armed = true; btn.textContent = 'Delete this routine for good?'; return; }
+            btn.disabled = true;
+            if (await homeDel('routine:' + r.id)) { closeSheet(); toast('Routine deleted'); render(true); } else btn.disabled = false;
+          } }, 'Delete routine'),
+          h('button', { class: 'btn plain block', type: 'button', onclick: function () { closeSheet(); } }, 'Cancel'))
+      ];
+    }, { label: 'Edit routine', cls: 'ht-sheet' });
+  }
+  function homeDayPicker(days, onChange, o) {
+    o = o || {};
+    var on = {};
+    days.forEach(function (d) { on[d] = true; });
+    var set = function (list) { onChange(list); };
+    var toggle = function (d) { var cur = days.slice(); var i = cur.indexOf(d); if (i >= 0) cur.splice(i, 1); else cur.push(d); set(cur.sort()); };
+    return h('div', { class: 'ht-days' + (o.dim ? ' dim' : '') },
+      h('div', { class: 'ht-dayrow', role: 'group', 'aria-label': 'Days' }, [0, 1, 2, 3, 4, 5, 6].map(function (d) {
+        return h('button', { class: 'ht-dbtn' + (on[d] ? ' on' : ''), type: 'button', 'aria-pressed': String(!!on[d]), 'aria-label': G.HOME_DOW[d],
+          onclick: function () { toggle(d); } }, HOME_DAY_LETTERS[d]);
+      })),
+      h('div', { class: 'chips ht-pills' },
+        h('button', { class: 'chip', type: 'button', 'aria-pressed': String(days.length === 7), onclick: function () { set([0, 1, 2, 3, 4, 5, 6]); } }, 'Every day'),
+        h('button', { class: 'chip', type: 'button', 'aria-pressed': String(days.join() === '1,2,3,4,5'), onclick: function () { set([1, 2, 3, 4, 5]); } }, 'Weekdays'),
+        h('button', { class: 'chip', type: 'button', 'aria-pressed': String(days.join() === '0,6'), onclick: function () { set([0, 6]); } }, 'Weekends')));
+  }
+  var HOME_WHEEL_ROW = 48;
+  function homeWheel(ref, label, onChange) {
+    var rows = [];
+    for (var m = 0; m < 1440; m += 15) rows.push(m);
+    var scroll = h('div', { class: 'hf-wscroll', tabindex: '0', role: 'listbox', 'aria-label': label }, h('div', { class: 'hf-wpad' }),
+      rows.map(function (m2) { return h('div', { class: 'hf-wi', role: 'option', 'data-m': String(m2), 'aria-selected': 'false',
+        onclick: function () { scroll.scrollTo({ top: (m2 / 15) * HOME_WHEEL_ROW, behavior: reduced() ? 'auto' : 'smooth' }); } }, G.homeClock(m2)); }),
+      h('div', { class: 'hf-wpad' }));
+    var items = scroll.querySelectorAll('.hf-wi'), shown = -1;
+    var said = h('p', { class: 'sr', 'aria-live': 'polite' });
+    var mark = function () {
+      if (!scroll.isConnected) return;
+      var i = Math.max(0, Math.min(rows.length - 1, Math.round(scroll.scrollTop / HOME_WHEEL_ROW)));
+      if (i === shown) return;
+      if (shown >= 0) { items[shown].classList.remove('sel'); items[shown].setAttribute('aria-selected', 'false'); said.textContent = G.homeClock(rows[i]); }
+      shown = i; items[i].classList.add('sel'); items[i].setAttribute('aria-selected', 'true');
+      ref.v = rows[i];
+      if (onChange) onChange(ref.v);
+    };
+    var queued = false;
+    scroll.addEventListener('scroll', function () { if (queued) return; queued = true; requestAnimationFrame(function () { queued = false; mark(); }); }, { passive: true });
+    var step = function (n) { scroll.scrollBy({ top: n * HOME_WHEEL_ROW, behavior: reduced() ? 'auto' : 'smooth' }); };
+    scroll.addEventListener('keydown', function (e) {
+      if (e.key === 'ArrowDown') { e.preventDefault(); step(1); } else if (e.key === 'ArrowUp') { e.preventDefault(); step(-1); }
+    });
+    var start = Math.max(0, Math.min(rows.length - 1, Math.round(G.num(ref.v) / 15)));
+    var place = function () { scroll.scrollTop = start * HOME_WHEEL_ROW; mark(); };
+    var wrap = h('div', { class: 'hf-wheel' },
+      h('button', { class: 'hf-warrow', type: 'button', 'aria-label': 'Earlier', onclick: function () { step(-1); } }, icon('up', 22)),
+      h('div', { class: 'hf-wbox' }, h('span', { class: 'hf-wpill', 'aria-hidden': 'true' }), scroll),
+      h('button', { class: 'hf-warrow down', type: 'button', 'aria-label': 'Later', onclick: function () { step(1); } }, icon('up', 22)), said);
+    requestAnimationFrame(place); setTimeout(place, 120);
+    return wrap;
+  }
+  function openHomeFlow(o) {
+    o = o || {};
+    if (document.querySelector('.hf')) return;
+    var today = G.tourToday(), prefs = homePrefs();
+    var d = { date: today, wake: G.homeMins(prefs.wake) != null ? G.homeMins(prefs.wake) : 480, bed: G.homeMins(prefs.bed) != null ? G.homeMins(prefs.bed) : 1320,
+      title: '', icon: '', time: null, mins: 15, days: [0, 1, 2, 3, 4, 5, 6], just: false, wakeSet: false, bedSet: false, added: 0 };
+    var steps = o.from === 'next' ? ['next', 'time', 'long', 'days'] : ['intro', 'wake', 'bed', 'next', 'time', 'long', 'days'];
+    var i = 0, busy = false, custom = false;
+    var root = h('div', { class: 'hf', role: 'dialog', 'aria-modal': 'true', 'aria-label': 'Plan your day' });
+    document.body.appendChild(root);
+    document.body.classList.add('locked');
+    var onKey = function (e) { if (e.key === 'Escape') { e.preventDefault(); leave(true); } };
+    document.addEventListener('keydown', onKey);
+    var close = function () { root.remove(); document.body.classList.remove('locked'); document.removeEventListener('keydown', onKey); };
+    var leave = function (mark) { close(); if (mark && !homePrefs().intro) homeSavePrefs({ intro: true }); render(true); };
+    var word = function (text, hl) {
+      var k = text.indexOf(hl);
+      return h('h1', { class: 'hf-title' }, text.slice(0, k), h('span', { class: 'hf-hl' }, hl), text.slice(k + hl.length));
+    };
+    var dayWord = function () { return d.date === today ? 'today' : 'tomorrow'; };
+    var cardNode = function () {
+      var span = d.time != null ? G.homeSpan(G.homeTime(d.time), steps[i] === 'long' ? d.mins : 0) : '';
+      return h('div', { class: 'hf-card' }, h('span', { class: 'hf-cic', 'aria-hidden': 'true' }, icon(ICONS[d.icon] ? d.icon : 'clock', 22)),
+        h('span', { class: 'hf-ctext' }, h('span', { class: 'hf-ck' }, span + (steps[i] === 'long' ? ' (' + G.homeMinsWords(d.mins) + ')' : '')), h('span', { class: 'hf-cv' }, d.title)));
+    };
+    var saveThis = async function () {
+      var title = d.title.replace(/\s+/g, ' ').trim();
+      var patch = { intro: true };
+      if (d.wakeSet) patch.wake = G.homeTime(d.wake);
+      if (d.bedSet) patch.bed = G.homeTime(d.bed);
+      if (d.wakeSet || d.bedSet || title) patch.planned = d.date;
+      if (title && !d.saved) {
+        var time = d.time != null ? G.homeTime(d.time) : '', ok;
+        if (d.just) {
+          var line = { id: homeId(), title: title, time: time, mins: time ? d.mins : 0 };
+          ok = await homeSaveDay(d.date, function (cur) { return { extra: cur.extra.concat([line]) }; });
+        } else {
+          ok = await homePut('routine:' + homeId(), { kind: 'routine', title: title, icon: d.icon || '', time: time, mins: time ? d.mins : 0,
+            days: d.days.slice(), from: d.date, createdAt: Date.now() });
+        }
+        if (!ok) return false;
+        d.saved = true;
+        d.added += 1;
+      }
+      return homeSavePrefs(patch);
+    };
+    var finish = async function (more) {
+      if (busy) return;
+      busy = true;
+      var ok = await saveThis();
+      busy = false;
+      if (!ok) return;
+      if (more) {
+        d.title = ''; d.icon = ''; d.time = null; d.mins = 15; d.days = [0, 1, 2, 3, 4, 5, 6]; d.just = false; d.saved = false; custom = false;
+        i = steps.indexOf('next'); draw(); toast('Added'); render(true); return;
+      }
+      close();
+      if (homeOff()) { S.homeDate = d.date; go({ name: 'offtour', view: 'day' }); } else render(true);
+    };
+    var nextStep = function () { if (i < steps.length - 1) { i++; draw(); } else finish(false); };
+    var skip = function () {
+      var s = steps[i];
+      if (s === 'intro') { leave(true); return; }
+      if (s === 'wake' || s === 'bed') { nextStep(); return; }
+      if (s === 'time') { d.time = null; d.mins = 0; i = steps.indexOf('days'); draw(); return; }
+      if (s === 'long') { d.mins = 0; nextStep(); return; }
+      if (s === 'next') {
+        d.title = '';
+        if (o.from === 'next' && !d.added) { leave(true); return; }
+      }
+      finish(false);
+    };
+    var draw = function () {
+      var s = steps[i];
+      var top = h('div', { class: 'hf-top' },
+        i > 0 ? h('button', { class: 'hf-back', type: 'button', 'aria-label': 'Back', onclick: function () { i = s === 'days' && d.time == null ? steps.indexOf('time') : i - 1; draw(); } }, icon('back', 22))
+          : h('span', { class: 'hf-back ghost', 'aria-hidden': 'true' }),
+        h('div', { class: 'hf-bar', role: 'progressbar', 'aria-label': 'Step ' + (i + 1) + ' of ' + steps.length, 'aria-valuemin': '0', 'aria-valuemax': String(steps.length), 'aria-valuenow': String(i + 1) },
+          h('span', { class: 'hf-fill', style: 'width:' + Math.round((i + 1) / steps.length * 100) + '%' })),
+        h('button', { class: 'hf-skip', type: 'button', onclick: skip }, 'Skip'));
+      var main, foot;
+      if (s === 'intro') {
+        main = [word('Let’s get started by planning ' + dayWord() + '…', dayWord()), h('p', { class: 'hf-sub' }, 'This will only take a few steps'),
+          h('div', { class: 'hf-art', 'aria-hidden': 'true' },
+            h('div', { class: 'hf-dots' }, [0, 1, 2, 3, 4, 5, 6].map(function () { return h('span', null); })),
+            [0, 1, 2].map(function (n) { return h('div', { class: 'hf-skel n' + n }, h('span', { class: 'hf-sk-c' }), h('span', { class: 'hf-sk-l' }), h('span', { class: 'hf-sk-l s' })); }))];
+        foot = [h('button', { class: 'hf-link', type: 'button', onclick: function () { d.date = d.date === today ? G.addDays(today, 1) : today; draw(); } },
+          d.date === today ? 'Plan for tomorrow instead' : 'Plan for today instead'),
+          h('button', { class: 'hf-go', type: 'button', onclick: nextStep }, 'Start Planning')];
+      } else if (s === 'wake') {
+        var rw = { v: d.wake };
+        main = [word(d.date === today ? 'When did you wake up?' : 'When will you wake up?', 'wake up'), h('p', { class: 'hf-sub' }, 'Your day is planned around it.'), homeWheel(rw, 'Wake up time')];
+        foot = [h('button', { class: 'hf-go', type: 'button', onclick: function () { d.wake = rw.v; d.wakeSet = true; nextStep(); } }, 'Continue')];
+      } else if (s === 'bed') {
+        var rb = { v: d.bed };
+        main = [word('When will you go to bed?', 'go to bed'), h('p', { class: 'hf-sub' }, 'A clear bedtime keeps the day from running long.'), homeWheel(rb, 'Bed time')];
+        foot = [h('button', { class: 'hf-go', type: 'button', onclick: function () { d.bed = rb.v; d.bedSet = true; nextStep(); } }, 'Continue')];
+      } else if (s === 'next') {
+        var inp = h('input', { class: 'hf-field', type: 'text', maxlength: 60, value: d.title, placeholder: 'Create a task', autocomplete: 'off', 'aria-label': 'What is up next',
+          autofocus: true, enterkeyhint: 'done' });
+        var go = h('button', { class: 'hf-go', type: 'button', disabled: !d.title.trim() }, 'Continue');
+        var sync = function () { d.title = inp.value; go.disabled = !inp.value.trim(); };
+        inp.addEventListener('input', function () { d.icon = ''; sync(); });
+        inp.addEventListener('keydown', function (e) { if (e.key === 'Enter' && inp.value.trim()) { e.preventDefault(); nextStep(); } });
+        go.onclick = nextStep;
+        main = [word('What’s up next?', 'next'), h('p', { class: 'hf-sub' }, 'Enter something you want to do ' + dayWord() + '.'),
+          h('div', { class: 'hf-input' }, h('span', { class: 'hf-cic', 'aria-hidden': 'true' }, icon('edit', 20)), inp),
+          h('p', { class: 'hf-sugh' }, 'Here are some suggestions:'),
+          h('div', { class: 'hf-sug' }, HOME_SUGGEST.map(function (x) {
+            return h('button', { class: 'hf-s', type: 'button', onclick: function () { inp.value = x[0]; d.icon = x[1]; sync(); } }, icon(x[1], 18), x[0]);
+          }))];
+        foot = [go];
+      } else if (s === 'time') {
+        if (d.time == null) { d.time = Math.min(1425, Math.round((d.wake + 60) / 15) * 15); d.mins = d.mins || 15; }
+        var rt = { v: d.time };
+        var tcard = cardNode();
+        main = [word('At what time?', 'time'), h('p', { class: 'hf-sub' }, 'Choose a start time for it.'), tcard,
+          homeWheel(rt, 'Start time', function (v) { d.time = v; var nc = cardNode(); tcard.replaceWith(nc); tcard = nc; })];
+        foot = [h('button', { class: 'hf-go', type: 'button', onclick: function () { d.time = rt.v; nextStep(); } }, 'Continue')];
+      } else if (s === 'long') {
+        var pillBox = h('div', { class: 'hf-pills', role: 'group', 'aria-label': 'How long' });
+        var other = h('div', { class: 'hf-other', hidden: !custom });
+        var paintPills = function () {
+          fillTo(pillBox, HOME_PILLS.map(function (p) {
+            return h('button', { class: 'hf-pill' + (d.mins === p[0] ? ' on' : ''), type: 'button', 'aria-pressed': String(d.mins === p[0]),
+              onclick: function () { d.mins = p[0]; custom = false; draw(); } }, p[1]);
+          }));
+        };
+        paintPills();
+        var cin = h('input', { class: 'hf-field short', type: 'number', inputmode: 'numeric', min: '1', max: '720', placeholder: 'Minutes', 'aria-label': 'Minutes', value: custom ? String(d.mins) : '',
+          oninput: function (e) { var n = Math.round(Number(e.target.value)); if (n > 0 && n <= 720) { d.mins = n; card.replaceWith(card = cardNode()); } } });
+        other.append(cin, h('span', { class: 'hf-unit' }, 'minutes'));
+        var card = cardNode();
+        main = [word('How long?', 'long'), h('p', { class: 'hf-sub' }, 'Set how long it takes.'), card, h('div', { class: 'hf-grow' }), pillBox, other,
+          h('button', { class: 'hf-link lime', type: 'button', onclick: function () { custom = !custom; draw(); if (custom) { var c2 = root.querySelector('.hf-field.short'); if (c2) c2.focus(); } } }, 'Need a different duration?')];
+        foot = [h('button', { class: 'hf-go', type: 'button', onclick: nextStep }, 'Continue')];
+      } else {
+        var daysBox = h('div', { class: 'hf-daysbox' });
+        var canJust = homeOff();
+        var paintDays = function () {
+          fillTo(daysBox,
+            homeDayPicker(d.days, function (next) { d.days = next; d.just = false; paintDays(); }, { dim: d.just }),
+            canJust ? h('div', { class: 'chips ht-pills' }, h('button', { class: 'chip', type: 'button', 'aria-pressed': String(d.just),
+              onclick: function () { d.just = !d.just; paintDays(); } }, 'Just ' + dayWord())) : null);
+        };
+        paintDays();
+        main = [word('Which days?', 'days'), h('p', { class: 'hf-sub' }, canJust ? 'Pick the days it happens. “Just ' + dayWord() + '” puts it on that day’s sheet only.' : 'Pick the days it happens.'), cardNode(), h('div', { class: 'hf-grow' }), daysBox];
+        foot = [h('button', { class: 'hf-link', type: 'button', onclick: function () { finish(true); } }, 'Add another'),
+          h('button', { class: 'hf-go', type: 'button', onclick: function () { finish(false); } }, 'Finish')];
+      }
+      fillTo(root, top, h('div', { class: 'hf-main' }, main), h('div', { class: 'hf-foot' }, foot));
+      var af = root.querySelector('[autofocus]');
+      if (af && !('ontouchstart' in window)) af.focus({ preventScroll: true });
+    };
+    draw();
+  }
+  function homeAssignedBlock(limit, today) {
+    var all = homeArtistTasks().filter(function (t) { return !t.doneAt; })
+      .sort(function (a, b) { return String(a.due || '9999').localeCompare(String(b.due || '9999')) || a.createdAt - b.createdAt; });
+    if (!all.length) return null;
+    var shown = limit ? all.slice(0, limit) : all;
+    return h('section', { class: 'tf-block td-block ht-wrap ht-assigned', 'aria-label': 'Assigned to you' },
+      h('h4', { class: 'td-cat' }, 'Assigned to you'),
+      h('ul', { class: 'rows td-list ht-list' }, shown.map(function (t) { return homeArtistRow(t, today, {}); })),
+      all.length > shown.length ? h('button', { class: 'linkbtn ht-more', type: 'button',
+        onclick: function () { S.pfTab = 'todos'; (S.homeTodo || (S.homeTodo = {})).chip = 'all'; if (S.route.name === 'home') render(true); else go(PF_HOME); } }, 'See all ' + all.length) : null);
+  }
+  function homeDayFor(date, all) {
+    var today = G.tourToday();
+    var artist = homeArtistTasks().filter(function (t) { return all ? !!t.date : !!t.planned; });
+    return G.homeDay({ date: date, today: today, events: homeEvents(date), routines: homeRoutines(), tasks: homeTasks().concat(artist), day: homeDayDoc(date) });
+  }
+  async function homeToggle(item, date) {
+    var B = window.GR_BACKEND;
+    if (item.kind === 'routine') return homeSetRoutine(date, item.id.slice(8), !item.done);
+    if (item.kind === 'extra') {
+      return homeSaveDay(date, function (doc) {
+        return { extra: doc.extra.map(function (x) { return 'extra:' + x.id === item.id ? Object.assign({}, x, { done: !item.done }) : x; }) };
+      });
+    }
+    if (item.kind === 'task') {
+      if (item.id.indexOf('todo:') === 0) {
+        var a = homeArtistTasks().filter(function (t) { return t.key === item.id; })[0];
+        if (!a) return false;
+        var row = a.raw, had = row.doneAt;
+        row.doneAt = had ? null : new Date().toISOString();
+        try { await B.todoSave(a.todoId, { done: !had }); return true; } catch (x) { row.doneAt = had; saveFailed('task', x); return false; }
+      }
+      var t = homeTasks().filter(function (x) { return 'task:' + x.id === item.id; })[0];
+      if (t) return homeTick(t, date);
+    }
+    return false;
+  }
+  async function homeTap(item, date) {
+    var saving = homeToggle(item, date);
+    render(true);
+    await saving;
+    render(true);
+  }
+  function homeDayRows(hd, date, o) {
+    o = o || {};
+    var mk = function (it) {
+      var len = it.end != null && it.at != null ? it.end - it.at : 0;
+      var when = it.start != null ? G.homeSpan(G.homeTime(it.start), len) : '';
+      var tickable = it.kind !== 'event';
+      var tick = tickable ? h('button', { class: 'td-tick' + (it.done ? ' on' : ''), type: 'button', 'aria-label': (it.done ? 'Mark not done: ' : 'Mark done: ') + it.title,
+        onclick: function () { homeTap(it, date); } }, it.done ? icon('check', 14) : null)
+        : h('span', { class: 'td-tick ghost cal', 'aria-hidden': 'true' }, icon('calendar', 14));
+      var kind = it.kind === 'event' ? 'Calendar' : it.sub;
+      var sub = it.due ? [it.sub === 'Late' ? null : it.sub + ' · ', h('span', { class: 'td-due late' }, 'Due ' + dayMD(it.due))] : [when, kind].filter(Boolean).join(' · ');
+      return h('li', { class: 'ht-sw' }, h('div', { class: 'am-li td-li ht-own hm-drow' }, tick,
+        h('button', { class: 'fl-row td-open', type: 'button', onclick: function () { S.homeDate = date; go({ name: 'offtour', view: 'day' }); } },
+          h('span', { class: 'lr-text td-task' }, h('span', { class: 'lr-title td-body' + (it.done ? ' done' : '') }, it.title),
+            h('span', { class: 'lr-sub' }, sub)))));
+    };
+    return { timed: hd.timed.map(mk), open: hd.open.map(mk) };
+  }
+  function pfHome() {
+    var today = G.tourToday(), nx = nextTourEntry();
+    var cd = G.homeCountdown(today, nx ? nx.start : '', nx ? firstNight(nx.t) : '');
+    var chip = function (c) { return c ? pfCountChip(c.n, c.words, c.said) : pfCountChip(null); };
+    var head = h('div', { class: 'pt-headrow hm-head' }, chip(cd.left),
+      h('div', { class: 'hm-date' }, h('span', { class: 'hm-d1' }, 'Today'), h('span', { class: 'hm-d2' }, dayLong(today))), chip(cd.right));
+    var assigned = homeAssignedBlock(5, today);
+    var hd = homeDayFor(today, false);
+    var routines = homeRoutines(), onToday = routines.filter(function (r) { return G.routineOn(r, today); });
+    var doneN = homeDayDoc(today).doneRoutines.filter(function (id) { return onToday.some(function (r) { return r.id === id; }); }).length;
+    var nothing = !assigned && !hd.timed.length && !hd.open.length && !routines.length;
+    if (nothing && homeUnread()) return [head, h('div', { class: 'hm-calm' }, emptyState('Couldn’t load your day', 'Check your signal. Your day comes back as soon as it can be read.'))];
+    if (nothing) {
+      return [head, h('div', { class: 'hm-calm' }, emptyState('A clear day', 'Nothing is planned yet. Add what you want to get done, or plan the day around when you get up and when you sleep.'),
+        h('div', { class: 'stack' },
+          h('button', { class: 'btn primary block', type: 'button', onclick: function () { openHomeTask(null); } }, icon('plus', 18), 'Add a task'),
+          h('button', { class: 'btn quiet glow block', type: 'button', onclick: function () { openHomeFlow({}); } }, icon('sun', 18), 'Plan your day')))];
+    }
+    var now = Date.now(), all = hd.timed.concat(hd.open);
+    var show = hd.timed.filter(function (x) { return !x.done && !G.homeRowOver(hd, x, now); }).concat(hd.open.filter(function (x) { return !x.done; })).slice(0, 5);
+    var rows = homeDayRows({ timed: show.filter(function (x) { return x.at != null; }), open: show.filter(function (x) { return x.at == null; }) }, today, {});
+    return [head, assigned,
+      h('section', { class: 'tf-block td-block ht-wrap', 'aria-label': 'Your day' },
+        h('div', { class: 'hm-sech' }, h('h4', { class: 'td-cat' }, 'Your day'),
+          h('button', { class: 'linkbtn hm-all', type: 'button', onclick: function () { S.homeDate = today; go({ name: 'offtour', view: 'day' }); } }, 'Day sheet')),
+        show.length ? h('ul', { class: 'rows td-list ht-list' }, rows.timed.concat(rows.open))
+          : h('p', { class: 'note hm-none' }, !all.length ? 'Nothing on today’s sheet yet.' : all.every(function (x) { return x.done; }) ? 'Everything on today’s sheet is done.' : 'Nothing else today.')),
+      h('button', { class: 'list-row art-row hm-routines', type: 'button', onclick: function () { S.pfTab = 'routines'; render(true); } },
+        h('span', { class: 'lr-text' }, h('span', { class: 'lr-title' }, 'Routines'),
+          h('span', { class: 'lr-sub' }, onToday.length ? doneN + ' of ' + onToday.length + ' done today' : routines.length ? 'None today' : 'Set the things you do every day')),
+        icon('chevron', 18))];
+  }
+  function homeMyArtists() {
+    var list = ((myActs().list) || []).filter(function (a) { return a && a.id && a.name; });
+    return list.concat(homeInvited(list));
+  }
+  function homePeople(id) {
+    var B = window.GR_BACKEND, c = actOf(id), card = c.card;
+    if (todosOn() && B.todoList) B.todoList(id);
+    var out = { loaded: !!card, failed: !!(c.failed || c.gone), members: [], team: [], crew: [], teamKnown: false, card: card };
+    if (!card) return out;
+    var ok = function (m) { return m && !m.pending; };
+    (card.members || []).forEach(function (m) {
+      if (!ok(m)) return;
+      var roles = m.role ? [rolesShort(m.role)] : personRoles(m);
+      var sub = roles.slice(0, 2).join(' · ');
+      var row = { userId: m.userId, name: m.name || 'Someone', avatar: m.avatar || '', sub: sub };
+      (m.kind === 'crew' ? out.crew : m.kind === 'band' ? out.members : []).push(row);
+    });
+    var inv = todosOn() && B.todoInvites ? B.todoInvites(id) : null;
+    if (inv) {
+      out.teamKnown = true;
+      var seen = {};
+      out.members.concat(out.crew).forEach(function (p) { if (p.userId) seen[p.userId] = true; });
+      inv.forEach(function (v) { if (!seen[v.userId]) out.team.push({ userId: v.userId, name: v.name || 'Someone', avatar: '', sub: v.role || '' }); });
+    }
+    return out;
+  }
+  function homePeopleNodes(p, o) {
+    o = o || {};
+    var group = function (title, list, none) {
+      if (!list.length && !none) return null;
+      return [h('h4', { class: 'td-cat' }, title + (list.length ? ' · ' + list.length : '')),
+        list.length ? h('div', { class: 'ledger crew-list hm-people' }, list.map(function (x) {
+          return h('div', { class: 'row crew-row' }, h('div', { class: 'row-label crew-label' }, personPhoto(x, 'xs crew-face'),
+            h('div', { class: 'crew-who' }, h('span', { class: 'crew-name' }, x.name), x.sub ? h('span', { class: 'hint crew-sub' }, x.sub) : null)));
+        })) : h('p', { class: 'note hm-none' }, none)];
+    };
+    if (!p.loaded) return h('p', { class: 'note' }, p.failed ? 'Couldn’t load this. Check your signal and try again.' : 'Loading…');
+    return h('section', { class: 'tf-block td-block hm-people-block' },
+      group('Members', p.members, 'No members on the page yet.'),
+      group('Team', p.team, p.teamKnown ? 'No team yet. Invite a manager, a booking agent, anyone who helps.' : null),
+      group('Crew', p.crew, null));
+  }
+  function homeCountLine(p) {
+    var parts = [plural(p.members.length, 'member')];
+    if (p.teamKnown) parts.push(p.team.length + ' team');
+    return parts.join(' · ');
+  }
+  function homeCanInvite(card) {
+    var B = window.GR_BACKEND;
+    return !!(card && todosOn() && B.todoInvite && todoCanRun(card));
+  }
+  function openHomeArtist(id, name) {
+    var box = h('div', { class: 'hm-artbox' });
+    var mine = null;
+    function draw() {
+      if (sheet !== mine || !box.isConnected) return;
+      var p = homePeople(id);
+      fillTo(box, homePeopleNodes(p),
+        homeCanInvite(p.card) ? h('div', { class: 'stack lf-acts' }, h('button', { class: 'btn primary block', type: 'button',
+          onclick: function () { closeSheet(true); setTimeout(function () { openTodoInvite(id, p.card, { team: true }); }, 60); } }, icon('plus', 18), 'Invite to the team')) : null);
+    }
+    openSheet(function () {
+      return [h('h2', { class: 'sh-title clean' }, name), h('p', { class: 'sh-sub clean' }, 'Everyone who works with ' + name + '.'), box,
+        h('div', { class: 'stack lf-acts' }, h('button', { class: 'btn plain block', type: 'button', onclick: function () { closeSheet(); } }, 'Close'))];
+    }, { label: name + ' people', cls: 'td-sheet hm-artsheet', onClose: function () { if (homeSheetLive === draw) homeSheetLive = null; } });
+    mine = sheet;
+    homeSheetLive = draw;
+    draw();
+  }
+  var homeSheetLive = null;
+  function undatedRows() {
+    var undated = undatedTours(), here = { name: 'offtour', view: 'details' };
+    return undated.length ? h('div', { class: 'ledger', style: 'margin-top:18px' }, undated.map(function (e) {
+      var nm = e[1].name || 'Untitled tour';
+      return h('div', { class: 'row' },
+        h('div', { class: 'row-label' }, nm + ' · no dates yet'),
+        canEditTour(e[0]) ? h('button', { class: 'mn-change', type: 'button', 'aria-label': 'Add shows to ' + nm,
+          onclick: function () { openTour(e[0], 'addshows', here, 'Back'); } }, 'Add its shows') : null);
+    })) : null;
+  }
+  function offHomePage(title, view, body, cls) {
+    var fr = offFrame();
+    return h('div', { class: 'page tour has-tabs ' + (cls || '') }, offBand(), h('h1', { class: 'tour-title' }, title), dbBanner(), body, tourTabs(fr.bar, view));
+  }
+  function viewOffHome(view) {
+    var today = G.tourToday();
+    if (view === 'day') return viewOffDay(today);
+    if (view === 'stats') return viewOffStats();
+    var nx = nextTourEntry(), body = [], acting = !!actingAs();
+    if (acting && !nx) return viewOffEmpty('details');
+    if (nx) {
+      var first = firstNight(nx.t), n = first ? G.daysBetween(today, first) : 0;
+      body.push(h('button', { class: 'hm-next', type: 'button', 'aria-label': 'Open ' + (nx.t.name || 'the next tour'),
+        onclick: function () { openTour(nx.id, 'details', S.route, 'Back', 'frame'); } },
+        h('span', { class: 'hm-next-k' }, 'Next tour'),
+        h('span', { class: 'hm-next-n' }, nx.t.name || 'Untitled tour'),
+        h('span', { class: 'hm-next-s' }, [artistOf(nx.t), first ? 'First show ' + dayMD(first) + ' · ' + (n === 1 ? 'tomorrow' : 'in ' + n + ' days') : ''].filter(Boolean).join(' · ')),
+        icon('chevron', 18)));
+    }
+    var evs = homeEvents(today).concat(homeEvents(G.addDays(today, 1)));
+    if (!acting) body.push(h('section', { class: 'tf-block td-block ht-wrap', 'aria-label': 'On your calendar' }, h('h4', { class: 'td-cat' }, 'On your calendar'),
+      evs.length ? h('div', { class: 'ledger hm-events' }, evs.map(function (e) {
+        return h('div', { class: 'row ds-row hm-row' }, h('span', { class: 'td-tick ghost cal', 'aria-hidden': 'true' }, icon('calendar', 14)),
+          h('span', { class: 'row-label hm-label' }, h('span', { class: 'hm-t' }, e.title), h('span', { class: 'hint hm-kind' }, [e.date === today ? 'Today' : 'Tomorrow', e.place].filter(Boolean).join(' · '))),
+          h('span', { class: 'ds-time num' }, e.allDay ? 'All day' : G.homeSpan(e.time, e.mins)));
+      })) : S.homeEvents && S.homeEvents.length ? h('p', { class: 'note hm-none' }, 'Nothing on your calendar today or tomorrow.')
+        : calendarConnectRow()));
+    var assigned = acting ? null : homeAssignedBlock(6, today);
+    if (assigned) body.push(assigned);
+    var arts = acting ? [] : homeMyArtists();
+    if (arts.length) body.push(h('section', { class: 'tf-block td-block ht-wrap', 'aria-label': 'Your artists' }, h('h4', { class: 'td-cat' }, 'Your artists'),
+      h('ul', { class: 'tour-list rows hm-arts' }, arts.map(function (a) {
+        var p = homePeople(a.id), logo = a.avatar || (p.card && p.card.avatar) || '';
+        return h('li', null, h('button', { class: 'list-row art-row', type: 'button', 'aria-label': a.name + (p.loaded ? ', ' + homeCountLine(p) : ''),
+          onclick: function () { openHomeArtist(a.id, a.name); } },
+          h('span', { class: 'avatar' + (logo ? ' has photo' : ncCls('myArtists')), 'aria-hidden': 'true' }, logo ? h('img', { class: 'brand-logo', src: logo, alt: '' }) : ncFace('myArtists', a.name)),
+          h('span', { class: 'lr-text' }, h('span', { class: 'lr-title' }, a.name), h('span', { class: 'lr-sub' }, p.loaded ? homeCountLine(p) : p.failed ? 'Couldn’t load this' : 'Loading…')),
+          icon('chevron', 18)));
+      }))));
+    if (artistSide()) body.push(h('div', { class: 'stack hm-create' }, h('button', { class: 'btn primary block', type: 'button', onclick: createTourFromMenu }, icon('plus', 18), 'Create a tour')));
+    else if (!acting && !nx && !assigned && !arts.length && !undatedTours().length) body.push(emptyState(NO_TOUR, 'Once you are on a tour that is coming up, it shows up here: its name, its first show and how far off that is.'));
+    body.push(undatedRows());
+    return offHomePage('Overview', 'details', body, 'hm-page');
+  }
+  function mouseOnly() { return !('ontouchstart' in window); }
+  function homeHide(date, id, back) {
+    return homeSaveDay(date, function (doc) {
+      var rest = doc.hide.filter(function (x) { return x !== id; });
+      return { hide: back ? rest : rest.concat([id]) };
+    });
+  }
+  function homeSheetRow(hd, it, date) {
+    var len = it.end != null ? it.end - it.at : 0;
+    var span = it.start != null ? G.timeSpan(G.homeClock(it.start), len > 0 ? G.homeClock(it.start + len) : '') : '';
+    var can = it.kind !== 'event';
+    var row = h('div', can ? { class: 'row ds-row', role: 'button', tabindex: '0', 'aria-pressed': it.done ? 'true' : 'false',
+      'aria-label': (it.done ? 'Not done yet: ' : 'Done: ') + it.title,
+      onclick: function () { homeTap(it, date); },
+      onkeydown: function (e) { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); row.click(); } } } : { class: 'row ds-row' },
+      h('span', { class: 'row-label' }, it.title), span ? h('span', { class: 'ds-time num' }, span) : null);
+    dsGreyKeep(row, function (now) { return it.done || G.homeRowOver(hd, it, now); });
+    return swipeRow(row, [h('button', { class: 'sw-edit', type: 'button', 'aria-label': 'Take ' + it.title + ' off this day', onclick: async function () {
+      if (await homeHide(date, it.id)) { toast('Taken off ' + (date === G.tourToday() ? 'today' : dayMD(date))); render(true); }
+    } }, icon('close', 16), 'Take off')], { noTapOpen: true, tapOnlyCloses: true });
+  }
+  function viewOffDay(today) {
+    var date = G.parseDay(S.homeDate) ? S.homeDate : today;
+    var hd = homeDayFor(date, true), prefs = homePrefs();
+    var days = [];
+    for (var i = -7; i <= 90; i++) days.push(G.addDays(today, i));
+    if (days.indexOf(date) < 0) days = date < today ? [date].concat(days) : days.concat([date]);
+    var rail = h('div', { class: 'ds-rail' }, days.map(function (x) {
+      var dd = G.parseDay(x);
+      return h('button', { class: 'ds-chip' + (x === date ? ' on' : '') + (x === today ? ' tonight' : ''), type: 'button',
+        onclick: function () { S.homeDate = x; render(true); } },
+        h('span', { class: 'ds-chip-d num' }, dd ? String(dd.getDate()) : '?'),
+        h('span', { class: 'ds-chip-c' }, String(dayLong(x)).split(',')[0]));
+    }));
+    requestAnimationFrame(function () {
+      var sel = rail.querySelector('.ds-chip.on');
+      if (sel && sel.scrollIntoView) sel.scrollIntoView({ inline: 'center', block: 'nearest' });
+    });
+    var shape = [dayLong(date), prefs.wake ? 'Up ' + G.homeClock(prefs.wake) : '', prefs.bed ? 'Bed ' + G.homeClock(prefs.bed) : ''].filter(Boolean)
+      .map(function (x) { return x.replace(/ /g, '\u00a0'); }).join(' · ');
+    var place = h('div', { class: 'ds-venue-row' },
+      h('button', { class: 'iconbtn sm ds-pencil', type: 'button', 'aria-label': 'Add to this day', onclick: function () { openHomeAdd(date); } }, icon('edit', 18)),
+      h('div', { class: 'ds-venue glow' }, h('span', { class: 'ds-venue-name' }, 'Your day'), h('span', { class: 'hm-shape' }, shape)));
+    var filled = hd.timed.length + hd.open.length > 0;
+    var words = function () {
+      return ['Your day · ' + dayLong(date)].concat(hd.timed.map(function (x) {
+        return G.timeSpan(G.homeClock(x.start), x.end != null ? G.homeClock(x.start + x.end - x.at) : '') + '  ' + x.title;
+      }), hd.open.map(function (x) { return x.title; })).join('\n');
+    };
+    var copy = filled ? h('button', { class: 'iconbtn sm ds-copy', type: 'button', 'aria-label': 'Copy this day sheet', onclick: async function () {
+      var text = words(), ta = h('textarea', { class: 'sr', readonly: true, value: text });
+      document.body.appendChild(ta);
+      var ok = await copyText(text, ta);
+      ta.remove();
+      toast(ok ? 'Copied.' : 'Press and hold to copy');
+    } }, icon('copy', 18)) : null;
+    var section = function (title, list, first) {
+      if (!list.length) return null;
+      var head = h('h3', { class: 'ds-sec-h' }, title);
+      return h('section', { class: 'ds-sec' }, first ? h('div', { class: 'ds-sec-hrow' }, head, copy) : head,
+        h('div', { class: 'ledger hm-ledger' }, list.map(function (it) { return homeSheetRow(hd, it, date); })));
+    };
+    var none = null;
+    if (!filled) {
+      none = emptyState('Nothing on this day yet.', null);
+      none.classList.add('ds-empty');
+    }
+    return offHomePage('Day sheet', 'day', [rail, place, section('Schedule', hd.timed, true), section('To Do List', hd.open, !hd.timed.length), none,
+      filled ? null : h('div', { class: 'btnrow ov-actions', style: 'margin-top:14px' },
+        h('button', { class: 'btn quiet glow', type: 'button', onclick: function () { openHomeAdd(date); } }, icon('edit', 18), 'Fill in your day'))], 'ds-page hm-page');
+  }
+  function openHomeAdd(date) {
+    var today = G.tourToday(), f = { title: '', time: '', mins: 0 };
+    var busy = false;
+    openSheet(function () {
+      var titleIn = h('input', { class: 'input', type: 'text', maxlength: 60, placeholder: 'What are you doing?', 'aria-label': 'What', autocomplete: 'off', autofocus: true,
+        oninput: function (e) { f.title = e.target.value; } });
+      var timeIn = h('input', { class: 'input', type: 'time', 'aria-label': 'Time', onchange: function (e) { f.time = e.target.value; paintLen(); } });
+      var lenBox = h('div', { class: 'ht-lenbox' });
+      var paintLen = function () {
+        fillTo(lenBox, f.time ? [h('p', { class: 'ht-k' }, 'How long'), homePills(HOME_LENGTHS, f.mins, function (m) { f.mins = m; paintLen(); }, 'How long')] : null);
+      };
+      var doc = homeDayDoc(date), hd = homeDayFor(date, true);
+      var onDay = {};
+      hd.timed.concat(hd.open).forEach(function (x) { onDay[x.id] = true; });
+      var pickable = homeTasks().filter(function (t) { return !t.repeat && !t.doneAt && t.date !== date && !onDay['task:' + t.id]; }).slice(0, 8);
+      var plans = homeArtistTasks().filter(function (t) { return !t.doneAt && t.date !== date; }).slice(0, 8);
+      var back = doc.hide.map(function (id) { return id; });
+      var rowBtn = function (label, sub, fn, ic) {
+        return h('button', { class: 'row rowbtn', type: 'button', onclick: fn }, h('span', { class: 'row-label' }, label, sub ? h('span', { class: 'hint' }, sub) : null), icon(ic || 'plus', 16));
+      };
+      var titleOf = function (id) {
+        if (id.indexOf('routine:') === 0) { var r = homeRoutines().filter(function (x) { return x.id === id.slice(8); })[0]; return r ? r.title : ''; }
+        if (id.indexOf('task:') === 0) { var t = homeTasks().filter(function (x) { return x.id === id.slice(5); })[0]; return t ? t.body : ''; }
+        if (id.indexOf('todo:') === 0) { var a = homeArtistTasks().filter(function (x) { return x.key === id; })[0]; return a ? a.body : ''; }
+        if (id.indexOf('event:') === 0) { var e = homeEvents(date).filter(function (x) { return 'event:' + x.id === id; })[0]; return e ? e.title : ''; }
+        if (id.indexOf('extra:') === 0) { var l = doc.extra.filter(function (x) { return 'extra:' + x.id === id; })[0]; return l ? l.title : ''; }
+        return '';
+      };
+      var putBack = back.map(function (id) { return [id, titleOf(id)]; }).filter(function (x) { return x[1]; });
+      return [
+        h('h2', { class: 'sh-title clean' }, 'Add to ' + (date === today ? 'today' : dayMD(date))),
+        h('div', { class: 'ledger lf-card' }, rowField('What', titleIn), rowField('Time', timeIn)),
+        lenBox,
+        h('div', { class: 'stack lf-acts' }, h('button', { class: 'btn primary block', type: 'button', onclick: async function (e) {
+          var btn = e.currentTarget, title = f.title.replace(/\s+/g, ' ').trim();
+          if (!title) { toast('Write what it is first.'); return; }
+          if (busy) return;
+          busy = true; btn.disabled = true;
+          var line = { id: homeId(), title: title, time: f.time, mins: f.time ? f.mins : 0 };
+          var ok = await homeSaveDay(date, function (cur) { return { extra: cur.extra.concat([line]) }; });
+          busy = false;
+          if (!ok) { btn.disabled = false; return; }
+          closeSheet(); render(true);
+        } }, 'Add')),
+        pickable.length || plans.length ? [h('h4', { class: 'td-cat ht-subh' }, 'From your To Do List'),
+          h('div', { class: 'ledger lf-card' }, pickable.map(function (t) {
+            return rowBtn(t.body, t.date ? G.homeDateWords(t.date, today) : 'No day yet', async function () {
+              if (await homeSaveTask(t.id, { date: date })) { closeSheet(); render(true); }
+            });
+          }).concat(plans.map(function (t) {
+            return rowBtn(t.body, t.artist, async function () {
+              if (await homePut('taskplan:' + t.todoId, { kind: 'taskplan', date: date, time: '', mins: 0 })) { closeSheet(); render(true); }
+            });
+          })))] : null,
+        putBack.length ? [h('h4', { class: 'td-cat ht-subh' }, 'Taken off this day'),
+          h('div', { class: 'ledger lf-card' }, putBack.map(function (x) {
+            return rowBtn(x[1], 'Put it back', async function () {
+              if (await homeHide(date, x[0], true)) { closeSheet(); render(true); }
+            });
+          }))] : null,
+        hd.timed.length + hd.open.length ? (mouseOnly() ? [h('h4', { class: 'td-cat ht-subh' }, 'On this day'),
+          h('div', { class: 'ledger lf-card' }, hd.timed.concat(hd.open).map(function (it) {
+            return rowBtn(it.title, 'Take it off', async function () {
+              if (await homeHide(date, it.id)) { closeSheet(); render(true); }
+            }, 'close');
+          }))] : h('p', { class: 'note hm-swipe' }, 'To take a line off this day, slide it to the left on the day sheet.')) : null,
+        h('div', { class: 'stack lf-acts' }, h('button', { class: 'btn plain block', type: 'button', onclick: function () { closeSheet(); } }, 'Cancel'))
+      ];
+    }, { label: 'Add to the day', cls: 'ht-sheet' });
+  }
+  function viewOffStats() {
+    var arts = homeMyArtists();
+    var body = arts.length ? arts.map(function (a) {
+      var p = homePeople(a.id);
+      return h('section', { class: 'hm-stat' }, h('h3', { class: 'ds-sec-h hm-stat-h' }, a.name), homePeopleNodes(p));
+    }) : emptyState('No artists yet', 'The artists you work with show up here, with their members, team and crew.');
+    return offHomePage('Crew Stats', 'stats', body, 'fw-page hm-page');
   }
   var SPOT_KINDS = [['food', 'Food'], ['coffee', 'Coffee'], ['bar', 'Bar'],
     ['club', 'Club'], ['to do', 'To do'], ['other', 'Other']];
@@ -11951,7 +13360,10 @@
     if (!has(last)) last = null;
     if (last && tourIsLive(getTour(last))) return last;
     var live = entries.filter(function (e) { return tourIsLive(e[1]); })[0];
-    return live ? live[0] : (last || (actingAs() && entries[0] ? entries[0][0] : null));
+    if (live) return live[0];
+    if (last && onRoad(getTour(last))) return last;
+    var road = entries.filter(function (e) { return onRoad(e[1]); })[0];
+    return road ? road[0] : (last || (actingAs() && entries[0] ? entries[0][0] : null));
   }
   function openTourPicker(cur) {
     var entries = scopedTours(), id = cur || profileTourId();
@@ -12300,26 +13712,30 @@
         ? 'Tap + to add an artist, then their first tour. Its day shows up here.'
         : 'Nothing has been shared with you yet.');
     };
-    var todoTab = pfTodoTab();
+    var mineTabs = homeOn();
+    var todoTab = mineTabs || pfTodoTab();
     if (tab === 'todos' && !todoTab) tab = t ? 'today' : 'artists';
+    if (tab === 'routines' && !mineTabs) tab = t ? 'today' : 'artists';
     if (tab === 'guests' || tab === 'stats') tab = t ? 'today' : 'artists';
-    var tabs = todoTab ? PF_TABS.slice(0, 3).concat([{ key: 'todos', label: 'To Do List', icon: 'check' }], PF_TABS.slice(3)) : PF_TABS;
+    var tabs = todoTab ? PF_TABS.slice(0, 3).concat([{ key: 'todos', label: 'To Do List', icon: 'check' }],
+      mineTabs ? [{ key: 'routines', label: 'Routines', icon: 'refresh' }] : [], PF_TABS.slice(3)) : PF_TABS;
     var spotsTab = spotsOn();
     if (tab === 'spots' && !spotsTab) tab = t ? 'today' : 'artists';
     if (spotsTab) tabs = tabs.concat([{ key: 'spots', label: 'Spots', icon: 'heart' }]);
     var topTab = favsOn();
     if (tab === 'top10' && !topTab) tab = t ? 'today' : 'artists';
     if (topTab) tabs = tabs.concat([{ key: 'top10', label: 'Top 10', icon: 'star' }]);
-    var body = tab === 'today' ? (t ? pfToday(id, t, entries.length) : none())
+    var body = tab === 'today' ? (homeOff() ? pfHome() : t ? pfToday(id, t, entries.length) : none())
       : tab === 'stats' ? pfStats(id, t, entries.length)
       : tab === 'guests' ? (t ? pfGuests(id, t, entries.length) : none())
       : tab === 'tours' ? pfTours()
-      : tab === 'todos' ? pfTodos()
+      : tab === 'todos' ? (mineTabs ? pfHomeTodo() : pfTodos())
+      : tab === 'routines' ? pfRoutines()
       : tab === 'spots' ? pfSpots()
       : tab === 'top10' ? pfTopTen()
       : pfArtists(byArtist, declared, loose);
     return [
-      h('div', { class: 'vp-tabs pt-tabs' + (tabs.length > 5 ? ' six' : ''), role: 'tablist' }, tabs.map(function (x) {
+      h('div', { class: 'vp-tabs pt-tabs' + (tabs.length > 5 ? ' six' : '') + (tabs.length > 6 ? ' seven' : ''), role: 'tablist' }, tabs.map(function (x) {
         var on = x.key === tab;
         return h('button', { class: 'vp-tab pt-tab' + (on ? ' on' : ''), type: 'button', role: 'tab',
           'aria-selected': on ? 'true' : 'false', onclick: function () { pick(x.key); } },
@@ -13090,6 +14506,7 @@
     S.offShown = null;
     if (['costs', 'cards', 'money', 'tours', 'mypay'].indexOf(view) < 0) {
       if (['details', 'day', 'guests', 'stats', 'chat'].indexOf(view) < 0) view = 'details';
+      if (homeViews().indexOf(view) >= 0) return viewOffHome(view);
       if (fr.bar) { S.route = { name: 'tour', id: fr.bar, view: view }; return viewTour(); }
       return viewOffEmpty(view);
     }
@@ -14835,7 +16252,13 @@
     });
     face.addEventListener('click', function (e) {
       if (Date.now() - Number(row.dataset.swiped || 0) < 400) { e.stopPropagation(); e.preventDefault(); return; }
-      if (opts && opts.noTapOpen) { if (open) { open = false; set(0, true); } return; }
+      if (opts && opts.noTapOpen) {
+        if (open) {
+          open = false; set(0, true);
+          if (opts.tapOnlyCloses) { e.stopPropagation(); e.preventDefault(); }
+        }
+        return;
+      }
       W = tray.offsetWidth; open = !open; set(open ? -W : 0, true);
     }, true);
     return row;
@@ -19597,9 +21020,18 @@
     crewWarm(id);
     var framed = !!(o && o.off);
     var away = !!(o && o.away);
+    var mineNow = homeViews(), shared = ['details', 'day', 'stats', 'guests', 'chat'].concat(BOOK_TABS).filter(function (v) { return mineNow.indexOf(v) < 0; });
     var buttons = tabs.map(function (t) {
       var on = t.book ? BOOK_TABS.indexOf(current) >= 0 : t.view === current;
+      var home = !t.book && mineNow.indexOf(t.view) >= 0;
       return tabButton(on, t.label, t.icon, function () {
+        var inTour = !!id && S.route.name === 'tour' && S.route.id === id && (!!S.route.stay || !!S.route.list || shared.indexOf(S.route.view) < 0);
+        if (home && !inTour) {
+          if (t.view === 'day') S.homeDate = null;
+          if (!(on && S.route.name === 'offtour' && (S.route.view || 'details') === t.view)) go({ name: 'offtour', view: t.view });
+          else if (t.view === 'day') render(true);
+          return;
+        }
         if (away && id) {
           if (t.book) { go(budgetLanding(id)); return; }
           openTour(id, t.view, S.route, 'Back', offNow() ? 'frame' : null);
@@ -19609,6 +21041,7 @@
         var to = t.book ? (on && !framed && id ? { name: 'tour', id: id, view: 'costs' } : fromList ? tourBudget(id) : budgetLanding(id))
           : id ? { name: 'tour', id: id, view: t.view } : { name: 'offtour', view: t.view };
         if (t.book && on && framed && bookSide(to.view)) { to = Object.assign({}, to, { view: 'costs' }); delete to.want; }
+        if (inTour && mineNow.length && to.name === 'tour') to = Object.assign({}, to, { stay: true });
         var there = S.route.name === to.name && (S.route.id || null) === (to.id || null) && (S.route.view || 'details') === to.view &&
           (to.name !== 'offtour' || !to.artist || S.route.artist === to.artist);
         if (!on || !there) go(to);
@@ -23959,7 +25392,7 @@
       h('span', { class: 'cal-rate-slot empty', 'aria-hidden': 'true' }),
       h('span', { class: 'cal-right-slot' }, right)));
   }
-  function hornSplash(big, sub) {
+  function hornSplash(big, sub, cls) {
     var bits = [];
     if (!reduced()) for (var i = 0; i < 12; i++) {
       var a = (i / 12) * Math.PI * 2 + Math.random() * 0.4, r = 115 + Math.random() * 75;
@@ -23967,7 +25400,7 @@
         style: '--dx:' + Math.round(Math.cos(a) * r) + 'px;--dy:' + Math.round(Math.sin(a) * r) + 'px;--rot:' +
           Math.round(Math.random() * 90 - 45) + 'deg;--d:' + (140 + i * 22) + 'ms' }, '🤘'));
     }
-    var el = h('div', { class: 'splash-note horns', role: 'status', 'aria-live': 'polite' },
+    var el = h('div', { class: 'splash-note horns' + (cls ? ' ' + cls : ''), role: 'status', 'aria-live': 'polite' },
       h('div', { class: 'sn-card' },
         h('span', { class: 'hs-horn', 'aria-hidden': 'true' }, '🤘', bits),
         h('div', { class: 'sn-big' }, big),
@@ -23990,11 +25423,100 @@
     } catch (e) { return; }
     var tries = 0;
     var show = function () {
-      if (document.getElementById('gr-splash') && tries++ < 40) { setTimeout(show, 600); return; }
+      if ((document.getElementById('gr-splash') || document.querySelector('.splash-note') || modeUp || (!modeKnown() && tries < 6)) && tries++ < 40) { setTimeout(show, 600); return; }
       hornSplash(left + (left === 1 ? ' day left' : ' days left'),
         String(t.name || '').trim() || null);
     };
     setTimeout(show, 450);
+  }
+  function modeNow() { return allTourEntries().some(function (e) { return onRoad(e[1]); }) ? 'on' : 'off'; }
+  function modeHad() {
+    var today = G.tourToday();
+    return allTourEntries().some(function (e) { var end = G.tourEnd(e[1]); return !!end && end < today; });
+  }
+  function modeKnown() {
+    var B = window.GR_BACKEND;
+    if (!S.loaded || !S.labelsIn) return false;
+    return S.mode !== 'db' || !!(B && typeof B.toursWhole === 'function' && B.toursWhole());
+  }
+  function notFan() { var B = window.GR_BACKEND; return inMusic() || !!(B && B.onTeam && B.onTeam()); }
+  var modeHere = null, modeUp = false, modeSaving = false, modeTried = 0;
+  function modeKey() { var B = window.GR_BACKEND; return 'gr-mode:' + ((B && B.uid && B.uid()) || 'me'); }
+  function modeLocal() {
+    var r = null;
+    try { r = JSON.parse(lsGet(modeKey()) || 'null'); } catch (e) { r = null; }
+    return G.isObj(r) && r.mode ? r : modeHere;
+  }
+  function modePin(mode, unsent, at) {
+    modeHere = unsent ? { mode: mode, unsent: true, at: at || 0 } : { mode: mode, unsent: false };
+    lsSet(modeKey(), JSON.stringify(modeHere));
+  }
+  function modeUnsent() { var mine = modeLocal(); return !!(mine && mine.unsent); }
+  function modeOwed(mine, lab) {
+    if (!mine || !mine.unsent) return false;
+    return !(G.isObj(lab) && lab.kind === 'modeseen' && mine.at && G.num(lab.at) > mine.at);
+  }
+  function modeLast() {
+    var mine = modeLocal(), lab = S.labels['modeseen:me'];
+    if (modeOwed(mine, lab)) return mine.mode;
+    return G.isObj(lab) && lab.kind === 'modeseen' ? String(lab.mode || '') : (mine ? mine.mode : '');
+  }
+  function modeKeep(mode) {
+    var at = Date.now();
+    modePin(mode, true, at);
+    modeSaving = true; modeTried = at;
+    homeFly('modeseen:me', { kind: 'modeseen', mode: mode, at: at }, { failed: function () {   } }).then(function (ok) {
+      modeSaving = false;
+      var mine = modeLocal();
+      if (ok && mine && mine.mode === mode) modePin(mode, false);
+    });
+  }
+  function modeAsk() {
+    if (S.mode !== 'db' || !store.db) return Promise.resolve(null);
+    var ask = Promise.resolve().then(function () { return store.db.doc('labels/modeseen:me').get(); })
+      .then(function (snap) { return snap.exists ? snap.data() : null; }).catch(function () { return null; });
+    return Promise.race([ask, new Promise(function (res) { setTimeout(function () { res(null); }, 3000); })]);
+  }
+  function modeBusy() {
+    return document.visibilityState !== 'visible' ||
+      !!(document.getElementById('gr-splash') || document.querySelector('.splash-note') || sheet ||
+      document.querySelector('.deck') || document.querySelector('.hf') || S.route.name === 'wizard' || S.firstRun || frGateUp() ||
+      document.getElementById('gr-gate') || (fingerDown && Date.now() - fingerDown < 4000));
+  }
+  function modeWatch() {
+    if (modeUp || document.visibilityState !== 'visible' || !modeKnown()) return;
+    if (S.firstRun || frGateUp() || document.getElementById('gr-gate') || firstRunDue()) return;
+    if (!notFan()) return;
+    var now = modeNow(), last = modeLast(), words = G.modeSplash(last, now, modeHad());
+    if (!words) {
+      if (last !== now || (modeUnsent() && !modeSaving && Date.now() - modeTried > 30e3)) modeKeep(now);
+      return;
+    }
+    modeUp = true;
+    var tries = 0, clear = 0;
+    var look = function () {
+      if (tries++ > 60) { modeUp = false; return; }
+      if (modeBusy()) { clear = 0; setTimeout(look, 600); return; }
+      if (clear++ < 1) { setTimeout(look, 600); return; }
+      modeAsk().then(function (told) {
+        if (modeNow() !== now) { modeUp = false; return; }
+        if (modeBusy()) { clear = 0; setTimeout(look, 600); return; }
+        if (G.isObj(told) && told.kind === 'modeseen' && told.mode === now && !modeOwed(modeLocal(), told)) {
+          modePin(now, false);
+          S.labels['modeseen:me'] = told;
+          modeUp = false;
+          return;
+        }
+        modeKeep(now);
+        hornSplash(words, null, 'mode-note');
+        modeUp = false;
+      });
+    };
+    setTimeout(look, 450);
+  }
+  if (window.__harness) {
+    window.__harness.modeState = function () { return { now: modeNow(), last: modeLast(), had: modeHad(), known: modeKnown(), notFan: notFan(), unsent: modeUnsent(), up: modeUp, off: offNow(), acting: actingAs() }; };
+    window.__harness.actAs = function (id) { setActingAs(id); render(true); };
   }
   var quickHorns = null;
   function hornQuick(sub) {
@@ -28839,6 +30361,10 @@
       }
     } catch (e) {   }
   }
+  function aiAsks() {
+    if (!IN_SHELL) return false;
+    try { return localStorage.getItem('gr_ai_ok') !== '1'; } catch (e) { return true; }
+  }
   function aiConsent() {
     if (!IN_SHELL) return Promise.resolve(true);
     try { if (localStorage.getItem('gr_ai_ok') === '1') return Promise.resolve(true); } catch (e) {}
@@ -28853,7 +30379,7 @@
       openSheet(function () {
         return [
           h('h2', { class: 'sh-title' }, 'Read this with an AI service?'),
-          h('p', { class: 'sh-sub' }, 'To read a flyer, a day sheet or a statement, Greenroom sends that photo or text to an AI service (Anthropic) just to be read. Nothing else is shared, and you check the result before anything is saved.'),
+          h('p', { class: 'sh-sub' }, 'To read a flyer, a day sheet, a statement or a to-do list, Greenroom sends that photo or text to an AI service (Anthropic) just to be read. Nothing else is shared, and you check the result before anything is saved.'),
           h('div', { class: 'stack' },
             h('button', { class: 'btn primary block', type: 'button',
               onclick: function () { finish(true); closeSheet(); } }, 'Allow'),
@@ -31188,7 +32714,7 @@
       } catch (e) {   }
     };
     on('appUrlOpen', function (ev) { if (!plaidBackOpened(ev && ev.url)) dayBarOpened(ev && ev.url); });
-    on('resume', function () { checkPlaid(false); dayBarSync(true); alarmSync(true); });
+    on('resume', function () { checkPlaid(false); dayBarSync(true); alarmSync(true); if (S.loaded && !sheet) render(); });
     on('appStateChange', function (st) { if (st && st.isActive) checkPlaid(false); });
     return true;
   }
@@ -34655,7 +36181,7 @@
     function build() {
       var keys = Object.keys(S.labels).filter(function (k) {
         return k.indexOf('crew:') !== 0 && k.indexOf('alogo:') !== 0 && k.indexOf('artist:') !== 0 && k.indexOf('profile:') !== 0 &&
-          k.indexOf('who:') !== 0;
+          k.indexOf('who:') !== 0 && !homeKey(k);
       }).sort(function (a, b) {
         var an = (S.labels[a].merchant || a).toLowerCase();
         var bn = (S.labels[b].merchant || b).toLowerCase();
