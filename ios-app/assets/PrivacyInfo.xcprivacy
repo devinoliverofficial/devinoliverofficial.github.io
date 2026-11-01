@@ -208,6 +208,9 @@
 			<key>NSPrivacyAccessedAPITypeReasons</key>
 			<array>
 				<string>CA92.1</string>
+				<!-- UserDefaults shared within an App Group: the app reads what the Share button's extension left (ShareInboxPlugin.swift).
+				     Confirm at build time: Apple's page of reasons did not load when this was written, and Xcode's picker may not list it. -->
+				<string>1C8F.1</string>
 			</array>
 		</dict>
 		<dict>

@@ -29,6 +29,11 @@ if [ -z "${BUILD_NUMBER:-}" ]; then BUILD_NUMBER=$(( ${GITHUB_RUN_NUMBER:-1} + 1
 # The lock-screen day bar (Devin's idea 20) is a Live Activity drawn by a widget extension inside the app. Its bundle ID is
 # the app's plus ".DayBar" (registered with Apple; the signing step makes its profile).
 DAYBAR_ID="$APP_ID.DayBar"
+# The Notes Share button (Devin, Oct 30: "Sounds good. But don't forget") is a share extension inside the app, with the app's
+# bundle ID plus ".ShareNote" (the signing step makes its profile). A share extension cannot open its app, so the two share an App
+# Group, where the shared text waits for the app. The group has to be registered with Apple, by hand: ios-app/README.md, "The Share button".
+SHARE_ID="$APP_ID.ShareNote"
+APP_GROUP="group.$APP_ID"
 # 1 = the app asks Apple for push permission, so the server can move the day bar on while the phone is locked
 # (ios-app/README.md, "The day bar's pushes": migration 0198, the notify function's day bar tick). In the cloud build it
 # comes from the GitHub variable DAYBAR_PUSH, set to 1 on Oct 22 (unset = 0): the app target gets aps-environment =
@@ -43,6 +48,11 @@ DAYBAR_ID="$APP_ID.DayBar"
 # refuses to set any alarm for an app without them). iOS 26 and newer only; older iPhones never see it. (Oct 22: and the
 # guest list's last call, 15 minutes before it: the day sheet's, else the tour's LAST CALL TIME.)
 ALARM_WORDS="Greenroom rings an alarm 30 minutes before your band’s set, 20 minutes before bus call, at bus call, and 15 minutes before the guest list’s last call, from your tour’s day sheet and last call time. You can turn each one off in Greenroom’s Settings, Notifications."
+# The calendar (MODELXOFFTOUR, Oct 30): the words iOS shows under its question, on both keys (iOS 17 and later, and 15 and 16). Apple has no
+# read-only level, so the question says Full Access, which covers reading, adding, changing and deleting. These say Greenroom does those
+# only when you tell it to (Nov 1: a tap on Add saves a new event, and Apple's own sheet changes or deletes one). Written to stay true
+# whichever way names start (design/second-round.md 2.4). Curly apostrophes, no double quotes: pb_text wraps in double quotes.
+CAL_WORDS="Greenroom reads your calendars to show your day in the app and on your Lock Screen bar. It adds, changes or deletes an event only when you tell it to. Today’s event times, and their names while Show names is on, go through Greenroom’s server so the bar can move on while your phone is locked. We delete them at midnight, though a backup can hold a copy for about a week. You can turn either off in Greenroom. Nothing else on your calendar leaves this iPhone."
 
 PB=/usr/libexec/PlistBuddy
 IOS_DIR="$HERE/ios/App"
@@ -62,6 +72,8 @@ validate_names() {
   [[ "$URL_SCHEME" =~ ^[a-z][a-z0-9+.-]*$ ]] || die "URL_SCHEME '$URL_SCHEME' is not a valid scheme"
   [ "$DAYBAR_PUSH" = "0" ] || [ "$DAYBAR_PUSH" = "1" ] || die "DAYBAR_PUSH must be 0 or 1"
   DAYBAR_ID="$APP_ID.DayBar"
+  SHARE_ID="$APP_ID.ShareNote"
+  APP_GROUP="group.$APP_ID"
 }
 
 # ---- PlistBuddy helpers ---------------------------------------------------------------------
@@ -90,11 +102,14 @@ cmd_names() {
   say "name on Home Screen $APP_DISPLAY_NAME"
   say "version / build   $MARKETING_VERSION ($BUILD_NUMBER)"
   say "day bar extension $DAYBAR_ID (pushes: $([ "$DAYBAR_PUSH" = 1 ] && echo on || echo off))"
+  say "share extension   $SHARE_ID (group $APP_GROUP)"
   # Hand the settled values to the later workflow steps (the fastlane step reads them).
   if [ -n "${GITHUB_ENV:-}" ]; then
     {
       echo "APP_ID=$APP_ID"
       echo "DAYBAR_ID=$DAYBAR_ID"
+      echo "SHARE_ID=$SHARE_ID"
+      echo "APP_GROUP=$APP_GROUP"
       echo "APP_NAME=$APP_NAME"
       echo "APP_DISPLAY_NAME=$APP_DISPLAY_NAME"
       echo "MARKETING_VERSION=$MARKETING_VERSION"
@@ -210,6 +225,9 @@ cmd_ios() {
   # (a day sheet saved, a mute tapped): Apple wakes the app in the background with a push that shows nothing
   # (remote-notification), so the phone sets its alarms again without being opened.
   pb_text NSAlarmKitUsageDescription "$ALARM_WORDS"
+  # The calendar (EventKit): the same words on both keys. EventKit has been in iOS since 4.0, so it needs no weak link.
+  pb_text NSCalendarsFullAccessUsageDescription "$CAL_WORDS"
+  pb_text NSCalendarsUsageDescription "$CAL_WORDS"
   pb_list UIBackgroundModes remote-notification
 
   # greenroom:// is how the bank (Plaid) sign-in sends the person back to the app when it is done
@@ -269,12 +287,22 @@ cmd_ios() {
   # the app only), and answering Bus Check from the lock screen (BusAnswer.swift, compiled into the app AND the DayBar
   # extension, whose On bus / Off bus buttons name its intent).
   cp "$HERE/native/App/AlarmsPlugin.swift" "$HERE/native/App/BusAnswer.swift" "$APP_DIR/"
+  # The iPhone's calendars (CalendarPlugin.swift) and what the Share button left for the app (ShareInboxPlugin.swift): the app only.
+  cp "$HERE/native/App/CalendarPlugin.swift" "$HERE/native/App/ShareInboxPlugin.swift" "$APP_DIR/"
   mkdir -p "$IOS_DIR/DayBar"
   # (The extension has its own privacy manifest: Apple reads each binary, and BusAnswer.swift uses UserDefaults there.)
   cp "$HERE/native/DayBar/DayBarWidgets.swift" "$HERE/native/DayBar/Info.plist" "$HERE/native/DayBar/PrivacyInfo.xcprivacy" \
      "$IOS_DIR/DayBar/"
   plutil -lint "$IOS_DIR/DayBar/Info.plist" >/dev/null || die "the DayBar Info.plist is not a valid plist"
   plutil -lint "$IOS_DIR/DayBar/PrivacyInfo.xcprivacy" >/dev/null || die "the DayBar PrivacyInfo.xcprivacy is not a valid plist"
+  # The Notes Share button: its own folder, its own privacy manifest (Apple reads each binary), the App Group named for this app.
+  mkdir -p "$IOS_DIR/ShareNote"
+  cp "$HERE/native/ShareNote/ShareViewController.swift" "$HERE/native/ShareNote/Info.plist" "$HERE/native/ShareNote/PrivacyInfo.xcprivacy" \
+     "$IOS_DIR/ShareNote/"
+  sed "s/group\.com\.greenroomtour\.app/$APP_GROUP/" "$HERE/native/ShareNote/ShareNote.entitlements" > "$IOS_DIR/ShareNote/ShareNote.entitlements"
+  plutil -lint "$IOS_DIR/ShareNote/Info.plist" >/dev/null || die "the ShareNote Info.plist is not a valid plist"
+  plutil -lint "$IOS_DIR/ShareNote/PrivacyInfo.xcprivacy" >/dev/null || die "the ShareNote PrivacyInfo.xcprivacy is not a valid plist"
+  plutil -lint "$IOS_DIR/ShareNote/ShareNote.entitlements" >/dev/null || die "the ShareNote entitlements are not a valid plist"
   # The scene makes the app's web view controller in code (Capacitor 8's SceneDelegate): it makes Greenroom's own,
   # which registers the DayBar plugin. (Main.storyboard names the same class, for the same reason.)
   SCENE="$APP_DIR/SceneDelegate.swift"
@@ -352,31 +380,36 @@ PY
   fi
   # iOS shows Live Activities only for an app that says it has them.
   pb_bool NSSupportsLiveActivities true
-  # DAYBAR_PUSH=1 (the cloud build since Oct 22): Apple's push permission, for the server's day bar pushes; the app target only.
-  ENTITLEMENTS=""
+  # The app's entitlements: the App Group it shares with the ShareNote extension, always. And DAYBAR_PUSH=1 (the cloud build since
+  # Oct 22): Apple's push permission, for the server's day bar pushes; the app target only.
+  PUSH_ENT=""
   if [ "$DAYBAR_PUSH" = "1" ]; then
-    cat > "$APP_DIR/App.entitlements" <<'ENT'
+    PUSH_ENT="	<key>aps-environment</key>
+	<string>production</string>
+"
+  fi
+  cat > "$APP_DIR/App.entitlements" <<ENT
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-	<key>aps-environment</key>
-	<string>production</string>
+${PUSH_ENT}	<key>com.apple.security.application-groups</key>
+	<array>
+		<string>$APP_GROUP</string>
+	</array>
 </dict>
 </plist>
 ENT
-    plutil -lint "$APP_DIR/App.entitlements" >/dev/null || die "App.entitlements is not a valid plist"
-    ENTITLEMENTS="App/App.entitlements"
-  fi
+  plutil -lint "$APP_DIR/App.entitlements" >/dev/null || die "App.entitlements is not a valid plist"
   plutil -lint "$PLIST" >/dev/null || die "Info.plist is no longer a valid plist"
 
   # ---- the Xcode project: names, numbers, iPhone only, the privacy manifest and the day bar filed in -----
   python3 "$HERE/tools/edit_xcodeproj.py" "$PBXPROJ" \
     --bundle-id "$APP_ID" --marketing-version "$MARKETING_VERSION" --build-number "$BUILD_NUMBER" \
-    --iphone-only --add-resource PrivacyInfo.xcprivacy --add-daybar "$DAYBAR_ID" \
+    --iphone-only --add-resource PrivacyInfo.xcprivacy --add-daybar "$DAYBAR_ID" --add-share "$SHARE_ID" \
     --weak-framework AlarmKit --weak-framework AppIntents --weak-framework ActivityKit \
-    ${ENTITLEMENTS:+--app-entitlements "$ENTITLEMENTS"}
-  say "the iOS project is ready: $APP_ID (day bar $DAYBAR_ID), version $MARKETING_VERSION ($BUILD_NUMBER), iPhone only"
+    --app-entitlements App/App.entitlements
+  say "the iOS project is ready: $APP_ID (day bar $DAYBAR_ID, share $SHARE_ID), version $MARKETING_VERSION ($BUILD_NUMBER), iPhone only"
 }
 
 # ============================================================================================
@@ -453,11 +486,18 @@ except Exception:
     "$(grep -c 'GreenroomAlarms.remote(userInfo, completionHandler)' "$APP_DIR/AppDelegate.swift" 2>/dev/null || true)" "1"
   grep -q "registerPluginInstance(AlarmsPlugin())" "$APP_DIR/GreenroomViewController.swift" 2>/dev/null \
     || { say "WRONG the web view controller does not register the Alarms plugin"; bad=1; }
+  # The calendar: iOS's question has its words on both keys (without them iOS closes the app when it is asked), and the plugins are registered.
+  want "the calendar question's words (NSCalendarsFullAccessUsageDescription)" "$(get NSCalendarsFullAccessUsageDescription)" "$CAL_WORDS"
+  want "the calendar question's words below iOS 17 (NSCalendarsUsageDescription)" "$(get NSCalendarsUsageDescription)" "$CAL_WORDS"
+  grep -q "registerPluginInstance(CalendarPlugin())" "$APP_DIR/GreenroomViewController.swift" 2>/dev/null \
+    || { say "WRONG the web view controller does not register the Calendar plugin"; bad=1; }
+  grep -q "registerPluginInstance(ShareInboxPlugin())" "$APP_DIR/GreenroomViewController.swift" 2>/dev/null \
+    || { say "WRONG the web view controller does not register the ShareInbox plugin"; bad=1; }
   grep -q "GreenroomViewController()" "$APP_DIR/SceneDelegate.swift" 2>/dev/null \
     || { say "WRONG the scene does not make GreenroomViewController (the DayBar plugin would never be registered)"; bad=1; }
   grep -q "DayBarLaunch.start()" "$APP_DIR/AppDelegate.swift" 2>/dev/null \
     || { say "WRONG the AppDelegate does not start the day bar's token listener (DayBarLaunch.start)"; bad=1; }
-  for f in DayBarAttributes.swift DayBarPlugin.swift GreenroomViewController.swift AlarmsPlugin.swift BusAnswer.swift; do
+  for f in DayBarAttributes.swift DayBarPlugin.swift GreenroomViewController.swift AlarmsPlugin.swift BusAnswer.swift CalendarPlugin.swift ShareInboxPlugin.swift; do
     [ -f "$APP_DIR/$f" ] || { say "WRONG $f is not in the app's folder"; bad=1; }
   done
   [ -f "$IOS_DIR/DayBar/DayBarWidgets.swift" ] || { say "WRONG the DayBar extension's DayBarWidgets.swift is missing"; bad=1; }
@@ -468,14 +508,30 @@ except Exception:
   want "the DayBar extension is a widget extension" \
     "$("$PB" -c 'Print :NSExtension:NSExtensionPointIdentifier' "$IOS_DIR/DayBar/Info.plist" 2>/dev/null || echo '(missing)')" \
     "com.apple.widgetkit-extension"
+  # The Notes Share button: its files, a share extension by Info.plist, its own privacy manifest for the App Group's UserDefaults (1C8F.1).
+  [ -f "$IOS_DIR/ShareNote/ShareViewController.swift" ] || { say "WRONG the ShareNote extension's ShareViewController.swift is missing"; bad=1; }
+  want "the ShareNote extension is a share extension" \
+    "$("$PB" -c 'Print :NSExtension:NSExtensionPointIdentifier' "$IOS_DIR/ShareNote/Info.plist" 2>/dev/null || echo '(missing)')" \
+    "com.apple.share-services"
+  want "the ShareNote extension takes text" \
+    "$("$PB" -c 'Print :NSExtension:NSExtensionAttributes:NSExtensionActivationRule:NSExtensionActivationSupportsText' "$IOS_DIR/ShareNote/Info.plist" 2>/dev/null || echo '(missing)')" "true"
+  want "the ShareNote extension's privacy manifest declares App Group UserDefaults (1C8F.1)" \
+    "$("$PB" -c 'Print :NSPrivacyAccessedAPITypes:0:NSPrivacyAccessedAPIType' "$IOS_DIR/ShareNote/PrivacyInfo.xcprivacy" 2>/dev/null || echo '(missing)') $("$PB" -c 'Print :NSPrivacyAccessedAPITypes:0:NSPrivacyAccessedAPITypeReasons:0' "$IOS_DIR/ShareNote/PrivacyInfo.xcprivacy" 2>/dev/null || echo '(missing)')" \
+    "NSPrivacyAccessedAPICategoryUserDefaults 1C8F.1"
+  want "the app's privacy manifest declares App Group UserDefaults too (it reads what ShareNote left)" \
+    "$("$PB" -c 'Print :NSPrivacyAccessedAPITypes:0:NSPrivacyAccessedAPITypeReasons' "$APP_DIR/PrivacyInfo.xcprivacy" 2>/dev/null | grep -c '1C8F.1')" "1"
   python3 "$HERE/tools/check_daybar.py" "$PBXPROJ" "$APP_ID" "$MARKETING_VERSION" "$BUILD_NUMBER" || bad=1
+  # The App Group, on both, always: the only way the shared text reaches the app.
+  grep -q "CODE_SIGN_ENTITLEMENTS = App/App.entitlements;" "$PBXPROJ" \
+    || { say "WRONG the app target has no entitlements file"; bad=1; }
+  want "the app is in the App Group" "$("$PB" -c 'Print :com.apple.security.application-groups:0' "$APP_DIR/App.entitlements" 2>/dev/null || echo '(missing)')" "$APP_GROUP"
+  want "the ShareNote extension is in the App Group" "$("$PB" -c 'Print :com.apple.security.application-groups:0' "$IOS_DIR/ShareNote/ShareNote.entitlements" 2>/dev/null || echo '(missing)')" "$APP_GROUP"
   if [ "$DAYBAR_PUSH" = "1" ]; then
-    grep -q "CODE_SIGN_ENTITLEMENTS = App/App.entitlements;" "$PBXPROJ" \
-      && [ "$("$PB" -c 'Print :aps-environment' "$APP_DIR/App.entitlements" 2>/dev/null)" = "production" ] \
+    [ "$("$PB" -c 'Print :aps-environment' "$APP_DIR/App.entitlements" 2>/dev/null)" = "production" ] \
       || { say "WRONG DAYBAR_PUSH=1 but the app does not carry aps-environment"; bad=1; }
   else
-    ! grep -q "CODE_SIGN_ENTITLEMENTS" "$PBXPROJ" \
-      || { say "WRONG an entitlements file is set while DAYBAR_PUSH=0 (signing would ask for a capability the profile lacks)"; bad=1; }
+    ! "$PB" -c 'Print :aps-environment' "$APP_DIR/App.entitlements" >/dev/null 2>&1 \
+      || { say "WRONG aps-environment is set while DAYBAR_PUSH=0 (signing would ask for a capability the profile lacks)"; bad=1; }
   fi
 
   [ "$bad" = 0 ] || die "the project is not as expected (see WRONG lines above)"

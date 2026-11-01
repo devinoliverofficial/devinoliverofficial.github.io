@@ -1,5 +1,5 @@
 // Capacitor's own web view controller, with Greenroom's own plugins registered (DayBar, the lock-screen day bar; Alarms,
-// the stage and bus call alarms). Plugins from npm (App, StatusBar, PushNotifications) register themselves; a plugin that
+// the stage and bus call alarms; Calendar, the iPhone's calendars; ShareInbox, what the Share button left for the app). Plugins from npm (App, StatusBar, PushNotifications) register themselves; a plugin that
 // lives inside the app is registered here, which is Capacitor's documented way ("Custom Native iOS Code"). prepare.sh
 // points the scene at this class.
 
@@ -11,6 +11,8 @@ class GreenroomViewController: CAPBridgeViewController {
     override open func capacitorDidLoad() {
         bridge?.registerPluginInstance(DayBarPlugin())
         bridge?.registerPluginInstance(AlarmsPlugin())
+        bridge?.registerPluginInstance(CalendarPlugin())
+        bridge?.registerPluginInstance(ShareInboxPlugin())
         MainFrameOnlyBridge.install(on: bridge)
     }
 }

@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
-"""Checks that the Xcode project carries the lock-screen day bar the way edit_xcodeproj.py --add-daybar adds it.
+"""Checks that the Xcode project carries the lock-screen day bar and the Notes Share button the way edit_xcodeproj.py
+--add-daybar and --add-share add them.
 
     check_daybar.py PATH/TO/project.pbxproj APP_ID [MARKETING_VERSION BUILD_NUMBER]
 
@@ -57,11 +58,12 @@ def main():
 
     root = objs[proj['rootObject']]
     targets = {objs[t]['name']: (t, objs[t]) for t in root['targets']}
-    if 'App' not in targets or 'DayBar' not in targets:
-        die('the project lists the targets %s, not App and DayBar' % sorted(targets))
+    if 'App' not in targets or 'DayBar' not in targets or 'ShareNote' not in targets:
+        die('the project lists the targets %s, not App, DayBar and ShareNote' % sorted(targets))
     app_id_, app = targets['App']
     ext_id_, ext = targets['DayBar']
-    ok('two targets: App and DayBar')
+    share_id_, share = targets['ShareNote']
+    ok('three targets: App, DayBar and ShareNote')
     if ext.get('productType') != 'com.apple.product-type.app-extension':
         die('DayBar is a %s, not an app extension' % ext.get('productType'))
     if objs[ext['productReference']].get('path') != 'DayBar.appex':
@@ -90,13 +92,14 @@ def main():
         return files_of(ph[0]) if ph else []
     app_src, ext_src = sources(app), sources(ext)
     for f in ('DayBarAttributes.swift', 'DayBarPlugin.swift', 'GreenroomViewController.swift', 'AppDelegate.swift',
-              'AlarmsPlugin.swift', 'BusAnswer.swift'):
+              'AlarmsPlugin.swift', 'BusAnswer.swift', 'CalendarPlugin.swift', 'ShareInboxPlugin.swift'):
         if f not in app_src:
             die('the App target does not compile %s' % f)
     for f in ('DayBarAttributes.swift', 'DayBarWidgets.swift', 'BusAnswer.swift'):
         if f not in ext_src:
             die('DayBar does not compile %s' % f)
-    if 'DayBarPlugin.swift' in ext_src or 'GreenroomViewController.swift' in ext_src or 'AlarmsPlugin.swift' in ext_src:
+    plugin_files = ('DayBarPlugin.swift', 'GreenroomViewController.swift', 'AlarmsPlugin.swift', 'CalendarPlugin.swift', 'ShareInboxPlugin.swift')
+    if any(f in ext_src for f in plugin_files):
         die('DayBar compiles the app\'s own plugin files (an extension cannot use Capacitor)')
     ok('the app compiles the plugins, the extension compiles the look, both compile the shared state and Bus Check\'s answer')
 
@@ -154,6 +157,55 @@ def main():
     if len(app_res) != 1 or app_res[0] in groups[0]['children']:
         die('the App target does not bundle exactly its own privacy manifest (not the DayBar extension\'s)')
     ok('DayBar bundles its own privacy manifest (the app keeps its own)')
+
+    # The Notes Share button, read the same way: a third target, embedded in the same phase as the day bar, built first, on the
+    # app's numbers, compiling no plugin, with its own privacy manifest and its own entitlements (the App Group).
+    if share.get('productType') != 'com.apple.product-type.app-extension':
+        die('ShareNote is a %s, not an app extension' % share.get('productType'))
+    if objs[share['productReference']].get('path') != 'ShareNote.appex':
+        die('ShareNote does not make ShareNote.appex')
+    share_deps = [d for d in deps if d.get('target') == share_id_]
+    if not share_deps:
+        die('the App target does not build ShareNote first')
+    share_proxy = objs[share_deps[0]['targetProxy']]
+    if share_proxy.get('remoteGlobalIDString') != share_id_ or share_proxy.get('containerPortal') != proj['rootObject']:
+        die('the dependency on ShareNote points somewhere else')
+    if 'ShareNote.appex' not in files_of(embed[0]):
+        die('ShareNote.appex is not in the same embed phase as DayBar.appex')
+    if len(embeds) != 1:
+        die('the app has %d embed phases, not the one' % len(embeds))
+    share_src = sources(share)
+    if share_src != ['ShareViewController.swift']:
+        die('ShareNote compiles %s, not ShareViewController.swift alone' % share_src)
+    if 'ShareViewController.swift' in app_src or 'ShareViewController.swift' in ext_src:
+        die('another target compiles ShareViewController.swift')
+    ok('ShareNote.appex is an app extension, built first, in the one embed phase, compiling no plugin')
+    for c in configs(share):
+        s = c['buildSettings']
+        expect = {'PRODUCT_BUNDLE_IDENTIFIER': app_id + '.ShareNote', 'INFOPLIST_FILE': 'ShareNote/Info.plist',
+                  'TARGETED_DEVICE_FAMILY': '1', 'SKIP_INSTALL': 'YES', 'APPLICATION_EXTENSION_API_ONLY': 'YES',
+                  'CODE_SIGN_ENTITLEMENTS': 'ShareNote/ShareNote.entitlements', 'IPHONEOS_DEPLOYMENT_TARGET': '15.0'}
+        for k, v in expect.items():
+            if str(s.get(k)) != v:
+                die('ShareNote %s: %s is %r, wanted %r' % (c['name'], k, s.get(k), v))
+        a = [x for x in app_cfg if x['name'] == c['name']]
+        if not a:
+            die('the App target has no %s configuration' % c['name'])
+        for k in ('MARKETING_VERSION', 'CURRENT_PROJECT_VERSION'):
+            if str(s.get(k)) != str(a[0]['buildSettings'].get(k)):
+                die('%s %s: ShareNote says %r, the app %r (Apple refuses a mismatch)' % (c['name'], k, s.get(k), a[0]['buildSettings'].get(k)))
+    for c in app_cfg:
+        if c['buildSettings'].get('CODE_SIGN_ENTITLEMENTS') != 'App/App.entitlements':
+            die('App %s: no entitlements file (the App Group)' % c['name'])
+    ok('ShareNote: %s.ShareNote, the app\'s numbers, iPhone only, its own entitlements, and the app has its own' % app_id)
+    share_groups = [o for o in objs.values() if o.get('isa') == 'PBXGroup' and o.get('path') == 'ShareNote']
+    if len(share_groups) != 1 or {objs[c].get('path') for c in share_groups[0]['children']} != {
+            'ShareViewController.swift', 'Info.plist', 'PrivacyInfo.xcprivacy', 'ShareNote.entitlements'}:
+        die('the ShareNote folder in the project does not hold its four files')
+    share_res = [r for r in resources(share) if objs[r].get('path') == 'PrivacyInfo.xcprivacy']
+    if len(share_res) != 1 or share_res[0] not in share_groups[0]['children']:
+        die('ShareNote does not bundle its own PrivacyInfo.xcprivacy (from its folder) as a resource')
+    ok('ShareNote bundles its own privacy manifest')
     print('check_daybar: all checks passed')
 
 

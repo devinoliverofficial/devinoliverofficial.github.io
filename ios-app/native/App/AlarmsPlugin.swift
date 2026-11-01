@@ -220,6 +220,8 @@ enum GreenroomAlarms {
     /// The plan kept on the phone is read in the desk's own line (handOver), so a page sync queued just before it (a Save
     /// with a switch turned off) is never undone by an older copy.
     static func remote(_ info: [AnyHashable: Any], _ done: @escaping (UIBackgroundFetchResult) -> Void) {
+        // (The morning wake of your own day has its own word, homeday: CalendarPlugin.swift. Any other push goes on as before.)
+        if GreenroomCalendar.morning(info, done) { return }
         guard let a = info["alarms"] as? [String: Any], let u = a["u"] as? String, let t = a["t"] as? String,
               !u.isEmpty, !t.isEmpty else {
             done(.noData)

@@ -255,7 +255,7 @@ mv "$PL.keep" "$PL"
 [ "$(sips -g pixelWidth "$A/Assets.xcassets/Splash.imageset/splash-2732x2732-2.png" | awk '/pixelWidth/{print $2}')" = "2732" ] && ok "launch pictures replaced with black" || bad "launch picture not replaced"
 grep -q 'red="0.0" green="0.0" blue="0.0"' "$A/Base.lproj/LaunchScreen.storyboard" && ok "launch storyboard background is black" || bad "storyboard background"
 P="$T/repo/ios-app/ios/App/App.xcodeproj/project.pbxproj"
-[ "$(grep -c 'PrivacyInfo.xcprivacy' "$P")" = "8" ] && ok "privacy manifests filed in 8 places (the app's and the DayBar extension's: file reference, build file, group, Resources phase each)" || bad "privacy manifest lines: $(grep -c 'PrivacyInfo.xcprivacy' "$P")"
+[ "$(grep -c 'PrivacyInfo.xcprivacy' "$P")" = "12" ] && ok "privacy manifests filed in 12 places (the app's, the DayBar extension's and the ShareNote extension's: file reference, build file, group, Resources phase each)" || bad "privacy manifest lines: $(grep -c 'PrivacyInfo.xcprivacy' "$P")"
 plutil -lint "$A/../DayBar/PrivacyInfo.xcprivacy" >/dev/null \
   && [ "$(/usr/libexec/PlistBuddy -c 'Print :NSPrivacyAccessedAPITypes:0:NSPrivacyAccessedAPIType' "$A/../DayBar/PrivacyInfo.xcprivacy")" = "NSPrivacyAccessedAPICategoryUserDefaults" ] \
   && [ "$(/usr/libexec/PlistBuddy -c 'Print :NSPrivacyAccessedAPITypes:0:NSPrivacyAccessedAPITypeReasons:0' "$A/../DayBar/PrivacyInfo.xcprivacy")" = "CA92.1" ] \
@@ -285,18 +285,18 @@ plutil -lint "$A/PrivacyInfo.xcprivacy" >/dev/null && ! ( bash prepare.sh check 
   && ok "check refuses a privacy manifest with types dropped inside another type's purposes (though it lints)" || bad "check passed a mis-nested privacy manifest"
 mv "$T/app-privacy.keep" "$A/PrivacyInfo.xcprivacy"
 bash prepare.sh check >/dev/null && ok "check passes again once the manifest is put back" || bad "check after restoring the privacy manifest"
-[ "$(grep -c 'TARGETED_DEVICE_FAMILY = 1;' "$P")" = "4" ] && ! grep -q 'TARGETED_DEVICE_FAMILY = "1,2";' "$P" && ok "iPhone only in both configurations of both targets (the app and the day bar)" || bad "device family"
+[ "$(grep -c 'TARGETED_DEVICE_FAMILY = 1;' "$P")" = "6" ] && ! grep -q 'TARGETED_DEVICE_FAMILY = "1,2";' "$P" && ok "iPhone only in both configurations of all three targets (the app, the day bar and the Share button)" || bad "device family"
 grep -q 'PRODUCT_BUNDLE_IDENTIFIER = com.example.selftest;' "$P" && grep -q 'CURRENT_PROJECT_VERSION = 42;' "$P" && grep -q 'MARKETING_VERSION = 1.0.0;' "$P" && ok "bundle ID, version and build number set" || bad "ids/numbers"
 
 # running the project edit a second time must not file the manifest twice
 python3 tools/edit_xcodeproj.py "$P" --add-resource PrivacyInfo.xcprivacy >/dev/null
-[ "$(grep -c 'PrivacyInfo.xcprivacy' "$P")" = "8" ] && ok "a second run changes nothing" || bad "second run duplicated lines"
+[ "$(grep -c 'PrivacyInfo.xcprivacy' "$P")" = "12" ] && ok "a second run changes nothing" || bad "second run duplicated lines"
 
 # ---- the lock-screen day bar ------------------------------------------------------------
 grep -q 'PRODUCT_BUNDLE_IDENTIFIER = com.example.selftest.DayBar;' "$P" && [ "$(grep -c 'PRODUCT_BUNDLE_IDENTIFIER = com.example.selftest;' "$P")" = "2" ] \
   && ok "the day bar extension has its own bundle ID (the app's plus .DayBar), the app keeps its own" || bad "day bar bundle IDs"
-[ "$(grep -c 'CURRENT_PROJECT_VERSION = 42;' "$P")" = "4" ] && [ "$(grep -c 'MARKETING_VERSION = 1.0.0;' "$P")" = "4" ] \
-  && ok "the extension carries the app's version and build number" || bad "extension version/build"
+[ "$(grep -c 'CURRENT_PROJECT_VERSION = 42;' "$P")" = "6" ] && [ "$(grep -c 'MARKETING_VERSION = 1.0.0;' "$P")" = "6" ] \
+  && ok "the extensions carry the app's version and build number" || bad "extension version/build"
 grep -q 'GreenroomViewController()' "$A/SceneDelegate.swift" && ! grep -q 'CAPBridgeViewController()' "$A/SceneDelegate.swift" \
   && ok "the scene makes GreenroomViewController (which registers the DayBar plugin)" || bad "scene delegate not pointed at GreenroomViewController"
 grep -q 'customClass="GreenroomViewController" customModule="App"' "$A/Base.lproj/Main.storyboard" && ok "Main.storyboard names it too" || bad "storyboard"
@@ -306,7 +306,10 @@ grep -q 'customClass="GreenroomViewController" customModule="App"' "$A/Base.lpro
 [ "$(/usr/libexec/PlistBuddy -c 'Print :NSSupportsLiveActivities' "$PL")" = "true" ] && ok "Info.plist allows Live Activities" || bad "NSSupportsLiveActivities"
 [ -f "$A/DayBarPlugin.swift" ] && [ -f "$A/DayBarAttributes.swift" ] && [ -f "$A/GreenroomViewController.swift" ] && [ -f "$A/../DayBar/DayBarWidgets.swift" ] \
   && ok "the day bar's Swift files are in place" || bad "day bar files"
-! grep -q 'CODE_SIGN_ENTITLEMENTS' "$P" && ok "no push permission asked for while DAYBAR_PUSH is off" || bad "entitlements set with pushes off"
+! /usr/libexec/PlistBuddy -c 'Print :aps-environment' "$A/App.entitlements" >/dev/null 2>&1 && ok "no push permission asked for while DAYBAR_PUSH is off" || bad "aps-environment set with pushes off"
+[ "$(grep -c 'CODE_SIGN_ENTITLEMENTS = App/App.entitlements;' "$P")" = "2" ] \
+  && [ "$(/usr/libexec/PlistBuddy -c 'Print :com.apple.security.application-groups:0' "$A/App.entitlements")" = "group.com.example.selftest" ] \
+  && ok "the app carries the App Group, with or without pushes, named for this app" || bad "the app's App Group"
 appex_lines=$(grep -c 'DayBar.appex' "$P")
 python3 tools/edit_xcodeproj.py "$P" --bundle-id com.example.selftest --marketing-version 1.0.0 --build-number 42 --add-daybar com.example.selftest.DayBar >/dev/null
 [ "$(grep -c 'DayBar.appex' "$P")" = "$appex_lines" ] && python3 tools/check_daybar.py "$P" com.example.selftest 1.0.0 42 >/dev/null \
@@ -397,6 +400,129 @@ PYX
 ( bash prepare.sh check ) >/dev/null 2>&1 && bad "check passed with AlarmKit linked strongly" || ok "check refuses an app that links AlarmKit strongly (it would not open below iOS 26)"
 mv "$P.keep" "$P"
 bash prepare.sh check >/dev/null && ok "check passes again" || bad "check after restoring the alarms"
+# ---- the iPhone's calendars (MODELXOFFTOUR, Oct 30): iOS's question has its words on both keys (iOS 17 and later, and 15 and 16), the
+# plugin is registered, in the app's folder, compiled by the app alone, and EventKit needs no weak link (it has been in iOS since 4.0).
+for k in NSCalendarsFullAccessUsageDescription NSCalendarsUsageDescription; do
+  /usr/libexec/PlistBuddy -c "Print :$k" "$PL" | grep -q "Nothing else on your calendar leaves this iPhone" \
+    && ! /usr/libexec/PlistBuddy -c "Print :$k" "$PL" | grep -q '"' && ok "the calendar question's words are in the Info.plist ($k)" || bad "$k"
+done
+grep -q 'registerPluginInstance(CalendarPlugin())' "$A/GreenroomViewController.swift" && [ -f "$A/CalendarPlugin.swift" ] \
+  && ok "the Calendar plugin is registered, its file in place" || bad "Calendar plugin"
+[ "$(grep -c 'CalendarPlugin.swift in Sources' "$P")" = "2" ] && ok "CalendarPlugin.swift is compiled by the app alone" || bad "CalendarPlugin.swift in the project: $(grep -c 'CalendarPlugin.swift in Sources' "$P")"
+grep -q 'weak_framework' "$P" && ! grep -q '^					EventKit,$' "$P" && ok "EventKit is not linked weakly" || bad "EventKit link"
+for k in NSCalendarsFullAccessUsageDescription NSCalendarsUsageDescription; do
+  cp "$PL" "$PL.keep"
+  /usr/libexec/PlistBuddy -c "Delete :$k" "$PL" >/dev/null
+  ( bash prepare.sh check ) >/dev/null 2>&1 && bad "check passed with no $k" || ok "check refuses a project without $k"
+  mv "$PL.keep" "$PL"
+done
+# Both ways (Devin, Nov 1: "add things to your calendar in the greenroom app and vis versa"): the one write is a new event, and the page has no
+# way to change or delete one, because Apple's own sheet does that. So the whole file holds one save and no remove, and the plugin's methods
+# are these and no others. A bug or a bad script cannot wipe a calendar. The words iOS shows say the same, on both keys.
+CP="$HERE/native/App/CalendarPlugin.swift"
+[ "$(grep -c '\.save(' "$CP")" = "1" ] && ! grep -q '\.remove(' "$CP" && ok "the calendar plugin has one save and no remove" || bad "CalendarPlugin writes: $(grep -c '\.save(' "$CP") saves, $(grep -c '\.remove(' "$CP") removes"
+[ "$(grep -o 'CAPPluginMethod(name: "[A-Za-z]*"' "$CP" | sed -E 's/.*"(.*)"/\1/' | sort | tr '\n' ' ')" = "add calendars connect editor morning openSettings read refresh status " ] \
+  && ok "the calendar plugin's methods are the known ones, and none changes or deletes an event" || bad "CalendarPlugin methods: $(grep -o 'CAPPluginMethod(name: "[A-Za-z]*"' "$CP" | tr '\n' ' ')"
+grep -q '^import EventKitUI$' "$CP" && grep -q 'guard #available(iOS 17.0, \*) else {' "$CP" && grep -q 'if #available(iOS 17.0, \*) { canEdit = ' "$CP" \
+  && ! /usr/libexec/PlistBuddy -c "Print :NSContactsUsageDescription" "$PL" >/dev/null 2>&1 \
+  && ok "Apple's event sheet is iOS 17 and later: below that it needs a Contacts key this app does not have" || bad "the editor's iOS 17 gate"
+grep -q 'sheet.editViewDelegate = watch' "$CP" && grep -q 'self.editing = watch' "$CP" && ok "the sheet's delegate is held while it is open (Apple holds it weakly)" || bad "the editor's delegate"
+for k in NSCalendarsFullAccessUsageDescription NSCalendarsUsageDescription; do
+  /usr/libexec/PlistBuddy -c "Print :$k" "$PL" | grep -q "It adds, changes or deletes an event only when you tell it to." \
+    && ! /usr/libexec/PlistBuddy -c "Print :$k" "$PL" | grep -q "never changes" && ok "the question's words say what the app can do now ($k)" || bad "$k still says it never changes a calendar"
+done
+# The framed place.html can never reach add: the plugin is registered first, then the bridge is wrapped, and a frame's message is dropped before Capacitor sees it.
+VC="$A/GreenroomViewController.swift"
+[ "$(grep -n 'registerPluginInstance(CalendarPlugin())' "$VC" | cut -d: -f1)" -lt "$(grep -n 'MainFrameOnlyBridge.install(on: bridge)' "$VC" | cut -d: -f1)" ] \
+  && ok "a framed page cannot reach the calendar: the bridge is wrapped after the plugin is registered" || bad "the order in GreenroomViewController"
+# The event names on the Lock Screen rest on Other User Content, already in the app's manifest: it must stay there.
+python3 - "$A/PrivacyInfo.xcprivacy" <<'PYX' && ok "the app's privacy manifest still declares Other User Content (calendar names through the server)" || bad "Other User Content in the privacy manifest"
+import plistlib, sys
+t = [x for x in plistlib.load(open(sys.argv[1], 'rb'))['NSPrivacyCollectedDataTypes'] if x['NSPrivacyCollectedDataType'] == 'NSPrivacyCollectedDataTypeOtherUserContent']
+assert len(t) == 1 and t[0]['NSPrivacyCollectedDataTypeLinked'] is True and t[0]['NSPrivacyCollectedDataTypeTracking'] is False, t
+PYX
+# The morning wake sits in front of the alarms' hand-over, and nothing else moved (the greps of that function, further down, hold).
+AP2="$HERE/native/App/AlarmsPlugin.swift"
+grep -B3 'guard let a = info\["alarms"\] as? \[String: Any\]' "$AP2" | grep -q 'if GreenroomCalendar.morning(info, done) { return }' \
+  && ok "the morning wake takes its own push first, the alarms keep the rest" || bad "GreenroomCalendar.morning in GreenroomAlarms.remote"
+# The DayBar plugin: prepare and arm are its methods, a swipe is watched for home bars alone, and the wake's marker goes with a sign-out.
+DP="$HERE/native/App/DayBarPlugin.swift"
+grep -q 'CAPPluginMethod(name: "prepare"' "$DP" && grep -q 'CAPPluginMethod(name: "arm"' "$DP" && grep -q 'guard key.hasPrefix("home|") else { return }' "$DP" \
+  && grep -q 'MorningMarker.forget()' "$DP" && ok "the day bar's new methods, the swipe watcher for your own day alone, the wake's marker cleared on forget" || bad "DayBarPlugin home changes"
+# How a title is cleaned (GreenroomCalendar.clean), cut out of the plugin and run (plain Swift, no SDK): a control character and a line
+# break become a space, a joined emoji stays whole, and the length is in characters.
+if command -v swiftc >/dev/null; then
+  if python3 - "$HERE/native/App/CalendarPlugin.swift" "$T/clean.swift" <<'PYX'
+import sys
+s = open(sys.argv[1]).read()
+i = s.index('\n    static func clean(_ s: String?, _ max: Int) -> String {')
+j, d = s.index('{', i), 0
+while True:
+    d += {'{': 1, '}': -1}.get(s[j], 0)
+    if d == 0: break
+    j += 1
+open(sys.argv[2], 'w').write('enum C {' + s[i:j + 1] + """
+}
+print(C.clean("a\\u{0}b", 10) + "|" + C.clean(" two\\nlines\\u{2028}here\\t ", 30) + "|" + C.clean("👨‍👩‍👧 Gig", 3) + "|" + C.clean(nil, 3) + "|" + C.clean("abcdef", 3))
+""")
+PYX
+  then
+    [ "$(swiftc -o "$T/clean" "$T/clean.swift" 2>/dev/null && "$T/clean")" = "a b|two lines here|👨‍👩‍👧 G||abc" ] \
+      && ok "a calendar title: control characters and line breaks gone, joined emoji whole, cut by the character" || bad "GreenroomCalendar.clean"
+  else
+    bad "GreenroomCalendar.clean not found in CalendarPlugin.swift"
+  fi
+else
+  echo "  skip  how a title is cleaned (no swiftc on this Mac)"
+fi
+# ---- the Notes Share button (Devin, Oct 30: "Sounds good. But don't forget"): a third target, an App Group, and the app's half
+grep -q 'PRODUCT_BUNDLE_IDENTIFIER = com.example.selftest.ShareNote;' "$P" && [ "$(grep -c 'CODE_SIGN_ENTITLEMENTS = ShareNote/ShareNote.entitlements;' "$P")" = "2" ] \
+  && ok "the Share button has its own bundle ID and signs with its own entitlements" || bad "ShareNote bundle ID or entitlements"
+[ "$(/usr/libexec/PlistBuddy -c 'Print :com.apple.security.application-groups:0' "$A/../ShareNote/ShareNote.entitlements")" = "group.com.example.selftest" ] \
+  && ok "its App Group is named for this app" || bad "ShareNote's App Group"
+[ "$(/usr/libexec/PlistBuddy -c 'Print :NSExtension:NSExtensionPointIdentifier' "$A/../ShareNote/Info.plist")" = "com.apple.share-services" ] \
+  && [ "$(/usr/libexec/PlistBuddy -c 'Print :NSExtension:NSExtensionPrincipalClass' "$A/../ShareNote/Info.plist")" = '$(PRODUCT_MODULE_NAME).ShareViewController' ] \
+  && ok "it is a share extension, its class named by the module" || bad "ShareNote Info.plist"
+grep -q 'registerPluginInstance(ShareInboxPlugin())' "$A/GreenroomViewController.swift" && [ -f "$A/ShareInboxPlugin.swift" ] && [ "$(grep -c 'ShareInboxPlugin.swift in Sources' "$P")" = "2" ] \
+  && ok "the ShareInbox plugin is registered, compiled by the app alone" || bad "ShareInbox plugin"
+! grep -q 'responder\|openURL\|UIApplication' "$HERE/native/ShareNote/ShareViewController.swift" \
+  && ok "the extension never tries to open the app (Apple: open works from other kinds of extension; the responder trick invites rejection)" || bad "ShareNote opens the app"
+[ "$(grep -c '1C8F.1' "$A/PrivacyInfo.xcprivacy")" -ge 1 ] && [ "$(grep -c '<string>1C8F.1</string>' "$A/../DayBar/PrivacyInfo.xcprivacy")" = "0" ] \
+  && ok "the App Group's reason is in the app's manifest and ShareNote's, not DayBar's (it does not touch the group)" || bad "1C8F.1"
+share_lines=$(grep -c 'ShareNote.appex' "$P")
+python3 tools/edit_xcodeproj.py "$P" --marketing-version 1.0.0 --build-number 42 --add-share com.example.selftest.ShareNote >/dev/null
+[ "$(grep -c 'ShareNote.appex' "$P")" = "$share_lines" ] && python3 tools/check_daybar.py "$P" com.example.selftest 1.0.0 42 >/dev/null \
+  && ok "adding the Share button a second time changes nothing" || bad "second ShareNote run"
+cp "$P" "$P.keep"
+python3 - "$P" <<'PYX'
+import re, sys
+p = sys.argv[1]
+s = open(p).read()
+s = re.sub(r'\n\t\t\t\t[0-9A-F]{24} /\* ShareNote.appex in Embed Foundation Extensions \*/,', '', s, count=1)
+open(p, 'w').write(s)
+PYX
+( bash prepare.sh check ) >/dev/null 2>&1 && bad "check passed with the Share button not embedded in the app" || ok "check refuses an app that does not embed the Share button"
+cp "$P.keep" "$P"
+python3 - "$P" <<'PYX'
+import re, sys
+p = sys.argv[1]
+s = open(p).read()
+m = re.search(r'\n\t\t\t\t[0-9A-F]{24} /\* ShareViewController.swift in Sources \*/,', s)
+s = s.replace(m.group(0), m.group(0) + m.group(0).replace('ShareViewController.swift', 'CalendarPlugin.swift'), 1)
+open(p, 'w').write(s)
+PYX
+( python3 tools/check_daybar.py "$P" com.example.selftest ) >/dev/null 2>&1 && bad "check passed with a plugin file in the Share button" || ok "check refuses a Share button that compiles a plugin file"
+cp "$P.keep" "$P"
+cp "$A/App.entitlements" "$A/App.entitlements.keep"
+/usr/libexec/PlistBuddy -c 'Delete :com.apple.security.application-groups' "$A/App.entitlements" >/dev/null
+( bash prepare.sh check ) >/dev/null 2>&1 && bad "check passed with the app out of the App Group" || ok "check refuses an app out of the App Group (the shared text could never reach it)"
+mv "$A/App.entitlements.keep" "$A/App.entitlements"
+cp "$A/../ShareNote/PrivacyInfo.xcprivacy" "$T/share-privacy.keep"
+/usr/libexec/PlistBuddy -c 'Delete :NSPrivacyAccessedAPITypes' "$A/../ShareNote/PrivacyInfo.xcprivacy" >/dev/null
+( bash prepare.sh check ) >/dev/null 2>&1 && bad "check passed with ShareNote's manifest not declaring the group's UserDefaults" || ok "check refuses a ShareNote manifest that does not declare the group's UserDefaults"
+mv "$T/share-privacy.keep" "$A/../ShareNote/PrivacyInfo.xcprivacy"
+rm -f "$P.keep"
+bash prepare.sh check >/dev/null && ok "check passes again once the Share button is put back" || bad "check after restoring the Share button"
 # The stand-in rule (AlarmPlan.standIn), cut out of the plugin by its own text and run (plain Swift, no SDK) with stand-ins
 # for its two structs: a phone that already gets the server's SHOW TIME and BUS CALL (fbStage, fbBus false, as the page
 # hands over for prefs { stage30: true, buscall: true }) gets no second one, except at a day off's bus call (Ari sends no
@@ -570,6 +696,10 @@ F="$HERE/fastlane/Fastfile"
 grep -q '^    push_capability.call(app_id) if pushes$' "$F" && ! grep -q 'push_capability.call(daybar_id)' "$F" \
   && grep -q '^      \[app_id\].each do |identifier|$' "$F" \
   && ok "pushes: the signing step switches Push Notifications on, and remakes the profile, for the app only" || bad "Fastfile pushes"
+# ...and the Share button's signing: its bundle ID, the App Groups capability on both IDs, its profile, its target, its entry in the export.
+grep -q "make_sure_bundle_id_exists.call(api_key, share_id, 'Greenroom Share')" "$F" && grep -q 'groups_capability.call(app_id)' "$F" && grep -q 'groups_capability.call(share_id)' "$F" \
+  && grep -q "targets: \['ShareNote'\]," "$F" && grep -q 'share_id => share_profile' "$F" && grep -q '\[app_id, share_id\].each do |identifier|' "$F" \
+  && ok "the Share button: signing asks for its bundle ID, the App Group on both IDs, its own profile, and says plainly if the group was never registered" || bad "Fastfile Share button"
 
 # the recipe refuses a bad name
 ( APP_ID="not a bundle id" bash prepare.sh names ) >/dev/null 2>&1 && bad "a bad bundle ID was accepted" || ok "a bad bundle ID is refused"

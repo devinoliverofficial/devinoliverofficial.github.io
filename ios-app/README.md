@@ -245,6 +245,36 @@ Devin, Oct 22, all "Yes": (1) **Stage alarm**: 30 minutes before your band's set
 
 **Not testable here** (no phone, no Xcode): the alarm screen itself (how the title, Stop and I'm on the bus look; the button's colours), whether iOS needs Face ID before running the bar's buttons on a locked phone (Apple: buttons in a Live Activity "are inactive ... unless a person authenticates"), that iOS wakes the app for the quiet hand-over (it does not for an app swiped away in the app switcher, and holds such pushes back in Low Power Mode), and the alarm's button on an iPhone that has not been unlocked since it was turned on (Apple: the secondary intent is "only available after first unlock").
 
+## Your own day: the calendar, the Lock Screen bar, the Share button (1.1; built Oct 30, not live)
+
+Devin, Oct 30: everyone but fans, between tours, gets their own day. All of this reaches App Store people only in a new version, 1.1. Nothing here touches 1.0.
+
+| Piece | Where |
+|---|---|
+| The iPhone's calendars, both ways (`status`, `connect`, `read`, `calendars`, `add`, `editor`, `refresh`, `openSettings`, `morning`, listener `changed`). One write, a new event from a tap. Apple's own sheet changes and deletes, so the page cannot. Greenroom keeps no copy, and iOS, iCloud and Google do the syncing. | `native/App/CalendarPlugin.swift`, the words in `prepare.sh` `CAL_WORDS` on both keys |
+| The bar's new calls: `prepare`, `arm`, the swipe watcher (`DayBarGone`), `gone` in `status` | `native/App/DayBarPlugin.swift` |
+| The morning wake (`GreenroomCalendar.morning`, first line of `GreenroomAlarms.remote`) | `native/App/CalendarPlugin.swift`, `AlarmsPlugin.swift` |
+| The page's half, behind `HOME_BAR` in `src/app.js` (off) | `src/app.js`, `src/core.js` `homeBarLine`, `site/backend.js` `dayBarHome` |
+| The server's half, staged, both switches off | `supabase/migrations/0230_daybar_plans.sql`, `supabase/functions/notify` `HOME_BAR`, `HOME_WAKE` |
+| The Share button | `native/ShareNote/` (extension `com.greenroomtour.app.ShareNote`), `native/App/ShareInboxPlugin.swift`, the App Group `group.com.greenroomtour.app` |
+
+The calendar works by itself in 1.1, both ways, with no server change. iOS's question will say Full Access, because Apple has no read level, and that one yes covers reading, adding, changing and deleting. Greenroom adds an event when you tap Add, and Apple's own event sheet, iOS 17 and later, does the changing and deleting. On iOS 15 and 16 that sheet would need a Contacts key we do not have, so those phones can add, and edit in Apple's Calendar. A Google calendar comes through only when the Google account is added to the iPhone, in Settings. The bar and the wake need the order in `MODELXOFFTOUR/design/second-round.md` section 7: notify first, then "apply 0230", then `HOME_BAR` on, then the phone tests. The privacy policy waits on "apply 0196": `site/legal/privacy-next.md` holds the words, and `legal_publish` before 0196 puts the agree pages over every account.
+
+### The Share button
+
+A share extension cannot open its app, so the two share an App Group, where the text waits. The app takes it the next time it runs and opens Paste a list with it. Nothing is added until the person saves, and it is gone after a day.
+
+**The hand step at Apple, once, before a build with this can be signed.** Nothing shown so far can make an App Group or tie one to an ID with the App Store Connect key, so a person does it at developer.apple.com, Certificates, Identifiers & Profiles:
+
+1. Identifiers, the filter at the top right, App Groups, then +. Description `Greenroom`, identifier `group.com.greenroomtour.app`. Continue, Register.
+2. Identifiers, App IDs: if `com.greenroomtour.app.ShareNote` is not there yet, it is made the first time the build runs; or +, App IDs, App, with that ID.
+3. Open `com.greenroomtour.app`, tick App Groups, Configure, tick `group.com.greenroomtour.app`, Continue, Save.
+4. The same on `com.greenroomtour.app.ShareNote`.
+
+The signing step then remakes both profiles once by itself (`fastlane/Fastfile`, `carries_group`). Without the hand step it stops with a line that says so, and **no TestFlight build goes out from `main`**: do the step before this reaches `main`.
+
+**Try on a phone first.** Which kinds of text Notes offers through Send a Copy is unverified, and some reports say extensions do not show for Notes. The extension writes the kinds it was offered to the phone's log (`ShareNote offered:`, names of kinds, never the note). If Greenroom is not in the share sheet from Notes, the rule in `native/ShareNote/Info.plist` falls back to a predicate on `public.plain-text`. Confirm reason `1C8F.1` at build time: Apple's page of reasons did not load when this was written.
+
 ## Known risks and what could not be tested offline
 
 Nothing here has run on a Mac in the cloud yet. This Mac has no Xcode, no Node and no network access to Apple. What was verified: the YAML parses and every `run:` block passes `bash -n`; the shell scripts run (`selftest.sh` runs the real `prepare.sh` against a made-up project, with `plutil -lint` and `sips` checks); the JSON and the privacy manifest are valid; the Ruby Fastfile is syntactically valid; the three test suites pass; the build output diff is exactly the guards. What is **not** proven, in rough order of how likely each is to need a fix:
