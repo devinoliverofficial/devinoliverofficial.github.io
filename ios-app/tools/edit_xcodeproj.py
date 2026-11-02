@@ -32,9 +32,19 @@ It also files the alarms (Devin, Oct 22): AlarmsPlugin.swift (the app's own
 Alarms plugin and the bus call alarm's "I'm on the bus", the app only) and
 BusAnswer.swift (answering Bus Check from the lock screen: BOTH targets, since
 the extension draws the bar's On bus / Off bus buttons that name its intent).
+And CalendarPlugin.swift (the iPhone's calendars) and ShareInboxPlugin.swift (what
+the Share button left for the app), the app only.
 
---app-entitlements PATH gives the app target an entitlements file (for Apple's
-push permission, aps-environment; staged, see prepare.sh DAYBAR_PUSH).
+--add-share BUNDLE_ID adds the Notes Share button: a share extension target
+"ShareNote" (its files in ios/App/ShareNote) with that bundle ID, embedded in the
+same Embed Foundation Extensions phase the day bar made, and built before the app,
+with the app's version and build number, iPhone only, from iOS 15. It compiles no
+plugin file, and signs with its own entitlements (the App Group it shares with the
+app). Give --add-daybar too, which comes first. Running it again changes nothing.
+
+--app-entitlements PATH gives the app target an entitlements file (the App Group it
+shares with ShareNote, and Apple's push permission, aps-environment, when
+prepare.sh DAYBAR_PUSH is 1).
 
 --weak-framework NAME (repeatable) links that Apple framework weakly in the app
 target (OTHER_LDFLAGS -weak_framework NAME): the app runs from iOS 15, and a
@@ -220,6 +230,8 @@ def add_daybar(text, ext_id, marketing_version, build_number):
     f_attrs, f_plugin, f_vc = make('ref attrs'), make('ref plugin'), make('ref vc')
     f_alarms, f_bus = make('ref alarms'), make('ref bus answer')
     b_alarms, b_bus_app, b_bus_ext = make('bf alarms'), make('bf bus answer app'), make('bf bus answer ext')
+    f_calendar, f_inbox = make('ref calendar'), make('ref share inbox')
+    b_calendar, b_inbox = make('bf calendar'), make('bf share inbox')
     f_widgets, f_plist, f_appex = make('ref widgets'), make('ref plist'), make('ref appex')
     b_attrs_app, b_plugin, b_vc = make('bf attrs app'), make('bf plugin'), make('bf vc')
     b_attrs_ext, b_widgets, b_embed = make('bf attrs ext'), make('bf widgets'), make('bf embed')
@@ -286,6 +298,8 @@ def add_daybar(text, ext_id, marketing_version, build_number):
                 bf(b_alarms, 'AlarmsPlugin.swift', f_alarms, 'Sources') +
                 bf(b_bus_app, 'BusAnswer.swift', f_bus, 'Sources') +
                 bf(b_bus_ext, 'BusAnswer.swift', f_bus, 'Sources') +
+                bf(b_calendar, 'CalendarPlugin.swift', f_calendar, 'Sources') +
+                bf(b_inbox, 'ShareInboxPlugin.swift', f_inbox, 'Sources') +
                 bf(b_attrs_ext, 'DayBarAttributes.swift', f_attrs, 'Sources') +
                 bf(b_widgets, 'DayBarWidgets.swift', f_widgets, 'Sources') +
                 bf(b_privacy, 'PrivacyInfo.xcprivacy', f_privacy, 'Resources') +
@@ -297,6 +311,8 @@ def add_daybar(text, ext_id, marketing_version, build_number):
                 fref(f_vc, 'GreenroomViewController.swift', 'sourcecode.swift') +
                 fref(f_alarms, 'AlarmsPlugin.swift', 'sourcecode.swift') +
                 fref(f_bus, 'BusAnswer.swift', 'sourcecode.swift') +
+                fref(f_calendar, 'CalendarPlugin.swift', 'sourcecode.swift') +
+                fref(f_inbox, 'ShareInboxPlugin.swift', 'sourcecode.swift') +
                 fref(f_widgets, 'DayBarWidgets.swift', 'sourcecode.swift') +
                 fref(f_plist, 'Info.plist', 'text.plist.xml') +
                 fref(f_privacy, 'PrivacyInfo.xcprivacy', 'text.xml') +
@@ -347,19 +363,165 @@ def add_daybar(text, ext_id, marketing_version, build_number):
     # The existing objects: the app's own files, its embed phase and its dependency, the groups, the target list.
     for item in ('%s /* DayBarAttributes.swift in Sources */' % b_attrs_app, '%s /* DayBarPlugin.swift in Sources */' % b_plugin,
                  '%s /* GreenroomViewController.swift in Sources */' % b_vc,
-                 '%s /* AlarmsPlugin.swift in Sources */' % b_alarms, '%s /* BusAnswer.swift in Sources */' % b_bus_app):
+                 '%s /* AlarmsPlugin.swift in Sources */' % b_alarms, '%s /* BusAnswer.swift in Sources */' % b_bus_app,
+                 '%s /* CalendarPlugin.swift in Sources */' % b_calendar, '%s /* ShareInboxPlugin.swift in Sources */' % b_inbox):
         text = add_to_list(text, by_id(text, sources.group(1), 'App Sources phase'), 'files', item)
     text = add_to_list(text, by_id(text, app[0], 'App target'), 'buildPhases', '%s /* Embed Foundation Extensions */' % ph_embed)
     text = add_to_list(text, by_id(text, app[0], 'App target'), 'dependencies', '%s /* PBXTargetDependency */' % dep)
     for item in ('%s /* DayBarAttributes.swift */' % f_attrs, '%s /* DayBarPlugin.swift */' % f_plugin,
                  '%s /* GreenroomViewController.swift */' % f_vc,
-                 '%s /* AlarmsPlugin.swift */' % f_alarms, '%s /* BusAnswer.swift */' % f_bus):
+                 '%s /* AlarmsPlugin.swift */' % f_alarms, '%s /* BusAnswer.swift */' % f_bus,
+                 '%s /* CalendarPlugin.swift */' % f_calendar, '%s /* ShareInboxPlugin.swift */' % f_inbox):
         text = add_to_list(text, by_id(text, app_group[0], 'App group'), 'children', item)
     text = add_to_list(text, by_id(text, main_group.group(1), 'main group'), 'children', '%s /* DayBar */' % g_daybar)
     text = add_to_list(text, by_id(text, products.group(1), 'Products group'), 'children', '%s /* DayBar.appex */' % f_appex)
     text = add_to_list(text, by_id(text, root, 'project object'), 'targets', '%s /* DayBar */' % t_ext)
     text = add_objects(text, chunks)
     print('edit_xcodeproj: added the DayBar extension (%s), embedded in the app, version %s (%s)' % (
+        ext_id, marketing_version, build_number))
+    return text
+
+
+def add_share(text, ext_id, marketing_version, build_number):
+    """The Notes Share button: a share extension target, embedded in the phase the day bar made, built before the app."""
+    if 'ShareNote.appex' in text:
+        print('edit_xcodeproj: the ShareNote extension is already in the project')
+        return text
+    if not re.match(r'^[A-Za-z0-9]+(\.[A-Za-z0-9-]+)+$', ext_id):
+        die('"%s" is not a bundle ID' % ext_id)
+    root = re.search(r'\brootObject = ([0-9A-F]{24})', text)
+    if not root:
+        die('no rootObject in the project')
+    root = root.group(1)
+    proj = one_block(text, lambda b: b[0] == root and 'isa = PBXProject;' in b[2], 'project object')
+    main_group = re.search(r'\bmainGroup = ([0-9A-F]{24})', proj[2])
+    products = re.search(r'\bproductRefGroup = ([0-9A-F]{24})', proj[2])
+    if not (main_group and products):
+        die('the project object has no main group or Products group')
+    app = one_block(text, lambda b: 'isa = PBXNativeTarget;' in b[2] and re.search(r'^\t+name = App;$', b[2], re.M),
+                    'App target')
+    embed = one_block(text, lambda b: 'isa = PBXCopyFilesBuildPhase;' in b[2] and 'name = "Embed Foundation Extensions";' in b[2],
+                      'Embed Foundation Extensions phase (--add-daybar comes first)')
+
+    made = []
+
+    def make(seed):
+        i = fresh_id(text + ' '.join(made), 'sharenote:' + seed)
+        made.append(i)
+        return i
+
+    f_view, f_plist, f_privacy, f_ent, f_appex = make('ref view'), make('ref plist'), make('ref privacy'), make('ref ent'), make('ref appex')
+    b_view, b_privacy, b_embed = make('bf view'), make('bf privacy'), make('bf embed')
+    g_share, t_ext = make('group'), make('target')
+    ph_src, ph_fw, ph_res = make('phase src'), make('phase fw'), make('phase res')
+    proxy, dep = make('proxy'), make('dependency')
+    cl, c_debug, c_release = make('config list'), make('config debug'), make('config release')
+
+    T2, T3, T4, T5 = '\t\t', '\t\t\t', '\t\t\t\t', '\t\t\t\t\t'
+
+    def section(isa, body):
+        return '/* Begin %s section */\n%s/* End %s section */\n' % (isa, body, isa)
+
+    def obj(oid, comment, lines):
+        out = T2 + '%s /* %s */ = {\n' % (oid, comment)
+        for ln in lines:
+            if isinstance(ln, tuple):
+                out += T3 + ln[0] + ' = (\n' + ''.join(T4 + it + ',\n' for it in ln[1]) + T3 + ');\n'
+            else:
+                out += T3 + ln + '\n'
+        return out + T2 + '};\n'
+
+    def config(cid, name):
+        settings = [
+            ('APPLICATION_EXTENSION_API_ONLY', 'YES'),
+            ('CODE_SIGN_ENTITLEMENTS', 'ShareNote/ShareNote.entitlements'),
+            ('CODE_SIGN_STYLE', 'Automatic'),
+            ('CURRENT_PROJECT_VERSION', build_number),
+            ('GENERATE_INFOPLIST_FILE', 'NO'),
+            ('INFOPLIST_FILE', 'ShareNote/Info.plist'),
+            ('IPHONEOS_DEPLOYMENT_TARGET', '15.0'),
+            ('LD_RUNPATH_SEARCH_PATHS', ['"$(inherited)"', '"@executable_path/Frameworks"', '"@executable_path/../../Frameworks"']),
+            ('MARKETING_VERSION', marketing_version),
+            ('PRODUCT_BUNDLE_IDENTIFIER', ext_id),
+            ('PRODUCT_NAME', '"$(TARGET_NAME)"'),
+            ('SKIP_INSTALL', 'YES'),
+            ('SWIFT_ACTIVE_COMPILATION_CONDITIONS', 'DEBUG' if name == 'Debug' else '""'),
+            ('SWIFT_VERSION', '5.0'),
+            ('TARGETED_DEVICE_FAMILY', '1'),
+        ]
+        out = T2 + '%s /* %s */ = {\n' % (cid, name) + T3 + 'isa = XCBuildConfiguration;\n' + T3 + 'buildSettings = {\n'
+        for k, v in settings:
+            if isinstance(v, list):
+                out += T4 + k + ' = (\n' + ''.join(T5 + x + ',\n' for x in v) + T4 + ');\n'
+            else:
+                out += T4 + '%s = %s;\n' % (k, v)
+        return out + T3 + '};\n' + T3 + 'name = %s;\n' % name + T2 + '};\n'
+
+    def bf(oid, name, ref, phase, extra=''):
+        return T2 + '%s /* %s in %s */ = {isa = PBXBuildFile; fileRef = %s /* %s */; %s};\n' % (oid, name, phase, ref, name, extra)
+
+    def fref(oid, name, kind):
+        return T2 + '%s /* %s */ = {isa = PBXFileReference; lastKnownFileType = %s; path = %s; sourceTree = "<group>"; };\n' % (
+            oid, name, kind, name)
+
+    chunks = [
+        section('PBXBuildFile',
+                bf(b_view, 'ShareViewController.swift', f_view, 'Sources') +
+                bf(b_privacy, 'PrivacyInfo.xcprivacy', f_privacy, 'Resources') +
+                bf(b_embed, 'ShareNote.appex', f_appex, 'Embed Foundation Extensions',
+                   'settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; ')),
+        section('PBXFileReference',
+                fref(f_view, 'ShareViewController.swift', 'sourcecode.swift') +
+                fref(f_plist, 'Info.plist', 'text.plist.xml') +
+                fref(f_privacy, 'PrivacyInfo.xcprivacy', 'text.xml') +
+                fref(f_ent, 'ShareNote.entitlements', 'text.plist.entitlements') +
+                T2 + '%s /* ShareNote.appex */ = {isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; '
+                     'includeInIndex = 0; path = ShareNote.appex; sourceTree = BUILT_PRODUCTS_DIR; };\n' % f_appex),
+        section('PBXGroup', obj(g_share, 'ShareNote', [
+            'isa = PBXGroup;',
+            ('children', ['%s /* ShareViewController.swift */' % f_view, '%s /* Info.plist */' % f_plist,
+                          '%s /* PrivacyInfo.xcprivacy */' % f_privacy, '%s /* ShareNote.entitlements */' % f_ent]),
+            'path = ShareNote;', 'sourceTree = "<group>";'])),
+        section('PBXNativeTarget', obj(t_ext, 'ShareNote', [
+            'isa = PBXNativeTarget;',
+            'buildConfigurationList = %s /* Build configuration list for PBXNativeTarget "ShareNote" */;' % cl,
+            ('buildPhases', ['%s /* Sources */' % ph_src, '%s /* Frameworks */' % ph_fw, '%s /* Resources */' % ph_res]),
+            ('buildRules', []), ('dependencies', []),
+            'name = ShareNote;', 'productName = ShareNote;',
+            'productReference = %s /* ShareNote.appex */;' % f_appex,
+            'productType = "com.apple.product-type.app-extension";'])),
+        section('PBXSourcesBuildPhase', obj(ph_src, 'Sources', [
+            'isa = PBXSourcesBuildPhase;', 'buildActionMask = 2147483647;',
+            ('files', ['%s /* ShareViewController.swift in Sources */' % b_view]),
+            'runOnlyForDeploymentPostprocessing = 0;'])),
+        section('PBXFrameworksBuildPhase', obj(ph_fw, 'Frameworks', [
+            'isa = PBXFrameworksBuildPhase;', 'buildActionMask = 2147483647;', ('files', []),
+            'runOnlyForDeploymentPostprocessing = 0;'])),
+        section('PBXResourcesBuildPhase', obj(ph_res, 'Resources', [
+            'isa = PBXResourcesBuildPhase;', 'buildActionMask = 2147483647;',
+            ('files', ['%s /* PrivacyInfo.xcprivacy in Resources */' % b_privacy]),
+            'runOnlyForDeploymentPostprocessing = 0;'])),
+        section('PBXContainerItemProxy', obj(proxy, 'PBXContainerItemProxy', [
+            'isa = PBXContainerItemProxy;', 'containerPortal = %s /* Project object */;' % root, 'proxyType = 1;',
+            'remoteGlobalIDString = %s;' % t_ext, 'remoteInfo = ShareNote;'])),
+        section('PBXTargetDependency', obj(dep, 'PBXTargetDependency', [
+            'isa = PBXTargetDependency;', 'target = %s /* ShareNote */;' % t_ext,
+            'targetProxy = %s /* PBXContainerItemProxy */;' % proxy])),
+        section('XCBuildConfiguration', config(c_debug, 'Debug') + config(c_release, 'Release')),
+        section('XCConfigurationList', obj(cl, 'Build configuration list for PBXNativeTarget "ShareNote"', [
+            'isa = XCConfigurationList;',
+            ('buildConfigurations', ['%s /* Debug */' % c_debug, '%s /* Release */' % c_release]),
+            'defaultConfigurationIsVisible = 0;', 'defaultConfigurationName = Release;'])),
+    ]
+
+    text = add_to_list(text, by_id(text, embed[0], 'Embed Foundation Extensions phase'), 'files',
+                       '%s /* ShareNote.appex in Embed Foundation Extensions */' % b_embed)
+    text = add_to_list(text, by_id(text, app[0], 'App target'), 'dependencies', '%s /* PBXTargetDependency */' % dep)
+    text = add_to_list(text, by_id(text, main_group.group(1), 'main group'), 'children', '%s /* ShareNote */' % g_share)
+    text = add_to_list(text, by_id(text, products.group(1), 'Products group'), 'children', '%s /* ShareNote.appex */' % f_appex)
+    text = add_to_list(text, by_id(text, root, 'project object'), 'targets', '%s /* ShareNote */' % t_ext)
+    text = add_objects(text, chunks)
+    print('edit_xcodeproj: added the ShareNote extension (%s), embedded in the app, version %s (%s)' % (
         ext_id, marketing_version, build_number))
     return text
 
@@ -420,6 +582,7 @@ def main():
     ap.add_argument('--iphone-only', action='store_true')
     ap.add_argument('--add-resource', action='append', default=[])
     ap.add_argument('--add-daybar', metavar='BUNDLE_ID')
+    ap.add_argument('--add-share', metavar='BUNDLE_ID')
     ap.add_argument('--app-entitlements', metavar='PATH')
     ap.add_argument('--weak-framework', action='append', default=[], metavar='NAME')
     args = ap.parse_args()
@@ -442,6 +605,10 @@ def main():
         if not (args.marketing_version and args.build_number):
             die('--add-daybar needs --marketing-version and --build-number (the extension must match the app)')
         text = add_daybar(text, args.add_daybar, args.marketing_version, args.build_number)
+    if args.add_share:
+        if not (args.marketing_version and args.build_number):
+            die('--add-share needs --marketing-version and --build-number (the extension must match the app)')
+        text = add_share(text, args.add_share, args.marketing_version, args.build_number)
     if args.app_entitlements:
         text = app_entitlements(text, args.app_entitlements)
     if args.weak_framework:

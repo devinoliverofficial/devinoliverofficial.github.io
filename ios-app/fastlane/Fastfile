@@ -38,6 +38,10 @@ platform :ios do
     app_id     = need.call('APP_ID')
     # The lock-screen day bar is a widget extension inside the app, with its own bundle ID and its own profile.
     daybar_id  = ENV['DAYBAR_ID'].to_s.strip.empty? ? "#{app_id}.DayBar" : ENV['DAYBAR_ID'].strip
+    # The Notes Share button is a share extension inside the app, with its own bundle ID and its own profile. The two share an App
+    # Group, where the shared text waits for the app (prepare.sh APP_GROUP).
+    share_id   = ENV['SHARE_ID'].to_s.strip.empty? ? "#{app_id}.ShareNote" : ENV['SHARE_ID'].strip
+    app_group  = "group.#{app_id}"
     team_id    = need.call('APPLE_TEAM_ID')
     # First run only: let match make the certificate and the profile. After that it only reads them.
     make_certs = ENV['CREATE_SIGNING'].to_s == 'true'
@@ -63,6 +67,7 @@ platform :ios do
 
     make_sure_bundle_id_exists.call(api_key, app_id, 'Greenroom')
     make_sure_bundle_id_exists.call(api_key, daybar_id, 'Greenroom Day Bar')
+    make_sure_bundle_id_exists.call(api_key, share_id, 'Greenroom Share')
 
     # (pushes only) Push Notifications switched on for the app's bundle ID through the App Store Connect API, if it is
     # not already. Unlike the bundle ID check above this is not best effort: a build that asks for push permission
@@ -79,6 +84,24 @@ platform :ios do
       end
     end
     push_capability.call(app_id) if pushes
+
+    # The App Group's capability on the app's and the Share button's bundle IDs. Best effort: the group itself cannot be made, or tied
+    # to an ID, through this key that anyone has shown, so that is a hand step at developer.apple.com (ios-app/README.md, "The Share
+    # button"). If it was not done, the check on the profiles below says so plainly.
+    groups_capability = lambda do |bundle_id|
+      begin
+        type = Spaceship::ConnectAPI::BundleIdCapability::Type::APP_GROUPS
+        bid = Spaceship::ConnectAPI::BundleId.find(bundle_id)
+        if bid && bid.get_capabilities.none? { |c| c.capability_type == type }
+          bid.create_capability(type)
+          UI.success("Switched App Groups on for #{bundle_id}.")
+        end
+      rescue StandardError => e
+        UI.important("Could not check or switch on App Groups for #{bundle_id} (#{e.class}). If signing says it is missing, it is the hand step in ios-app/README.md, The Share button.")
+      end
+    end
+    groups_capability.call(app_id)
+    groups_capability.call(share_id)
 
     # The certificate and profile live, encrypted with MATCH_PASSWORD, in a PRIVATE git repo that only this
     # workflow's deploy key can open (the key is written to a temporary file on the build machine).
@@ -106,6 +129,14 @@ platform :ios do
       UI.important("No signing profile for #{daybar_id} yet: making it now, with the existing certificate.")
       match_with.call(daybar_id, false)
     end
+    # The Share button's profile, the same way.
+    begin
+      match_with.call(share_id, !make_certs)
+    rescue StandardError => e
+      raise unless !make_certs && e.message.to_s =~ /provisioning profile/i
+      UI.important("No signing profile for #{share_id} yet: making it now, with the existing certificate.")
+      match_with.call(share_id, false)
+    end
     # (pushes only) The app's profile made before Push Notifications was switched on does not carry it: made again
     # once, with the same certificate, and kept in the private repo for the runs after.
     if pushes
@@ -122,17 +153,33 @@ platform :ios do
       end
     end
 
+    # A profile made before the App Group was tied to its bundle ID does not carry it: made again once, and kept for the runs after.
+    # Still without it, the build could not be signed: the group has not been registered at Apple yet, and only a person can do that.
+    carries_group = lambda do |identifier|
+      path = ENV["sigh_#{identifier}_appstore_profile-path"].to_s
+      !path.empty? && File.exist?(path) &&
+        `security cms -D -i #{Shellwords.escape(path)} 2>/dev/null`.include?(app_group)
+    end
+    [app_id, share_id].each do |identifier|
+      next if carries_group.call(identifier)
+      UI.important("The signing profile for #{identifier} has no App Group yet: making it again.")
+      match_with.call(identifier, false, true)
+      UI.user_error!("The App Group #{app_group} is not on #{identifier} at Apple yet. It is a hand step: ios-app/README.md, The Share button.") unless carries_group.call(identifier)
+    end
+
     mapping = lane_context[SharedValues::MATCH_PROVISIONING_PROFILE_MAPPING] || {}
     profile_of = lambda do |identifier|
       mapping[identifier].to_s.empty? ? ENV["sigh_#{identifier}_appstore_profile-name"].to_s : mapping[identifier].to_s
     end
     profile = profile_of.call(app_id)
     daybar_profile = profile_of.call(daybar_id)
+    share_profile = profile_of.call(share_id)
     UI.user_error!("match did not hand back a profile for #{app_id}") if profile.empty?
     UI.user_error!("match did not hand back a profile for #{daybar_id}") if daybar_profile.empty?
+    UI.user_error!("match did not hand back a profile for #{share_id}") if share_profile.empty?
 
-    # Sign the app target, and the day bar extension inside it, by hand with those profiles (the Capacitor project
-    # signs automatically otherwise).
+    # Sign the app target, and the two extensions inside it, by hand with those profiles (the Capacitor project signs
+    # automatically otherwise).
     update_code_signing_settings(
       use_automatic_signing: false,
       path: 'ios/App/App.xcodeproj',
@@ -153,6 +200,16 @@ platform :ios do
       profile_name: daybar_profile,
       bundle_identifier: daybar_id
     )
+    update_code_signing_settings(
+      use_automatic_signing: false,
+      path: 'ios/App/App.xcodeproj',
+      team_id: team_id,
+      targets: ['ShareNote'],
+      build_configurations: ['Release'],
+      code_sign_identity: 'Apple Distribution',
+      profile_name: share_profile,
+      bundle_identifier: share_id
+    )
 
     # The version and build number are already in the project (prepare.sh set them).
     build_app(
@@ -162,7 +219,7 @@ platform :ios do
       export_method: 'app-store',
       export_team_id: team_id,
       export_options: {
-        provisioningProfiles: { app_id => profile, daybar_id => daybar_profile },
+        provisioningProfiles: { app_id => profile, daybar_id => daybar_profile, share_id => share_profile },
         signingStyle: 'manual',
         manageAppVersionAndBuildNumber: false,
         uploadSymbols: true

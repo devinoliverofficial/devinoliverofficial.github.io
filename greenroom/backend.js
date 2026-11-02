@@ -29,6 +29,9 @@
   var todoCache = {}, todoAsk = {}, todoGen = {}, todoKnown = null, todoProbing = false;
   var todoRoles = null;
   var teamFn = null;
+  var teamSeatsKnown = null, teamSeatRows = [], teamSeatUser = '', teamOn = false;
+  var listKnown = null, listProbing = false, listRows = null, listAt = 0, listAskP = null, listGen = 0, listStaleOn = true,
+    listTasks = {}, listFailed = {}, listFaceCache = {};
   var myTodoCache = null, myTodoAsk = null, myTodoGen = 0;
   var TODO_COLS = 'id, artist_id, cat, body, assigned_to, due, done_at, created_by, created_at';
   var mySpotCache = null, mySpotAsk = null, mySpotGen = 0;
@@ -42,13 +45,17 @@
   var reviewKnown = null, reviewProbing = false;
   var sizeKnown = null, sizeProbing = false, sizeAt = 0;
   var flyerCache = {}, flyerAsk = {}, flyerGen = {}, flyerKnown = null, flyerProbing = false;
+  var pnlKnown = null, pnlProbing = false, pnlList = [], pnlCache = {}, pnlAsk = {}, pnlGen = {};
+  var bookCache = {}, bookAsk = {}, bookGen = 0, finishKnown = null, finishProbing = false;
+  var foldsAsked = false, foldsList = [];
+  var PNL_FRESH = 5 * 60 * 1000;
   var FLYER_FRESH = 300e3;
   var ownFlyers = { ids: null, at: 0, asking: false };
   var supplyCache = {}, supplyAsk = {}, supplyGen = {}, supplyKnown = null, supplyProbing = false;
   var favCache = {}, favAsk = {}, favGen = {}, favKnown = null, favProbing = false;
   var modKnown = null, modProbing = false, modBlocks = [], modEnded = false, modUser = '';
   var topFanCache = {}, topFanAsk = {}, topFanGen = {};
-  var cityEvKnown = null, cityEvProbing = false;
+  var cityEvKnown = null, cityEvProbing = false, cityDayKnown = null;
   var vhCache = {}, vhAsk = {}, vhKnown = null, vhProbing = false;
   var srKnown = null, srProbing = false;
   var ssKnown = null;
@@ -145,9 +152,26 @@
     var asks = await sb.from('ari_asks').select('*').order('created_at');
     if (!asks.error) cache.asks = asks.data;
     await loadReimbursements();
-    if (!ga.error) toursWhole = true;
+    await loadTeamSeats();
+    if (!ga.error && teamSeatsKnown !== null) toursWhole = true;
     emit('tours'); emit('labels');
     legalFlush();
+  }
+  async function loadTeamSeats() {
+    if (!session || teamSeatsKnown === false) return;
+    if (teamSeatUser && teamSeatUser !== session.user.id) teamSeatRows = [];
+    teamSeatUser = session.user.id;
+    try {
+      var q = await sb.rpc('my_team_seats');
+      if (q.error) { if (fnMissing(q.error)) { teamSeatsKnown = false; teamSeatRows = []; } return; }
+      teamSeatsKnown = true;
+      teamSeatRows = (Array.isArray(q.data) ? q.data : []).filter(function (s) { return isObj(s) && s.tourId; })
+        .map(function (s) { return { tourId: String(s.tourId), artistId: s.artistId || null, role: s.role === 'editor' ? 'editor' : 'viewer' }; });
+    } catch (e) {   }
+  }
+  function teamSeatOf(tourId) {
+    for (var i = 0; i < teamSeatRows.length; i++) if (teamSeatRows[i].tourId === tourId) return teamSeatRows[i];
+    return null;
   }
   var reimbReadOnce = false;
   async function loadReimbursements() {
@@ -325,6 +349,7 @@
     if (/access_ended/.test(msg)) return err('ended');
     if (/cant_send/.test(msg)) return err('cant-send');
     if (/^filtered$/.test(msg)) return err('filtered');
+    if (/tour_finished/.test(msg)) return err('tour-finished');
     if (e && e.code === '23505' && /show_ratings/.test(msg)) return err('already-rated');
     if (/my_pay_books_doc_small/.test(msg)) return err('full');
     if (/permission|policy|denied|42501/i.test(msg)) return err('permission');
@@ -349,7 +374,7 @@
     try { q = await sb.rpc(fn, args); } catch (e) { q = null; }
     if (!q || q.error || !isObj(q.data)) {
       loadReimbursements().then(function (read) { if (read) emit('tours'); else scheduleRefetch(); });
-      return { ok: false, why: 'unavailable' };
+      return { ok: false, why: q && q.error && /tour_finished/.test(String(q.error.message || '')) ? 'finished' : 'unavailable' };
     }
     if (await loadReimbursements()) emit('tours'); else scheduleRefetch();
     if (q.data.ok === true) return { ok: true };
@@ -1772,6 +1797,7 @@
       await modProbe(true);
       scheduleRefetch();
       dmChanged();
+      listStale(true);
       return true;
     },
     unblockUser: async function (uid) {
@@ -1781,12 +1807,17 @@
       await modProbe(true);
       scheduleRefetch();
       dmChanged();
+      listStale(true);
       return true;
     },
     reportContent: async function (kind, ref, reason, words) {
       if (!sb || !session) throw err('unavailable');
-      var q = await sb.rpc('report_content', { k: String(kind || ''), r: String(ref == null ? '' : ref),
-        why: String(reason || ''), said: String(words || '').trim().slice(0, 500) });
+      var cut = String(ref == null ? '' : ref), at = cut.indexOf(':');
+      var head = at < 0 ? cut : cut.slice(0, at), tail = at < 0 ? '' : cut.slice(at + 1);
+      var said = String(words || '').trim().slice(0, 500);
+      var q = kind === 'list' ? await sb.rpc('list_report', { p_list: head, p_task: tail || null, p_why: String(reason || ''), p_said: said })
+        : kind === 'listperson' ? await sb.rpc('list_report_person', { p_list: head, p_user: tail, p_why: String(reason || ''), p_said: said })
+        : await sb.rpc('report_content', { k: String(kind || ''), r: String(ref == null ? '' : ref), why: String(reason || ''), said: said });
       if (q.error) throw fnMissing(q.error) ? err('unavailable') : mapError(q.error);
       return isObj(q.data) ? q.data : { ok: false, why: 'unavailable' };
     },
@@ -1918,7 +1949,9 @@
       var q = await sb.from('members').select('role')
         .eq('tour_id', tourId).eq('user_id', session ? session.user.id : '').maybeSingle();
       if (q.error) throw mapError(q.error);
-      return (q.data && q.data.role) || 'viewer';
+      if (q.data && q.data.role) return q.data.role;
+      var seat = teamSeatOf(tourId);
+      return seat ? seat.role : 'viewer';
     },
     ownsTour: function (tourId) {
       var doc = cache.tours.get(tourId);
@@ -2257,6 +2290,16 @@
       }
       return isObj(q.data) ? q.data : null;
     },
+    cityEventsDay: async function (tourId, day) {
+      if (!session) throw err('unavailable');
+      if (cityDayKnown === false) return { off: true };
+      var q = await sb.rpc('city_events_day', { t_id: tourId, on_day: day });
+      if (q.error) {
+        if (fnMissing(q.error)) { cityDayKnown = false; return { off: true }; }
+        throw mapError(q.error);
+      }
+      return isObj(q.data) ? q.data : null;
+    },
     venueHistoryOn: function () {
       if (vhKnown === null) vhProbe();
       return vhKnown === true;
@@ -2294,6 +2337,100 @@
     flyersOn: function () {
       if (flyerKnown === null) flyerProbe();
       return flyerKnown === true;
+    },
+    pnlOn: function () {
+      if (pnlKnown === null) pnlProbe();
+      return pnlKnown === true;
+    },
+    pnlArtists: function () { return pnlKnown === true ? pnlList.slice() : []; },
+    pnlMay: function (artistId) {
+      return pnlKnown === true && !!artistId && pnlList.some(function (a) { return a.id === artistId && a.write === true; });
+    },
+    pnlRuns: function (artistId) {
+      return pnlKnown === true && !!artistId && pnlList.some(function (a) { return a.id === artistId && a.runs === true; });
+    },
+    pnlSees: function (artistId) {
+      return pnlKnown === true && !!artistId && pnlList.some(function (a) { return a.id === artistId; });
+    },
+    placeFolds: function () {
+      if (!foldsAsked && session) { foldsAsked = true; loadFolds(); }
+      return foldsList;
+    },
+    pnlArtistOf: function (doc) {
+      if (pnlKnown !== true || !isObj(doc)) return null;
+      var byId = String(doc.artistId || '').trim();
+      if (byId) return pnlList.some(function (a) { return a.id === byId; }) ? byId : null;
+      var key = String(doc.artist || '').trim().toLowerCase();
+      var hits = key ? pnlList.filter(function (a) { return String(a.name || '').trim().toLowerCase() === key; }) : [];
+      return hits.length === 1 ? hits[0].id : null;
+    },
+    pnlRows: function (artistId, fresh) {
+      if (pnlKnown !== true || !artistId) return { rows: null, failed: false };
+      var c = pnlCache[artistId];
+      if (!c || c.stale || fresh || Date.now() - c.at > PNL_FRESH) loadPnl(artistId);
+      return c ? { rows: c.rows, failed: !!c.failed } : { rows: null, failed: false };
+    },
+    bookRows: function (artistId, fresh) {
+      if (pnlKnown !== true || !artistId) return { rows: null, failed: false, gone: false };
+      var c = bookCache[artistId];
+      if (!c || c.stale || fresh || Date.now() - c.at > PNL_FRESH) loadBook(artistId);
+      c = bookCache[artistId];
+      return c ? { rows: c.rows, failed: !!c.failed, gone: !!c.gone } : { rows: null, failed: false, gone: false };
+    },
+    finishOn: function () {
+      if (finishKnown === null) finishProbe();
+      return finishKnown === true;
+    },
+    finishTour: function (id) {
+      return finishCall('finish_tour', id);
+    },
+    reopenTour: function (id) {
+      return finishCall('reopen_tour', id);
+    },
+    pnlFinish: async function (artistId, key, was) {
+      if (!session) throw err('session');
+      var q = await sb.rpc('pnl_finish', { a_id: artistId, key: key, was: was || null });
+      if (q.error) {
+        if (fnMissing(q.error)) { pnlKnown = false; emit('tours'); throw err('unavailable'); }
+        throw mapError(q.error);
+      }
+      var a = isObj(q.data) ? q.data : {};
+      if (a.ok || a.why === 'changed' || a.why === 'already') pnlTouched(artistId);
+      return a.ok ? { ok: true, at: a.at, finish: a.finish } : { ok: false, why: String(a.why || '') };
+    },
+    pnlReopen: async function (artistId, key) {
+      if (!session) throw err('session');
+      var q = await sb.rpc('pnl_reopen', { a_id: artistId, key: key });
+      if (q.error) {
+        if (fnMissing(q.error)) { pnlKnown = false; emit('tours'); throw err('unavailable'); }
+        throw mapError(q.error);
+      }
+      var a = isObj(q.data) ? q.data : {};
+      if (a.ok) pnlTouched(artistId);
+      return a.ok ? { ok: true, at: a.at, finish: a.finish } : { ok: false, why: String(a.why || '') };
+    },
+    pnlSave: async function (artistId, key, name, first, last, doc, was) {
+      if (!session) throw err('unavailable');
+      var q = await sb.rpc('pnl_save', { a_id: artistId, key: key, nm: name, d1: first || null, d2: last || null, d: doc, was: was || null });
+      if (q.error) {
+        if (fnMissing(q.error)) { pnlKnown = false; emit('tours'); throw err('unavailable'); }
+        throw mapError(q.error);
+      }
+      var a = q.data || {};
+      if (a.ok) { pnlTouched(artistId); return { ok: true, at: a.at }; }
+      if (a.why === 'changed') pnlTouched(artistId);
+      return { ok: false, why: String(a.why || 'unavailable') };
+    },
+    pnlDrop: async function (artistId, key, was) {
+      if (!session) throw err('unavailable');
+      var q = await sb.rpc('pnl_drop', { a_id: artistId, key: key, was: was || null });
+      if (q.error) {
+        if (fnMissing(q.error)) { pnlKnown = false; emit('tours'); throw err('unavailable'); }
+        throw mapError(q.error);
+      }
+      var a = q.data || {};
+      if (a.ok || a.why === 'changed') pnlTouched(artistId);
+      return a.ok ? { ok: true } : { ok: false, why: String(a.why || 'unavailable') };
     },
     tourFlyers: function (artistId, fresh) {
       if (flyerKnown !== true) return null;
@@ -2488,6 +2625,7 @@
       if (todoKnown === null) todoProbe();
       return todoKnown === true;
     },
+    todosSettled: function () { return todoKnown !== null; },
     todoList: function (artistId, fresh) {
       if (todoKnown !== true) return null;
       var c = todoCache[artistId];
@@ -2558,8 +2696,12 @@
     },
     todoUninvite: async function (artistId, userId) {
       if (!session) throw err('unavailable');
-      var q = await sb.from('todo_invites').delete().eq('artist_id', artistId).eq('user_id', userId);
+      var q = await sb.from('todo_invites').delete().eq('artist_id', artistId).eq('user_id', userId).select('user_id');
       if (q.error) throw todoError(q.error);
+      if (!(q.data || []).length && teamSeatsKnown === true) {
+        var leaving = await sb.rpc('team_i_am_leaving', { a_id: artistId });
+        if (!leaving.error && leaving.data === true) throw err('leaving');
+      }
       var c = todoCache[artistId];
       if (c && c.data && c.data.invites) c.data.invites = c.data.invites.filter(function (v) { return v.userId !== userId; });
       todoStale(); emit('tours');
@@ -2576,9 +2718,12 @@
         var t = await sb.rpc('my_team_artists');
         if (!t.error) {
           teamFn = true;
-          return (Array.isArray(t.data) ? t.data : []).filter(function (a) { return isObj(a) && a.id; }).map(function (a) {
-            return { id: a.id, name: String(a.name || ''), handle: String(a.handle || ''), avatar: String(a.avatar || '') };
+          var list = (Array.isArray(t.data) ? t.data : []).filter(function (a) { return isObj(a) && a.id; }).map(function (a) {
+            return { id: a.id, name: String(a.name || ''), handle: String(a.handle || ''), avatar: String(a.avatar || ''),
+              title: String(a.title || ''), level: String(a.level || 'todo'), yes: String(a.yes || 'todo') };
           });
+          teamOn = list.some(function (a) { return a.yes !== 'todo'; });
+          return list;
         }
         if (!fnMissing(t.error)) throw mapError(t.error);
         teamFn = false;
@@ -2599,6 +2744,163 @@
         var a = page[r.artist_id];
         return { id: a.id, name: String(a.name || ''), handle: String(a.handle || ''), avatar: String(a.avatar || '') };
       });
+    },
+    teamLevelsOn: function () { return teamSeatsKnown === true; },
+    onTeam: function () { return teamOn; },
+    teamSeats: function () { return teamSeatRows.slice(); },
+    teamSeat: function (tourId) { return teamSeatOf(tourId); },
+    teamSet: async function (artistId, userId, title, level, name) {
+      if (!session) throw err('unavailable');
+      var q = await sb.rpc('team_set', { a_id: artistId, u_id: userId, p_title: title == null ? null : String(title).trim().slice(0, 40), p_level: level || null });
+      if (q.error) throw mapError(q.error);
+      var out = isObj(q.data) ? q.data : { ok: true }, c = todoCache[artistId];
+      if (out.ok !== false && c && c.data && c.data.can) {
+        var had = c.data.invites.filter(function (v) { return v.userId === userId; })[0];
+        if (had) { if (title != null) had.role = String(title).trim().slice(0, 40); }
+        else c.data.invites.push({ userId: userId, name: String(name || ''), role: String(title || '').trim().slice(0, 40), invitedBy: session.user.id, at: new Date().toISOString() });
+      }
+      todoStale(); emit('tours');
+      return out;
+    },
+    teamPeople: async function (artistId) {
+      if (teamSeatsKnown !== true) return null;
+      var q = await sb.rpc('team_people', { a_id: artistId });
+      if (q.error) throw mapError(q.error);
+      return Array.isArray(q.data) ? q.data : null;
+    },
+    teamPlan: async function (artistId, userId, level) {
+      var q = await sb.rpc('team_plan', { a_id: artistId, u_id: userId, lv: level || null });
+      if (q.error) throw mapError(q.error);
+      return isObj(q.data) ? q.data : null;
+    },
+    teamAsks: async function () {
+      if (!session || teamSeatsKnown !== true) return [];
+      var q = await sb.rpc('my_team_asks');
+      if (q.error) { if (fnMissing(q.error)) return []; throw mapError(q.error); }
+      return Array.isArray(q.data) ? q.data : [];
+    },
+    answerTeamAsk: async function (artistId, accept, level) {
+      var q = await sb.rpc('answer_team_ask', { a_id: artistId, accept: !!accept, p_level: level || null });
+      if (q.error) throw mapError(q.error);
+      todoStale(); scheduleRefetch();
+      return isObj(q.data) ? q.data : { ok: false, why: 'gone' };
+    },
+    teamLeave: async function (artistId) {
+      var q = await sb.rpc('team_leave', { a_id: artistId });
+      if (q.error) throw mapError(q.error);
+      todoStale(); scheduleRefetch();
+      return isObj(q.data) ? q.data : { ok: false, why: 'not_on' };
+    },
+    teamGivenSeen: async function (artistId, userId) {
+      var q = await sb.rpc('team_given_seen', { a_id: artistId, u_id: userId });
+      if (q.error) throw mapError(q.error);
+      return true;
+    },
+    tourTeam: async function (tourId) {
+      if (teamSeatsKnown !== true) return null;
+      var q = await sb.rpc('tour_team', { t_id: tourId });
+      if (q.error) throw mapError(q.error);
+      return Array.isArray(q.data) ? q.data : null;
+    },
+    teamSeatOff: async function (tourId, userId) {
+      var q = await sb.rpc('team_seat_off', { t_id: tourId, u_id: userId });
+      if (q.error) throw mapError(q.error);
+      return isObj(q.data) ? q.data : { ok: false };
+    },
+    teamRoadAsk: async function (tourId, userId) {
+      var q = await sb.rpc('team_road_ask', { t_id: tourId, u_id: userId });
+      if (q.error) throw mapError(q.error);
+      return isObj(q.data) ? q.data : { ok: false };
+    },
+    teamRoadYes: async function (tourId, accept) {
+      var q = await sb.rpc('team_road_yes', { t_id: tourId, accept: !!accept });
+      if (q.error) throw mapError(q.error);
+      scheduleRefetch();
+      return isObj(q.data) ? q.data : { ok: false, why: 'gone' };
+    },
+    listsOn: function () {
+      if (listKnown === null) listProbe();
+      return listKnown === true;
+    },
+    listsIn: function () {
+      if (listKnown === false) return true;
+      if (listKnown === null) { listProbe(); return false; }
+      if (!listRows) { loadLists(); return false; }
+      return !listRows.some(function (l) { return !listTasks[l.id]; });
+    },
+    myLists: function (fresh) {
+      if (listKnown !== true) return null;
+      if (fresh || listStaleOn || Date.now() - listAt > FLOWERS_FRESH) loadLists();
+      return listRows ? listRows.map(listWhole) : null;
+    },
+    listState: function (id) {
+      if (listTasks[id]) return listFailed[id] ? 'failed' : 'ok';
+      return listFailed[id] ? 'failed' : 'loading';
+    },
+    listsUnread: function () {
+      if (listKnown !== true) return false;
+      return !listRows || listRows.some(function (l) { return !listTasks[l.id] || listFailed[l.id]; });
+    },
+    listStale: function (all) { listStale(all); },
+    listFaces: async function (id) {
+      if (listFaceCache[id]) return listFaceCache[id];
+      var q = await sb.rpc('list_faces', { p_list: id });
+      if (q.error) throw mapError(q.error);
+      if (isObj(q.data)) listFaceCache[id] = q.data;
+      return isObj(q.data) ? q.data : {};
+    },
+    mySharedInvites: async function () {
+      if (!session || listKnown === false) return [];
+      var q = await sb.rpc('my_shared_invites');
+      if (q.error) { if (fnMissing(q.error)) return []; throw mapError(q.error); }
+      return Array.isArray(q.data) ? q.data : [];
+    },
+    listInvite: function (list, userId) { return listCall('list_invite', { p_list: list, p_user: userId }); },
+    listUninvite: function (list, userId, words) { return listCall('list_uninvite', { p_list: list, p_user: userId, p_words: !!words }); },
+    listJoin: function (list) { return listCall('list_join', { p_list: list }); },
+    listNoThanks: function (list) { return listCall('list_no_thanks', { p_list: list }); },
+    listLeave: function (list) { return listCall('list_leave', { p_list: list }); },
+    listRename: function (list, name) { return listCall('list_rename', { p_list: list, p_name: name }); },
+    listDelete: function (list) { return listCall('list_delete', { p_list: list }); },
+    listAdd: function (list, rows) {
+      var at = Date.now(), me = session ? session.user.id : null, added = (Array.isArray(rows) ? rows : []).map(function (r, i) {
+        return Object.assign({ date: '', time: '', mins: 0, repeat: '', subs: [], assignedTo: null, doneAt: null, doneBy: null, doneDays: [],
+          createdBy: me, editedBy: [], removed: false, createdAt: at + i }, r);
+      });
+      return listWrite(list, function (held) { return held.concat(added); }, 'list_tasks_add', { p_list: list, p_rows: rows });
+    },
+    listPatch: function (list, id, patch) {
+      return listWrite(list, function (held) {
+        return held.map(function (t) { return t.id === id ? listPatched(t, patch) : t; });
+      }, 'list_task_patch', { p_list: list, p_task: id, p: patch });
+    },
+    listTick: function (list, id, day, done) {
+      var me = session ? session.user.id : null;
+      return listWrite(list, function (held) {
+        return held.map(function (t) {
+          if (t.id !== id) return t;
+          if (t.repeat) return Object.assign({}, t, { doneDays: done ? t.doneDays.filter(function (d) { return d !== day; }).concat([day]) : t.doneDays.filter(function (d) { return d !== day; }) });
+          return Object.assign({}, t, { doneAt: done ? (t.doneAt || new Date().toISOString()) : null, doneBy: done ? (t.doneBy || me) : null });
+        });
+      }, 'list_task_tick', { p_list: list, p_task: id, p_day: day || '', p_done: !!done });
+    },
+    listSubTick: function (list, id, sub, done) {
+      return listWrite(list, function (held) {
+        return held.map(function (t) {
+          return t.id !== id ? t : Object.assign({}, t, { subs: t.subs.map(function (s) { return s.id === sub ? Object.assign({}, s, { done: !!done }) : s; }) });
+        });
+      }, 'list_sub_tick', { p_list: list, p_task: id, p_sub: sub, p_done: !!done });
+    },
+    listDrop: function (list, id) {
+      return listWrite(list, function (held) { return held.filter(function (t) { return t.id !== id; }); },
+        'list_task_drop', { p_list: list, p_task: id });
+    },
+    listIn: function (list, id) { return listCall('list_task_in', { p_list: list, p_task: id }); },
+    listOut: function (list, id) { return listCall('list_task_out', { p_list: list, p_task: id }); },
+    listSweep: function (localId) { return listCall('list_sweep', { p_local: localId }); },
+    forgetLabels: function (keys) {
+      (Array.isArray(keys) ? keys : []).forEach(function (k) { cache.labels.delete(k); });
+      emit('labels');
     },
     spotsOn: function () {
       if (spotKnown === null) spotProbe();
@@ -2967,6 +3269,20 @@
         return !q.error && q.data === true;
       } catch (e) { return false; }
     },
+    dayBarHome: async function (device, secret, day, wake) {
+      if (!cfg.url || !cfg.anonKey) return 'net';
+      try {
+        var r = await fetch(String(cfg.url).replace(/\/+$/, '') + '/rest/v1/rpc/daybar_home', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', apikey: cfg.anonKey, Authorization: 'Bearer ' + cfg.anonKey },
+          body: JSON.stringify({ p_device: String(device || ''), p_secret: String(secret || ''), p_day: day || null, p_wake: Math.floor(Number(wake) || 0) })
+        });
+        if (r.status === 404) return 'missing';
+        if (r.status !== 200) return 'err:' + r.status;
+        var ans = await r.json();
+        return typeof ans === 'string' ? ans.slice(0, 20) : 'err:shape';
+      } catch (e) { return 'net'; }
+    },
     dayBarReportTo: function () {
       if (!cfg.url || !cfg.anonKey) return null;
       return { url: String(cfg.url).replace(/\/+$/, '') + '/rest/v1/rpc/daybar_report', key: cfg.anonKey };
@@ -3142,6 +3458,7 @@
       } catch (e) { return null; }
     },
     signOut: async function () {
+      bookGen += 1; bookCache = {}; bookAsk = {};
       if (typeof window.GR_BEFORE_SIGNOUT === 'function') {
         try {
           await Promise.race([
@@ -3555,6 +3872,109 @@
     buyoutAsk[tourId] = p;
     return p;
   }
+  function loadFolds() {
+    sb.rpc('place_folds').then(function (q) {
+      if (q.error || !Array.isArray(q.data)) return;
+      foldsList = q.data.filter(isObj);
+      if (foldsList.length) emit('tours');
+    }, function () {});
+  }
+  function pnlProbe() {
+    if (pnlProbing || !session) return;
+    pnlProbing = true;
+    sb.rpc('pnl_artists').then(function (q) {
+      pnlProbing = false;
+      if (!q.error) {
+        pnlList = (Array.isArray(q.data) ? q.data : []).filter(function (a) { return isObj(a) && a.id; });
+        pnlKnown = true;
+        emit('tours');
+      } else if (fnMissing(q.error)) pnlKnown = false;
+    }, function () { pnlProbing = false; });
+  }
+  function loadPnl(artistId) {
+    if (pnlAsk[artistId] || !session) return;
+    var gen = pnlGen[artistId] || 0;
+    pnlAsk[artistId] = true;
+    sb.from('artist_tour_pnl').select('gk,name,first_day,last_day,doc,finish,updated_at').eq('artist_id', artistId).then(function (q) {
+      delete pnlAsk[artistId];
+      if (q.error) {
+        if (tableMissing(q.error)) { pnlKnown = false; delete pnlCache[artistId]; emit('tours'); return; }
+        var was = pnlCache[artistId];
+        pnlCache[artistId] = { rows: was ? was.rows : null, at: Date.now(), failed: true, stale: false };
+        emit('tours');
+        return;
+      }
+      pnlCache[artistId] = { rows: Array.isArray(q.data) ? q.data : [], at: Date.now(), failed: false, stale: gen !== (pnlGen[artistId] || 0) };
+      emit('tours');
+    }, function () {
+      delete pnlAsk[artistId];
+      var was = pnlCache[artistId];
+      pnlCache[artistId] = { rows: was ? was.rows : null, at: Date.now(), failed: true, stale: false };
+      emit('tours');
+    });
+  }
+  function loadBook(artistId) {
+    if (bookAsk[artistId] || !session) return;
+    var gen = bookGen;
+    bookAsk[artistId] = true;
+    var failed = function () {
+      var was = bookCache[artistId];
+      bookCache[artistId] = { rows: was ? was.rows : null, at: Date.now(), failed: true, gone: false, stale: false };
+      emit('tours');
+    };
+    sb.rpc('book_tours', { a_id: artistId }).then(function (q) {
+      delete bookAsk[artistId];
+      if (gen !== bookGen) return;
+      if (q.error) {
+        if (fnMissing(q.error)) { pnlKnown = false; delete bookCache[artistId]; emit('tours'); return; }
+        failed();
+        return;
+      }
+      if (q.data == null) bookCache[artistId] = { rows: [], at: Date.now(), failed: false, gone: true, stale: false };
+      else bookCache[artistId] = { rows: (Array.isArray(q.data) ? q.data : []).filter(function (r) { return isObj(r) && r.id && isObj(r.doc); }).map(bookRow), at: Date.now(), failed: false, gone: false, stale: false };
+      emit('tours');
+    }, function () { delete bookAsk[artistId]; if (gen === bookGen) failed(); });
+  }
+  function bookRow(r) {
+    var asks = (Array.isArray(r.reimb) ? r.reimb : []).filter(isObj).map(function (x) {
+      return { id: x.id, tourId: r.id, mine: false, name: x.requester_name || '', amount: Number(x.amount) || 0, what: x.what || '', date: x.spent_on || '', status: x.status || 'open',
+        paidAt: x.paid_at || null, how: x.paid_how || '', createdAt: x.created_at || null };
+    });
+    return { id: r.id, doc: Object.assign({}, r.doc, { _reimb: asks }) };
+  }
+  function bookStale() {
+    bookGen += 1; bookCache = {}; bookAsk = {};
+    if (pnlKnown === true) pnlProbe();
+  }
+  function finishProbe() {
+    if (finishProbing || !session) return;
+    finishProbing = true;
+    sb.rpc('finish_on').then(function (q) {
+      finishProbing = false;
+      if (!q.error) { finishKnown = q.data === true; if (finishKnown) emit('tours'); }
+      else if (fnMissing(q.error)) finishKnown = false;
+    }, function () { finishProbing = false; });
+  }
+  async function finishCall(fn, id) {
+    if (!session) throw err('session');
+    var q = await sb.rpc(fn, { t_id: id });
+    if (q.error) {
+      if (fnMissing(q.error)) { finishKnown = false; emit('tours'); throw err('unavailable'); }
+      throw mapError(q.error);
+    }
+    var a = isObj(q.data) ? q.data : {};
+    if (!a.ok) return { ok: false, why: String(a.why || '') };
+    var doc = cache.tours.get(id);
+    if (doc) { cache.tours.set(id, Object.assign({}, doc, { finish: a.finish })); emit('tours'); }
+    return { ok: true, finish: a.finish };
+  }
+  function pnlTouched(artistId) {
+    pnlGen[artistId] = (pnlGen[artistId] || 0) + 1;
+    var c = pnlCache[artistId];
+    if (c) c.stale = true;
+    loadPnl(artistId);
+    emit('tours');
+  }
   function flyerProbe() {
     if (flyerProbing || !session) return;
     flyerProbing = true;
@@ -3741,6 +4161,95 @@
       if (!q.error) { todoKnown = true; emit('tours'); }
       else if (tableMissing(q.error)) todoKnown = false;
     }, function () { todoProbing = false; });
+  }
+  function listProbe() {
+    if (listProbing || listKnown !== null || !session) return;
+    listProbing = true;
+    Promise.resolve(loadLists()).then(function () { listProbing = false; }, function () { listProbing = false; });
+  }
+  function listStale(all) {
+    listGen += 1;
+    listStaleOn = true;
+    if (all) Object.keys(listTasks).forEach(function (id) { if (listTasks[id]) listTasks[id].rev = -1; });
+  }
+  function listShape(t) {
+    return { id: String(t.id), body: String(t.body || ''), date: String(t.date || ''), time: String(t.time || ''), mins: Number(t.mins) || 0,
+      repeat: String(t.repeat || ''), subs: Array.isArray(t.subs) ? t.subs : [], assignedTo: t.assignedTo || null, doneAt: t.doneAt || null,
+      doneBy: t.doneBy || null, doneDays: Array.isArray(t.doneDays) ? t.doneDays : [], createdBy: t.createdBy || null,
+      editedBy: Array.isArray(t.editedBy) ? t.editedBy : [], removed: !!t.removed, createdAt: Number(t.createdAt) || 0 };
+  }
+  function listWhole(l) { return Object.assign({}, l, { tasks: listTasks[l.id] ? listTasks[l.id].rows : [] }); }
+  function listPatched(t, patch) {
+    var p = isObj(patch) ? patch : {}, out = Object.assign({}, t);
+    ['body', 'date', 'time', 'mins', 'repeat', 'assignedTo'].forEach(function (k) { if (k in p) out[k] = p[k]; });
+    if (isObj(p.subs)) {
+      var drop = Array.isArray(p.subs.drop) ? p.subs.drop : [];
+      var subs = out.subs.filter(function (s) { return drop.indexOf(s.id) < 0; });
+      (Array.isArray(p.subs.put) ? p.subs.put : []).forEach(function (s) {
+        var had = subs.filter(function (x) { return x.id === s.id; })[0];
+        if (had) subs = subs.map(function (x) { return x.id === s.id ? Object.assign({}, x, { body: s.body }) : x; });
+        else subs = subs.concat([{ id: s.id, body: s.body, done: !!s.done }]);
+      });
+      out.subs = subs;
+    }
+    return out;
+  }
+  function loadLists() {
+    if (listAskP) return listAskP;
+    if (!session || listKnown === false) return Promise.resolve();
+    var gen = listGen;
+    var p = Promise.resolve(sb.rpc('my_lists')).then(async function (q) {
+      if (q.error) {
+        if (fnMissing(q.error)) { listKnown = false; listRows = null; emit('tours'); }
+        return;
+      }
+      var first = listKnown !== true;
+      listKnown = true;
+      var rows = (Array.isArray(q.data) ? q.data : []).filter(function (l) { return isObj(l) && l.id; });
+      var moved = first || JSON.stringify(rows) !== JSON.stringify(listRows);
+      var keep = {};
+      rows.forEach(function (l) { keep[l.id] = true; });
+      Object.keys(listTasks).forEach(function (id) { if (!keep[id]) { delete listTasks[id]; delete listFailed[id]; delete listFaceCache[id]; } });
+      var wanted = rows.filter(function (l) { return !listTasks[l.id] || listTasks[l.id].rev !== l.rev; });
+      for (var i = 0; i < wanted.length; i += 4) {
+        await Promise.all(wanted.slice(i, i + 4).map(function (l) {
+          return Promise.resolve(sb.rpc('list_tasks', { p_list: l.id })).then(function (r) {
+            if (r.error || !Array.isArray(r.data)) { listFailed[l.id] = true; return; }
+            delete listFailed[l.id];
+            listTasks[l.id] = { rev: l.rev, rows: r.data.filter(isObj).map(listShape) };
+          }, function () { listFailed[l.id] = true; });
+        }));
+      }
+      listRows = rows;
+      listAt = Date.now();
+      if (gen === listGen) listStaleOn = false;
+      if (moved || wanted.length) emit('tours');
+    }, function () {   }).then(function () {
+      listAskP = null;
+    }, function () { listAskP = null; });
+    listAskP = p;
+    return p;
+  }
+  async function listCall(fn, args) {
+    if (!session) throw err('unavailable');
+    var q = await sb.rpc(fn, args);
+    if (q.error) throw mapError(q.error);
+    listStale();
+    await loadLists();
+    return isObj(q.data) ? q.data : { ok: false, why: 'gone' };
+  }
+  async function listWrite(list, change, fn, args) {
+    if (!session) throw err('unavailable');
+    var held = listTasks[list], was = held ? held.rows : null;
+    if (held) { held.rows = change(held.rows); emit('tours'); }
+    var q = null;
+    try { q = await sb.rpc(fn, args); }
+    catch (e) { if (held) { held.rows = was; emit('tours'); } throw e; }
+    if (q.error) { if (held) { held.rows = was; emit('tours'); } throw mapError(q.error); }
+    var out = isObj(q.data) ? q.data : { ok: false, why: 'gone' };
+    if (out.ok === false && held) { held.rows = was; emit('tours'); }
+    listStale();
+    return out;
   }
   function todoStale() {
     Object.keys(todoCache).forEach(function (k) { todoGen[k] = (todoGen[k] || 0) + 1; if (todoCache[k]) todoCache[k].stale = true; });
@@ -4074,8 +4583,9 @@
       flowersChanged();
       if (!what || /(^|,)bus(,|$)/.test(what)) busStale();
       if (!what || /(^|,)buyout(,|$)/.test(what)) buyoutStale();
-      if (!what || /(^|,)todo(,|$)/.test(what)) todoStale();
+      if (!what || /(^|,)todo(,|$)/.test(what)) { todoStale(); listStale(); }
       if (!what || /(^|,)supply(,|$)/.test(what)) supplyStale();
+      if (!what || /(^|,)(team|todo)(,|$)/.test(what)) bookStale();
       socialTell(what);
     }
     if (pokeOwed) { pokeOwed = false; poked(''); }
@@ -4086,8 +4596,10 @@
     busStale();
     buyoutStale();
     todoStale();
+    listStale();
     supplyStale();
     showRateStale();
+    bookStale();
     socialTell('');
     if (!pokeBusy) sgLimit(sb.rpc('claim_invites'), 10000).then(function () {}, function () {   });
   }
@@ -5076,6 +5588,7 @@
     } catch (e2) {   } finally { legalWaking = false; }
   }
   function gate(note, code) {
+    if (typeof window.GR_AT_GATE === 'function') { try { window.GR_AT_GATE(); } catch (e) {   } }
     var mode = code ? 'code' : 'signin';
     var wrap = document.createElement('div');
     wrap.id = 'gr-gate';
