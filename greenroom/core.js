@@ -7726,6 +7726,7 @@
     return { state: 'draft', line: '', status: 'Draft. Still open, numbers can change.', short: '' };
   }
   function tourFinished(t) { return isObj(t) && isObj(t.finish) && t.finish.state === 'final'; }
+  function atvenuOff(t) { return isObj(t) && (tourFinished(t) ? t.finish.atvenu === false : t.atvenuSync === false); }
   var FINISH_FREE = ['name', 'artist', 'artistId', 'bands', 'ourBand', 'deletedAt', 'setupDone', 'setupStep', 'offDays', 'dayNotes', 'updateSentOn', 'lastCallRule'];
   function finishFree(patch) {
     if (!isObj(patch)) return false;
@@ -7790,12 +7791,21 @@
       if (n && n.atNet) return null;
       if (n && n.gross > 0) return D(n.gross);
       if (st.gross == null) return null;
-      var C = cpaCents, net = C(incomeOf(s, 'merch')), tips = Math.min(C(merchTips(s).amount), net), cut = st.cut != null ? C(st.cut) : 0, fees = st.fees != null ? C(st.fees) : 0, stax = st.tax != null ? C(st.tax) : 0;
+      var C = cpaCents, net = C(isObj(s.income) ? s.income.merch : 0), tips = Math.min(C(merchTips(s).amount), net), cut = st.cut != null ? C(st.cut) : 0, fees = st.fees != null ? C(st.fees) : 0, stax = st.tax != null ? C(st.tax) : 0;
       return Math.abs(C(st.gross) - cut - fees - stax - net) <= 100 ? D(net - tips + cut + fees) : null;
     };
     var hasNotes = function (s) { return Array.isArray(s.settlementNotes) && s.settlementNotes.length > 0; };
     var noSettlement = tags.slot === 'Support' ? PNL_NN : 'No';
-    var abroadOf = function (s) { var w = placeCountry(s); return !!w && w !== 'US'; };
+    var PLACE_US_WORDS = ['USA', 'US', 'UNITED STATES', 'UNITED STATES OF AMERICA', 'PR', 'PUERTO RICO', 'GU', 'GUAM', 'VI', 'AS', 'MP'];
+    var regionOf = function (s) { return placeRegion(s).toUpperCase().replace(/\./g, '').trim(); };
+    var abroadOf = function (s) {
+      var w = placeCountry(s), r = regionOf(s);
+      return w ? w !== 'US' : !!r && !STATE_TZ[r] && PLACE_US_WORDS.indexOf(r) < 0;
+    };
+    var countryWord = function (s) {
+      var w = placeCountry(s);
+      return w === 'CA' || PLACE_PROVINCES[regionOf(s)] ? 'Canada' : w && w !== 'US' ? w : '';
+    };
     var abroad = shows.filter(function (s) { return cancelledCounts(s) && abroadOf(s); });
     var abroadPlaces = abroad.map(function (s) { return placeRegion(s) || placeCountry(s); }).filter(function (x, i, a) { return x && a.indexOf(x) === i; }).sort();
     var lineOf = {};
@@ -7819,24 +7829,26 @@
       var r = comm[line.key];
       return line.label + ' ' + (r.mode === 'pct' ? r.value + '% of ' + money(commissionBase(r, c.commissionBy) || 0) : 'flat ' + money(r.value));
     }).join('; ');
-    var tax = shows.reduce(function (n, s) { return n + taxWithheldOf(s); }, 0);
     var liveShows = shows.filter(cancelledCounts), liveCounted = liveShows.map(showCounted);
     var gOwed = liveCounted.reduce(function (n, k) { return n + k.guarantee.owed; }, 0), gWait = liveCounted.reduce(function (n, k) { return n + k.guarantee.waiting; }, 0);
-    var gTax = liveShows.reduce(function (n, s) { return n + taxWithheldOf(s); }, 0), gGap = cents(me.inc.guarantee - by('guarantee')), gRest = cents(gGap - gTax - gOwed - gWait);
-    var guarWalk = 'Guarantees: ' + moneyCents(me.inc.guarantee) + ' contracted, ' + moneyCents(by('guarantee')) + ' counted. The ' + moneyCents(gGap) + ' between them is not a miss: ' +
-      [gWait > 0.004 ? moneyCents(gWait) + ' not received yet' : '', gOwed > 0.004 ? moneyCents(gOwed) + ' short paid and still owed' : '', gTax > 0.004 ? moneyCents(gTax) + ' tax held back' : '',
+    var gBank = c.otherRows.reduce(function (n, r) { return r.kind === 'guarantee' ? n + num(r.amount) : n; }, 0), gHeld = Math.min(gWait, gBank);
+    var gCalled = shows.filter(function (s) { return !cancelledCounts(s); }).reduce(function (n, s) { return n + showCounted(s).by.guarantee; }, 0), gBudget = cents(me.inc.guarantee + gCalled);
+    var gTax = liveShows.reduce(function (n, s) { return n + taxWithheldOf(s); }, 0), gGap = cents(gBudget - by('guarantee')), gRest = cents(gGap - gTax - gOwed - gWait);
+    var guarWalk = 'Guarantees: ' + moneyCents(gBudget) + ' contracted, ' + moneyCents(by('guarantee')) + ' counted. The ' + moneyCents(gGap) + ' between them is not a miss: ' +
+      [gWait - gHeld > 0.004 ? moneyCents(gWait - gHeld) + ' not received yet' : '', gHeld > 0.004 ? moneyCents(gHeld) + ' in the bank, not on a show yet' : '',
+        gOwed > 0.004 ? moneyCents(gOwed) + ' short paid and still owed' : '', gTax > 0.004 ? moneyCents(gTax) + ' tax held back' : '',
         Math.abs(gRest) > 0.004 ? moneyCents(gRest) + ' taken off the top' : ''].filter(Boolean).join(', ') + '.';
     var pl = [['Line', 'Budget', 'Actual', 'Over or under', 'Per show', 'See', 'Note'], ['INCOME']];
     [['Guarantees', 'guarantee'], ['Back end', 'backend'], ['Merch', 'merch'], ['VIPs', 'vip'], ['Buyouts (Members’ part)', 'buyouts'], ['Catering budget', 'catering'], ['Misc', 'misc']].forEach(function (x) {
       var v = by(x[1]);
       if (Math.abs(v) > 0.004 || x[1] === 'guarantee' || x[1] === 'merch') {
-        pl.push(plRow(x[0], x[1] === 'guarantee' ? me.inc.guarantee : PNL_NR, cents(v), per(v), PNL_SEE_IN[x[1]], x[1] === 'guarantee' ? (Math.abs(gGap) > 0.004 ? guarWalk : 'Budget is the contracted total. Actual is what is ticked Received') : x[1] === 'merch' ? 'The band’s number' : ''));
+        pl.push(plRow(x[0], x[1] === 'guarantee' ? gBudget : PNL_NR, cents(v), per(v), PNL_SEE_IN[x[1]], x[1] === 'guarantee' ? (Math.abs(gGap) > 0.004 ? guarWalk : 'Budget is the contracted total. Actual is what is ticked Received') : x[1] === 'merch' ? 'The band’s number' : ''));
       }
       if (x[1] === 'merch') pl.push(memo('Merch gross', 'gross'), memo('Venue cut', 'cut'), memo('Card fees', 'fees'), memo('Sales tax', 'tax'));
     });
     sumGroup(c.otherRows, otherIncomeLabel).forEach(function (g) { pl.push(plRow(g.label, PNL_NR, g.amount, per(g.amount), 'Show by show')); });
     pl.push(plRow('TOTAL INCOME', PNL_NN, cents(c.income), per(c.income), 'How it ties'),
-      plRow('Tax withheld (memo)', PNL_NN, cents(tax), PNL_NN, 'Tax', 'Already out of guarantees. A prepayment, not a cost'), ['MERCH COSTS'], costRow('Merch bill', 'merch'));
+      plRow('Tax withheld (memo)', PNL_NN, gTax > 0.004 ? cents(gTax) : PNL_NR, PNL_NN, 'Tax', gTax > 0.004 ? 'Already out of guarantees. A prepayment, not a cost' : 'None typed on this tour'), ['MERCH COSTS'], costRow('Merch bill', 'merch'));
     if (lineOf.merchTips) pl.push(costRow('Merch tips', 'merchTips', 'Owed to the merch person'));
     pl.push(['PEOPLE'], costRow('Crew', 'crew'), ['TRAVEL'], costRow('Bus', 'bus'), costRow('Gas', 'gas'), costRow('Flights', 'flights'), costRow('Uber/Lyft', 'rideshare'), costRow('Transportation', 'transport'),
       ['SLEEP'], costRow('Hotels', 'hotels'), ['FOOD'], costRow('Food', 'food'), ['PRODUCTION'], costRow('Production', 'production'), costRow('Supplies', 'supplies'));
@@ -7896,10 +7908,12 @@
     var txRaw = cpaTxRows({ rows: ledger }).slice(1);
     var tx = [['Date', 'Description', 'Amount', 'Payee or payer', 'Account name', 'Category', 'Suggested tax line', 'Kind', 'Tour', 'Show date', 'City', 'State', 'Person', 'Paid from', 'From',
       'Bank line ID', 'Receipt', 'Note']].concat(ledger.map(function (r, i) {
-      var x = txRaw[i], a = cpaAccountOf(r), note = x[15], words = x[2] || x[1];
+      var x = txRaw[i], a = cpaAccountOf(r), note = x[15], words = x[2] || x[1], taxLine = x[7];
       if (a.cpa && !/CPA decides/.test(note) && r.kind !== 'not counted' && r.kind !== 'personal') note = [note, 'CPA decides'].filter(Boolean).join('; ');
-      if (r.kind === 'tax held back' && abroadPlaces.indexOf(String(x[12])) >= 0) words = 'Tax held back abroad by the venue';
-      return [x[0], words, x[3], x[1], a.name, x[6], x[7], x[8], x[9], x[10], x[11], x[12], x[13], x[5], fromOf(r), x[4], x[14], note];
+      if (r.kind === 'tax held back' && abroadOf(showById[String(r.src).slice((id + ':shows:').length).split(':')[0]])) {
+        words = 'Tax held back abroad by the venue'; taxLine = 'Tax held back: a credit on the return where it was held back';
+      }
+      return [x[0], words, x[3], x[1], a.name, x[6], taxLine, x[8], x[9], x[10], x[11], x[12], x[13], x[5], fromOf(r), x[4], x[14], note];
     }));
     var acctAt = {}, ledgerCents = 0;
     ledger.forEach(function (r) {
@@ -7956,7 +7970,7 @@
     shows.forEach(function (s) {
       if (!cancelledCounts(s)) return;
       var where = cpaStateOf(s) || (String(s.city || '').indexOf(',') > 0 ? String(s.city).split(',').pop().trim() : '') || PNL_NR;
-      if (abroadOf(s) && where !== PNL_NR) where += ' (' + (placeCountry(s) === 'CA' ? 'Canada' : placeCountry(s)) + ')';
+      if (abroadOf(s) && where !== PNL_NR && countryWord(s) && countryWord(s) !== where) where += ' (' + countryWord(s) + ')';
       var e = places[where];
       if (!e) { e = places[where] = { n: 0, g: 0, other: 0, gross: 0, grossN: 0, sales: 0, salesN: 0, tax: 0 }; order.push(where); }
       var gr = grossOf(s), st = cpaSettlement(s), k = showCounted(s);
@@ -8028,6 +8042,7 @@
     if (ties.diffIn) eye.unshift({ label: 'Money in does not tie to the ledger', amount: D(ties.diffIn), n: 1 });
     if (tiesToAccount || walkOut.diff || walkIn.diff) eye.unshift({ label: 'By account does not tie to the ledger', amount: D(tiesToAccount || walkOut.diff || walkIn.diff), n: 1 });
     var openN = eye.reduce(function (n, e) { return n + e.n; }, 0);
+    var eyeOpen = eye.slice();
     var receipts = {};
     ledger.filter(cpaNeedsReceipt).forEach(function (r) { receipts[r.lineSrc] = (receipts[r.lineSrc] || 0) - r.cents; });
     var receiptN = Object.keys(receipts).length, withheld = shows.filter(function (s) { return taxWithheldOf(s) > 0; });
@@ -8079,7 +8094,7 @@
       ['Shows', [first ? sumSpan(first, last) : PNL_NR, sumPlural(nShows, 'show'), me.days != null ? sumPlural(me.days, 'day') : PNL_NR + ' days', me.people != null ? (me.people === 1 ? '1 person' : me.people + ' people') : PNL_NR + ' people'].join(' · ')],
       ['Money moved', spanOf], ['Basis', 'Modified cash, see Notes'], ['Currency', abroad.length ? 'US dollars as typed, see Notes for nights abroad' : 'US dollars'], ['Status', status]];
     var numbers = [['Total in', cents(c.income)], ['Total out', cents(c.out)], ['Net', cents(cents(c.income) - cents(c.out))], ['Net before Members', cents(before)],
-      ['Still to come in', cents(me.waitingLeft + gOwed)], ['Not paid yet', D(ties.notPaid)]];
+      ['Still to come in', cents(Math.max(0, gWait + gOwed - gBank))], ['Not paid yet', D(ties.notPaid)]];
     var tiesLine = 'Ties to the ledger: money out difference ' + moneyCents(D(ties.diffOut)) + ', money in difference ' + moneyCents(D(ties.diffIn));
     var sumTab = [['Tour report', mark], [base.title], [base.sub], [], ['What', 'Value']].concat(block, numbers, [['Ties to the ledger', tiesLine.replace('Ties to the ledger: ', '')], []]);
     var eyeAt = sumTab.length;
@@ -8115,8 +8130,9 @@
       ['Categories', 'Categories are the tour’s own, not tax lines. Account map suggests where each one lands, and your CPA decides. Food is at full price; your CPA applies any limit.']];
     var pdfOf = function (name) { return base.details.filter(function (d) { return d.title === name; })[0] || null; };
     var commTidy = function (list) {
-      return list.filter(function (r) { return !(/^Flat \$0$/.test(String(r[1])) && !num(r[3])); }).map(function (r) { return r.map(function (v) { return typeof v === 'string' ? v.replace(/\bvips\b/g, 'VIPs') : v; }); });
+      return list.filter(function (r) { return !(/^Flat \$0$/.test(String(r[1])) && !num(r[3])); }).map(function (r) { return r.map(function (v) { return typeof v === 'string' ? v.replace(/\bvips\b/gi, 'VIPs') : v; }); });
     };
+    var commPdf = commTidy(pdfOf('Commissions').rows);
     var filled = function (list, noteCols) {
       return pnlFill(list, noteCols).map(function (r, i) { return i && /^(TOTAL|NET)\b/.test(String(r[0])) ? r.map(function (v) { return v === PNL_NR ? PNL_NN : v; }) : r; });
     };
@@ -8145,7 +8161,7 @@
           { t: 'Merch', w: 62, a: 'r', money: true }, { t: 'Tax withheld', w: 62, a: 'r', money: true }, { t: 'Settlement', w: 62 }], rows: pdfShows },
         Object.assign(tableOf('Merch', merchRows.filter(function (r) { return r.length > 2; }).map(function (r) { return [r[0], r[1], r[3], r[4], r[5], r[6], r[8], r[10]]; }).map(function (r, i) { return i ? r.map(function (v) { return v === '' ? PNL_NR : v; }) : r; }),
           [52, 94, 62, 62, 62, 62, 56, 62], [3, 4, 5, 6, 7]), { newPage: true, notes: merchRows.filter(function (r) { return r.length === 2; }).map(function (r) { return r[0] + ': ' + (typeof r[1] === 'number' ? moneyCents(r[1]) : r[1]); }) }),
-        Object.assign({}, fillPdf(Object.assign({}, pdfOf('Commissions'), { rows: commTidy(pdfOf('Commissions').rows) }), [1, 2]), { newPage: true }),
+        Object.assign({}, fillPdf(Object.assign({}, pdfOf('Commissions'), { rows: commPdf, bold: commPdf.map(function (r, i) { return /^(TOTAL|NET)\b/.test(String(r[0])) ? i : -1; }).filter(function (i) { return i >= 0; }) }), [1, 2]), { newPage: true }),
         Object.assign(tableOf('People paid', pnlFill(payRows), [88, 62, 32, 58, 62, 72, 80, 62], [3, 4]), { newPage: true }),
         Object.assign(tableOf('Income by payer', [payerRows[0].map(function (h) { return h.replace(' (form)', ''); })].concat(payerRows.slice(1)), [126, 66, 66, 66, 64, 64, 64], [1, 2, 3, 5]), { newPage: true }),
         Object.assign(tableOf('Tax', taxRows, [80, 38, 66, 62, 66, 58, 66, 80], [2, 3, 4, 5, 6]), { newPage: true })
@@ -8162,7 +8178,7 @@
         { name: 'Day by day', rows: pnlFill(sheetOf('Day by day').map(function (r) { return r.map(function (v) { return v === 'MEAL (50% rule)' ? 'Meal' : v; }); }), [4]) }, { name: 'Members and Crew pay', rows: filled(sheetOf('Members and Crew pay')) }, { name: 'Card charges', rows: pnlFill(sheetOf('Card charges'), [4]) },
         { name: 'Open items', rows: openRows.length > 1 ? pnlFill(openRows, [4]) : openRows.concat([['Nothing open', PNL_NN, PNL_NN, PNL_NN, PNL_NN]]) },
         { name: 'Not counted', rows: pnlFill(ncRows, [2, 7]) }, { name: 'Account map', rows: pnlFill(mapRows, [3, 4, 5, 7]) }, { name: 'Notes', rows: noteRows }]),
-      eye: eye, ties: ties, status: status, state: words.state
+      eye: eye, eyeOpen: eyeOpen, ties: ties, status: status, state: words.state
     };
     return pack;
   }
@@ -8276,6 +8292,6 @@
     PNL: PNL, PNL_INCOME: PNL_INCOME, PNL_INCOME_TOP: PNL_INCOME_TOP, PNL_OUT: PNL_OUT, PNL_EXTRA: PNL_EXTRA, PNL_MORE: PNL_MORE, PNL_SLOTS: PNL_SLOTS, PNL_VEHICLES: PNL_VEHICLES, median: median, pnlClean: pnlClean, pnlWord: pnlWord, pnlSameRun: pnlSameRun, pnlFromRead: pnlFromRead, pnlTotals: pnlTotals, pnlTags: pnlTags, pnlFacts: pnlFacts,
     pnlPool: pnlPool, tourCompare: tourCompare, pnlPlain: pnlPlain, pnlWords: pnlWords, pnlBlocks: pnlBlocks, pnlFlagLines: pnlFlagLines, pnlMatchRow: pnlMatchRow, pnlAttendance: pnlAttendance, xlsxRows: xlsxRows, tourPack: tourPack,
     pnlBox: pnlBox, pnlNightSum: pnlNightSum, pnlNightCheck: pnlNightCheck, pnlNightMatch: pnlNightMatch, rateHint: rateHint, cityNights: cityNights, cityRows: cityRows, placeCountry: placeCountry, placeRegion: placeRegion,
-    finishWords: finishWords, tourFinished: tourFinished, finishFree: finishFree, FINISH_FREE: FINISH_FREE, finishOpen: finishOpen, FINISH_REFUSAL: FINISH_REFUSAL, teamLevelHeld: teamLevelHeld, reportStem: reportStem, CPA_ACCOUNT_MAP: CPA_ACCOUNT_MAP, cpaAccountOf: cpaAccountOf, cpaAccountsOf: cpaAccountsOf, cpaPayersOf: cpaPayersOf, cpaNeedsReceipt: cpaNeedsReceipt
+    finishWords: finishWords, tourFinished: tourFinished, atvenuOff: atvenuOff, finishFree: finishFree, FINISH_FREE: FINISH_FREE, finishOpen: finishOpen, FINISH_REFUSAL: FINISH_REFUSAL, teamLevelHeld: teamLevelHeld, reportStem: reportStem, CPA_ACCOUNT_MAP: CPA_ACCOUNT_MAP, cpaAccountOf: cpaAccountOf, cpaAccountsOf: cpaAccountsOf, cpaPayersOf: cpaPayersOf, cpaNeedsReceipt: cpaNeedsReceipt
   };
 })(typeof globalThis !== 'undefined' ? globalThis : this);

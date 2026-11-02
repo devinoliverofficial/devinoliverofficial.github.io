@@ -6178,7 +6178,7 @@
       var p = homePeople(id), can = homeCanInvite(p.card), levels = !!(B.teamLevelsOn && B.teamLevelsOn());
       var seats = (B.teamSeats ? B.teamSeats() : []).filter(function (s) { return s.artistId === id && getTour(s.tourId); });
       var onTeam = teamArtists().some(function (a) { return a.id === id; }) && !todoCanRun(p.card);
-      var books = pnlOn() && B.pnlSees(id) && (bookArtists().some(function (a) { return a.id === id; }) || (!!p.card && todoCanRun(p.card) && !p.card.mine));
+      var books = pnlOn() && B.pnlSees(id) && bookArtists().some(function (a) { return a.id === id; });
       fillTo(box, homePeopleNodes(p, { onTeam: can && levels ? function (x) {
           closeSheet(true); setTimeout(function () { openTeamPerson(id, p.card, x); }, 60);
         } : null }),
@@ -14641,7 +14641,7 @@
       return h('section', { class: 'bh-sec pnl-sec' }, head, buttons(m, stem),
         h('p', { class: 'bh-dl-note' }, 'For your accountant: the PDF reads like a report, and the spreadsheet has every table on its own tab.'));
     }
-    var eye = (got.model.eye || []).slice(0, 5);
+    var eye = (got.model.eyeOpen || got.model.eye || []).slice(0, 5);
     return h('section', { class: 'bh-sec pnl-sec' }, head, buttons(got.model, name),
       h('p', { class: 'bh-dl-note' }, 'Everything itemized. It goes only when you send it.'),
       eye.length ? summarySection({ title: 'Worth a look first', lines: eye.map(function (e) { return { label: e.label, amount: e.amount, hint: '' }; }) }) : null);
@@ -14740,7 +14740,10 @@
   }
   function cityBooks(artistId, artist) {
     var B = window.GR_BACKEND;
-    if (typeof B.bookRows === 'function') { var got = B.bookRows(artistId); return { tours: got.rows || [], wait: !got.rows && !got.failed, failed: !!got.failed }; }
+    if (typeof B.bookRows === 'function') {
+      var got = B.bookRows(artistId);
+      if (!got.gone) return { tours: got.rows || [], wait: !got.rows && !got.failed, failed: !!got.failed };
+    }
     var b = cpaArtistBooks(artist);
     return { tours: b.tours, wait: !!b.unknown, failed: false };
   }
@@ -14771,7 +14774,7 @@
     var here = S.route, books = cityBooks(artistId, name), got = B.pnlRows(artistId);
     if (got.failed || books.failed) {
       return page('', h('section', { class: 'bh-sec pnl-sec' }, h('p', { class: 'note' }, 'Couldn’t load your past tours just now.'),
-        h('button', { class: 'btn ghost block', type: 'button', onclick: function () { B.pnlRows(artistId, true); render(true); } }, 'Try again')));
+        h('button', { class: 'btn ghost block', type: 'button', onclick: function () { B.pnlRows(artistId, true); if (typeof B.bookRows === 'function') B.bookRows(artistId, true); render(true); } }, 'Try again')));
     }
     if (books.wait || !got.rows) {
       setTimeout(function () { if (S.route === here) render(true); }, 700);
@@ -17441,7 +17444,7 @@
             sm.paidOff > 0 ? line('Paid on the card since', '\u2212 ' + G.moneyCents(sm.paidOff)) : null,
             line('Card balance now', sm.owed > 0 ? G.moneyCents(sm.owed) : 'Paid off', sm.owed > 0 ? 'neg' : 'pos'))),
         h('div', { class: 'stack' },
-          waiting ? h('button', { class: 'btn primary block', type: 'button', onclick: function () {
+          waiting && !G.tourFinished(getTour(id)) ? h('button', { class: 'btn primary block', type: 'button', onclick: function () {
             closeSheet(); setTimeout(function () { openFeedReview(id, 0, card.feed.name); }, 320);
           } }, icon('card', 18), 'Sort ' + plural(waiting, 'charge') + ' from this card') : null,
           h('button', { class: 'btn ghost block', type: 'button', onclick: function () { closeSheet(); } }, 'Close'))
@@ -20547,6 +20550,7 @@
     var done = money && G.tourFinished(t) ? G.finishWords(t.finish).short : '', row = payTabRow(tabs);
     return done ? [row, h('p', { class: 'note pay-finish' }, done)] : row;
   }
+  function finishLine(id, t) { return canSeeMoney(id) && G.tourFinished(t) ? h('p', { class: 'note pay-finish' }, G.finishWords(t.finish).short) : null; }
   function payTabRow(tabs) {
     return h('div', { class: 'vp-tabs pt-tabs pay-tabs' + (tabs.length === 1 ? ' one' : tabs.length === 3 ? ' three' : ''), role: 'tablist' }, tabs.map(function (x) {
       return h('button', { class: 'vp-tab pt-tab' + (x.on ? ' on' : ''), type: 'button', role: 'tab', 'aria-selected': x.on ? 'true' : 'false',
@@ -23430,6 +23434,7 @@
         tourBand(t, id, 'daybyday'),
         h('h1', { class: 'tour-title' }, 'Day by day'),
         bookStrip(id, 'costs', null, null, true),
+        finishLine(id, t),
         dbBanner(),
         tabDays(id, t, c),
         tourTabs(id, 'costs'));
@@ -23439,6 +23444,7 @@
         tourBand(t, id, 'cashlog'),
         h('h1', { class: 'tour-title' }, 'MERCH CASH LOG'),
         bookStrip(id, 'costs', null, null, true),
+        finishLine(id, t),
         dbBanner(),
         cashLogBody(id, t),
         tourTabs(id, 'costs'));
@@ -23471,7 +23477,7 @@
       (function () {
         var dated = c.allShows.filter(function (x) { return G.parseDay(x.date); });
         var over = dated.length && dated[dated.length - 1].date < G.tourToday();
-        return over && canEditTour(id) ? h('div', { class: 'banner' },
+        return over && canEditRole(id) ? h('div', { class: 'banner' },
           h('span', null, 'The run is over \u2014 wrap it up'),
           h('button', { class: 'btn sm quiet', type: 'button',
             onclick: function () {
@@ -30119,7 +30125,7 @@
       merchCash: G.num(s.merchCash),
       merchCardDeposit: s.merchCardDeposit != null ? G.num(s.merchCardDeposit) : null,
       tips: G.merchTips(s),
-      avOff: t.atvenuSync === false,
+      avOff: G.atvenuOff(t),
       noneBy: noneBy, noneStored: { guarantee: noneBy.guarantee, merch: noneBy.merch }, recv: recv };
   }
   function incomePatchFor(s, c, tourId) {
@@ -37088,7 +37094,7 @@
         said ? h('span', { class: 'card-new' + (n ? ' on' : '') }, plural(n, 'new charge')) : null,
         icon('chevron', 18));
     });
-    var avOn = t.atvenuSync !== false;
+    var avOn = !G.atvenuOff(t);
     var avBox = h('input', { type: 'checkbox', class: 'av-switch', id: 'av-sync-' + id, 'aria-label': 'Sync atVenu merch for this tour',
       disabled: canEditTour(id) ? null : true,
       onchange: async function (e) {
@@ -37101,7 +37107,7 @@
     if (!isOffTour(t)) rows.unshift(h('label', { class: 'row card-line av-link', for: 'av-sync-' + id },
       h('img', { class: 'brand-logo', src: 'logo-atvenu.png', alt: '' }),
       h('div', { class: 'row-label' }, 'atVenu',
-        h('span', { class: 'hint' }, avOn ? 'Merch logs itself from the atVenu reports' : 'Off \u2014 merch is typed by hand on this tour')),
+        h('span', { class: 'hint' }, G.tourFinished(t) ? 'Reports are kept until the tour is reopened' : avOn ? 'Merch logs itself from the atVenu reports' : 'Off \u2014 merch is typed by hand on this tour')),
       avBox));
     var rm = receivedFor(id), rmWord = function (m) { return m === 'card' ? 'through card' : 'manually'; };
     if (S.mode === 'db' && !isOffTour(t) && (rm.asked || (createdTour(id) && tourOpen(t)))) {

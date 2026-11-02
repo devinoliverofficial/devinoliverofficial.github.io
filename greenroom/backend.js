@@ -3965,7 +3965,14 @@
     var a = isObj(q.data) ? q.data : {};
     if (!a.ok) return { ok: false, why: String(a.why || '') };
     var doc = cache.tours.get(id);
-    if (doc) { cache.tours.set(id, Object.assign({}, doc, { finish: a.finish })); emit('tours'); }
+    if (doc) {
+      var next = Object.assign({}, doc, { finish: a.finish }), was = isObj(doc.finish) ? doc.finish : {};
+      if (fn === 'finish_tour') next.atvenuSync = false;
+      else if (Object.prototype.hasOwnProperty.call(was, 'atvenu')) next.atvenuSync = was.atvenu;
+      else delete next.atvenuSync;
+      cache.tours.set(id, next);
+      emit('tours');
+    }
     return { ok: true, finish: a.finish };
   }
   function pnlTouched(artistId) {
