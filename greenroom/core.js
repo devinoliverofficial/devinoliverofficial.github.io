@@ -121,17 +121,39 @@
     });
     return sel;
   }
+  var ONE_OFF_SHOW = 'One-off show';
+  function isShowRow(t) {
+    if (!isObj(t)) return false;
+    if (t.kind === 'show') return true;
+    return t.kind == null && num(t.shows) === 1 && !!t.first && String(t.name || '').trim() === showDocName(String(t.first));
+  }
+  function showRowWords(t) {
+    var s = isObj(t) ? t : {}, first = parseDay(s.first) ? String(s.first) : '';
+    var trim = function (v) { return String(v || '').trim(); };
+    var name = trim(s.name), venue = trim(s.venue), city = trim(s.city);
+    var given = name && name !== 'Show' && name !== showDocName(first) ? name : '';
+    var title = given || venue || city || ONE_OFF_SHOW;
+    var where = title === city ? '' : title === venue ? city : (city || venue);
+    return { title: title, line: [title === ONE_OFF_SHOW ? '' : ONE_OFF_SHOW, first ? sumDay(first) : 'No date yet', where].filter(Boolean).join(' · ') };
+  }
   function tourTimeline(own, past, today) {
     var mine = (own || []).filter(isObj), out = [];
     var low = function (v) { return String(v || '').trim().toLowerCase(); };
     mine.forEach(function (t) {
       var a = String(t.first || ''), b = String(t.last || t.first || '');
+      if (isShowRow(t)) {
+        var w = showRowWords(t);
+        out.push({ own: true, show: true, tour: t, name: w.title, line: w.line, artist: t.artist || '', first: a, last: b,
+          n: num(t.shows), now: false });
+        return;
+      }
       out.push({ own: true, tour: t, name: t.name || 'Untitled tour', artist: t.artist || '', first: a, last: b,
         n: num(t.shows), now: !!(a && today && today >= a && today <= b) });
     });
+    var tours = mine.filter(function (t) { return !isShowRow(t); });
     (past || []).filter(isObj).forEach(function (p) {
       var a = String(p.first || ''), b = String(p.last || p.first || '');
-      var dup = p.kind !== 'festival' && p.kind !== 'shows' && !!a && mine.some(function (t) {
+      var dup = p.kind !== 'festival' && p.kind !== 'shows' && !!a && tours.some(function (t) {
         var ta = String(t.first || ''), tb = String(t.last || t.first || '');
         if (!ta) return false;
         if (p.artist && low(p.artist) !== low(t.artist)) return false;
@@ -145,6 +167,13 @@
       if (x.now !== y.now) return x.now ? -1 : 1;
       return String(y.last).localeCompare(String(x.last)) || String(x.name).localeCompare(String(y.name));
     });
+  }
+  function tourTally(list) {
+    var out = { tours: 0, shows: 0 };
+    (list || []).forEach(function (t) {
+      if (isObj(t)) { if (isShowRow(t)) out.shows += 1; else out.tours += 1; }
+    });
+    return out;
   }
   var HISTORY_TIERS = [
     { key: 'diamond', label: 'Diamond', n: 1000 },
@@ -2065,6 +2094,117 @@
     if (day < start) return null;
     var n = daysBetween(day, addDays(d[d.length - 1], 1));
     return n >= 1 ? n : null;
+  }
+  var DAY_KINDS = ['off', 'travel', 'rehearsal'];
+  function keptDayKind(tour, date) {
+    var off = tour && isObj(tour.offDays) && isObj(tour.offDays[date]) ? tour.offDays[date] : null;
+    return off && DAY_KINDS.indexOf(off.kind) >= 0 ? off.kind : null;
+  }
+  function tourDaySpan(tour) {
+    var d = rows(tour && tour.shows).map(function (s) { return s.date; }).filter(parseDay).sort();
+    if (!d.length) return null;
+    var from = d[0], to = d[d.length - 1];
+    if (parseDay(tour.spanStart) && tour.spanStart < from) from = tour.spanStart;
+    if (parseDay(tour.spanEnd) && tour.spanEnd > to) to = tour.spanEnd;
+    if (parseDay(tour.rehearsalStart) && tour.rehearsalStart < from) from = tour.rehearsalStart;
+    Object.keys(isObj(tour.offDays) ? tour.offDays : {}).forEach(function (k) {
+      if (!parseDay(k) || !keptDayKind(tour, k)) return;
+      if (k < from) from = k;
+      if (k > to) to = k;
+    });
+    return { from: from, to: to };
+  }
+  function dayKind(tour, date) {
+    if (!parseDay(date)) return null;
+    var span = tourDaySpan(tour);
+    if (!span || date < span.from || date > span.to) return null;
+    var d = rows(tour.shows).map(function (s) { return s.date; }).filter(parseDay).sort();
+    if (d.indexOf(date) >= 0) return 'show';
+    var kept = keptDayKind(tour, date);
+    if (kept) return kept;
+    if (parseDay(tour.rehearsalStart) && parseDay(tour.rehearsalEnd) && date >= tour.rehearsalStart && date <= tour.rehearsalEnd) return 'rehearsal';
+    return date < d[0] || date > d[d.length - 1] ? 'travel' : 'off';
+  }
+  function dayKindPatch(tour, date, kind) {
+    if (DAY_KINDS.indexOf(kind) < 0 || !isObj(tour) || !parseDay(date)) return null;
+    if (!tourDaySpan(tour)) return null;
+    if (dayKind(tour, date) === 'show' || keptDayKind(tour, date) === kind) return null;
+    var patch = { offDays: {} };
+    patch.offDays[date] = { kind: kind };
+    return patch;
+  }
+  var SHOW_DAYS_REACH = 30;
+  function isShowDoc(t) { return !!(isObj(t) && t.kind === 'show'); }
+  function showDocName(date) { return parseDay(date) ? 'Show \u00b7 ' + sumDay(date, true) : 'Show'; }
+  function showDocDays(date, days) {
+    if (!parseDay(date)) return [];
+    var by = {};
+    (Array.isArray(days) ? days : []).forEach(function (x) {
+      if (!isObj(x) || !parseDay(x.date) || x.date === date || (x.kind !== 'travel' && x.kind !== 'rehearsal')) return;
+      if (Math.abs(daysBetween(date, x.date)) > SHOW_DAYS_REACH) return;
+      by[x.date] = x.kind;
+    });
+    return Object.keys(by).sort().map(function (d) { return { date: d, kind: by[d] }; });
+  }
+  function showDoc(o) {
+    o = isObj(o) ? o : {};
+    if (!parseDay(o.date)) return null;
+    var date = o.date, now = typeof o.now === 'number' ? o.now : Date.now();
+    var shows = {};
+    shows[String(o.showId || 'show')] = { date: date, city: String(o.city || '').trim(), venue: String(o.venue || '').trim(),
+      income: emptyIncome(), loggedAt: null, createdAt: now };
+    var doc = { kind: 'show', name: showDocName(date), artist: String(o.artist || '').trim(), createdAt: now, setupDone: true,
+      setupStep: 5, expenses: emptyExpenses(), commission: emptyCommission(), crew: {}, debts: {}, shows: shows, extras: {},
+      charges: {}, imports: {} };
+    if (o.artistId) doc.artistId = String(o.artistId);
+    var days = showDocDays(date, o.days);
+    if (!days.length) return doc;
+    var kept = {};
+    days.forEach(function (x) { kept[x.date] = x.kind; });
+    var from = days[0].date < date ? days[0].date : date, to = days[days.length - 1].date > date ? days[days.length - 1].date : date;
+    doc.offDays = {};
+    for (var d = from, n = 0; d <= to && n <= 2 * SHOW_DAYS_REACH + 1; d = addDays(d, 1), n += 1) {
+      if (d !== date) doc.offDays[d] = { kind: kept[d] || 'off' };
+    }
+    if (from < date) doc.spanStart = from;
+    if (to > date) doc.spanEnd = to;
+    var firstReh = days.filter(function (x) { return x.kind === 'rehearsal' && x.date < date; })[0];
+    if (firstReh) doc.rehearsalStart = firstReh.date;
+    return doc;
+  }
+  function monthGrid(month) {
+    var m = /^(\d{4})-(\d{2})$/.exec(String(month || ''));
+    if (!m || +m[2] < 1 || +m[2] > 12) return [];
+    var first = m[1] + '-' + m[2] + '-01';
+    var start = addDays(first, -parseDay(first).getDay());
+    var weeks = [];
+    for (var d = start, w = 0; w < 6; w += 1) {
+      var week = [];
+      for (var i = 0; i < 7; i += 1, d = addDays(d, 1)) week.push({ date: d, out: d.slice(0, 7) !== first.slice(0, 7) });
+      weeks.push(week);
+      if (d.slice(0, 7) !== first.slice(0, 7)) break;
+    }
+    return weeks;
+  }
+  function monthStep(month, n) {
+    var m = /^(\d{4})-(\d{2})$/.exec(String(month || ''));
+    if (!m) return '';
+    var k = +m[1] * 12 + (+m[2] - 1) + (n || 0);
+    return Math.floor(k / 12) + '-' + ('0' + (k % 12 + 1)).slice(-2);
+  }
+  function dayMarks(entries, from, to) {
+    var out = {};
+    if (!parseDay(from) || !parseDay(to) || to < from) return out;
+    (Array.isArray(entries) ? entries : []).forEach(function (e) {
+      var span = Array.isArray(e) && isObj(e[1]) ? tourDaySpan(e[1]) : null;
+      if (!span) return;
+      var a = span.from > from ? span.from : from, b = span.to < to ? span.to : to;
+      for (var d = a, n = 0; d <= b && n < 400; d = addDays(d, 1), n += 1) {
+        var k = dayKind(e[1], d);
+        if (k) (out[d] = out[d] || []).push({ id: e[0], kind: k });
+      }
+    });
+    return out;
   }
   function cardWindow(tour) {
     var w = tour && tour.cardLog;
@@ -8201,6 +8341,7 @@
     BAND_ROLES: BAND_ROLES, ARTIST_CREW_ROLES: ARTIST_CREW_ROLES, CREW_ROLES: CREW_ROLES,
     creditGroupName: creditGroupName, creditTally: creditTally, creditClaim: creditClaim,
     creditSelection: creditSelection, tourTimeline: tourTimeline,
+    ONE_OFF_SHOW: ONE_OFF_SHOW, isShowRow: isShowRow, showRowWords: showRowWords, tourTally: tourTally,
     CHARGE_CATEGORIES: CHARGE_CATEGORIES,
     extraCategories: extraCategories, typedCategoriesFor: typedCategoriesFor,
     chargeCategoriesFor: chargeCategoriesFor, slugCategory: slugCategory,
@@ -8235,6 +8376,9 @@
     CASH_MOVES: CASH_MOVES, cashSummary: cashSummary, cashByShow: cashByShow,
     cardPaidDetail: cardPaidDetail, preTourCutoff: preTourCutoff,
     tourStart: tourStart, tourEnd: tourEnd, tourLiveOnGreenroom: tourLiveOnGreenroom, daysLeftOnTour: daysLeftOnTour, cardWindow: cardWindow, cardMoved: cardMoved, cardPaidOff: cardPaidOff,
+    DAY_KINDS: DAY_KINDS, keptDayKind: keptDayKind, tourDaySpan: tourDaySpan, dayKind: dayKind, dayKindPatch: dayKindPatch,
+    SHOW_DAYS_REACH: SHOW_DAYS_REACH, isShowDoc: isShowDoc, showDocName: showDocName, showDocDays: showDocDays, showDoc: showDoc,
+    monthGrid: monthGrid, monthStep: monthStep, dayMarks: dayMarks,
     calc: calc, stateOf: stateOf, caption: caption,
     reimbursementsOf: null,
     balanceSeries: balanceSeries, latestChange: latestChange,

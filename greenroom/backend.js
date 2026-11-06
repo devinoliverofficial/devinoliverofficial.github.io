@@ -60,6 +60,8 @@
   var srKnown = null, srProbing = false;
   var ssKnown = null;
   var ctKnown = null;
+  var readyKnown = null;
+  var readyIdle = '';
   var seatMarks = 2;
   var VH_FRESH = 600e3, VH_RETRY = 60e3;
   var fsCache = Object.create(null), fsAsk = Object.create(null), fsKnown = null, fsProbing = false;
@@ -844,6 +846,23 @@
       if (q.error) throw mapError(q.error);
       return isObj(q.data) ? q.data : { ok: false };
     },
+    takeBackCredit: async function (artistId, nights, key) {
+      var q = await sb.rpc('take_back_credit', { a_id: artistId,
+        nights: Array.isArray(nights) ? nights.map(String).slice(0, 5000) : null, t_key: key ? String(key) : null });
+      if (q.error) { if (fnMissing(q.error)) return { ok: false, why: 'missing' }; throw mapError(q.error); }
+      return isObj(q.data) ? q.data : { ok: false };
+    },
+    myPlayed: async function (artistId) {
+      var q = await sb.rpc('my_played', { a_id: artistId });
+      if (q.error) { if (fnMissing(q.error)) return null; throw mapError(q.error); }
+      return isObj(q.data) ? q.data : null;
+    },
+    setPlayed: async function (artistId, dates, played) {
+      var q = await sb.rpc('set_played', { a_id: artistId,
+        nights: (Array.isArray(dates) ? dates : []).map(String).slice(0, 500), played: !!played });
+      if (q.error) { if (fnMissing(q.error)) return { ok: false, why: 'missing' }; throw mapError(q.error); }
+      return isObj(q.data) ? q.data : { ok: false };
+    },
     squareState: async function () {
       var q = await sb.from('square_connect')
         .select('env, merchant, location_id, location_name, status, detail, last_sync, connected_at')
@@ -976,6 +995,20 @@
       var q = await sb.rpc('my_pay_banks');
       if (q.error) { if (fnMissing(q.error)) return null; throw mapError(q.error); }
       return Array.isArray(q.data) ? q.data : [];
+    },
+    bankGoneNotes: async function () {
+      if (!sb || !session) return [];
+      try {
+        var q = await sgLimit(sb.rpc('my_banks_gone'), 20000);
+        return q.error || !Array.isArray(q.data) ? [] : q.data.filter(isObj);
+      } catch (e) { return []; }
+    },
+    bankGoneSeen: async function (upto) {
+      if (!sb || !session || !upto) return null;
+      try {
+        var q = await sgLimit(sb.rpc('my_banks_gone_seen', { upto: String(upto) }), 20000);
+        return q.error || typeof q.data !== 'number' ? null : q.data;
+      } catch (e) { return null; }
     },
     myPayClaimAccounts: async function (list) {
       var q = await sb.rpc('my_pay_claim_accounts', { ids: list || [] });
@@ -1283,6 +1316,35 @@
       var q = await sb.rpc('answer_unclaimed_join', { a_id: artistId, u_id: userId, keep: !!keep });
       if (q.error) throw mapError(q.error);
       return isObj(q.data) ? q.data : { ok: false };
+    },
+    pageReadyAsk: async function (artistId, made) {
+      var q = await sb.rpc('page_ready_ask', { a_id: artistId, a_new: !!made });
+      if (q.error && fnMissing(q.error)) return null;
+      if (q.error) throw mapError(q.error);
+      if (isObj(q.data) && q.data.ok) readyIdle = '';
+      return isObj(q.data) ? q.data : { ok: false };
+    },
+    readyPages: async function (fresh) {
+      if (fresh) readyIdle = '';
+      if (!sb || !session || readyKnown === false) return [];
+      var me = String((session.user && session.user.id) || '');
+      if (readyIdle && readyIdle === me) return [];
+      var q = await sb.rpc('my_ready_pages');
+      if (q.error) { if (fnMissing(q.error)) { readyKnown = false; return []; } throw mapError(q.error); }
+      readyKnown = true;
+      var d = q.data, list = Array.isArray(d) ? d : isObj(d) && Array.isArray(d.ready) ? d.ready : [];
+      list = list.filter(function (x) { return isObj(x) && x.artistId; });
+      if (!list.length && isObj(d) && Number(d.waiting) === 0) readyIdle = me;
+      return list;
+    },
+    readyPagesSeen: async function (ids) {
+      var list = (Array.isArray(ids) ? ids : []).map(function (x) { return String(x || ''); })
+        .filter(function (x) { return /^[0-9a-f-]{36}$/i.test(x); }).slice(0, 10);
+      if (!list.length) return { ok: true, n: 0 };
+      var q = await sb.rpc('page_ready_seen', { a_ids: list });
+      if (q.error && fnMissing(q.error)) return { ok: false };
+      if (q.error) throw mapError(q.error);
+      return isObj(q.data) ? q.data : { ok: true };
     },
     myInvites: async function () {
       if (!sb || !session) return [];
@@ -1828,6 +1890,13 @@
         return q.error || !isObj(q.data) ? null : q.data;
       } catch (e) { return null; }
     },
+    plaidCost: async function () {
+      if (!sb || !session) return null;
+      try {
+        var q = await sgLimit(sb.rpc('plaid_cost'), 20000);
+        return q.error || !isObj(q.data) ? null : q.data;
+      } catch (e) { return null; }
+    },
     reportSet: async function (id, act) {
       if (!sb || !session) throw err('unavailable');
       var q = await sb.rpc('report_set', { r_id: id, act: String(act || '') });
@@ -2351,6 +2420,9 @@
     },
     pnlSees: function (artistId) {
       return pnlKnown === true && !!artistId && pnlList.some(function (a) { return a.id === artistId; });
+    },
+    pnlBooks: function (artistId) {
+      return pnlKnown === true && !!artistId && pnlList.some(function (a) { return a.id === artistId && a.books === true; });
     },
     placeFolds: function () {
       if (!foldsAsked && session) { foldsAsked = true; loadFolds(); }
@@ -4843,6 +4915,11 @@
     } catch (e) { return null; }
   }
   var PASS_MIN = 8;
+  var PASS_TWICE = 'The two passwords don\u2019t match.';
+  function sgPassAgain(pass, again) {
+    if (!String(again || '')) return 'Type your password again.';
+    return String(pass || '') === String(again) ? '' : PASS_TWICE;
+  }
   function sgPassSay(msg) {
     var n = /at least (\d+)/i.exec(msg);
     if (/weak|easy to guess|pwned|compromised/i.test(msg)) return 'That password is too easy to guess. Pick a different one.';
@@ -5161,17 +5238,27 @@
     draw();
   }
   function sgPass(host, a, nav) {
+    var keys = { autocomplete: 'new-password', autocapitalize: 'none', autocorrect: 'off', spellcheck: 'false' };
+    function read() {
+      a.pass = String(ui.inputs[0].value || '');
+      a.pass2 = String(ui.inputs[1].value || '');
+      ui.ok(0, a.pass.length >= PASS_MIN);
+      ui.ok(1, a.pass.length >= PASS_MIN && !sgPassAgain(a.pass, a.pass2));
+    }
     var ui = sgScreen(host, {
       first: nav.first, onBack: nav.back,
       title: 'Create a password',
       sub: 'At least 8 letters or numbers. Something others can’t guess.',
-      fields: [{ label: 'Password', type: 'password', value: a.pass, attrs: { autocomplete: 'new-password',
-        autocapitalize: 'none', autocorrect: 'off', spellcheck: 'false', enterkeyhint: 'done' } }],
+      fields: [{ label: 'Password', type: 'password', value: a.pass, attrs: Object.assign({ enterkeyhint: 'next' }, keys) },
+        { label: 'Type it again', type: 'password', value: a.pass2 || '', attrs: Object.assign({ enterkeyhint: 'done' }, keys) }],
       next: nav.label,
-      onInput: function (u, inp) { a.pass = String(inp.value || ''); ui.ok(0, a.pass.length >= PASS_MIN); },
+      onInput: function () { read(); },
       onNext: function () {
-        a.pass = String(ui.inputs[0].value || '');
+        read();
         if (a.pass.length < PASS_MIN) { ui.say('Password needs at least ' + PASS_MIN + ' characters.'); ui.inputs[0].focus(); return; }
+        if (!a.pass2 && document.activeElement === ui.inputs[0]) { ui.inputs[1].focus(); return; }
+        var why = sgPassAgain(a.pass, a.pass2);
+        if (why) { ui.say(why); ui.inputs[1].focus(); return; }
         return nav.next(ui);
       }
     });
@@ -5186,7 +5273,7 @@
       who.value = nav.email;
       ui.form.insertBefore(who, ui.form.firstChild);
     }
-    ui.ok(0, a.pass.length >= PASS_MIN);
+    read();
   }
   var LEGAL_SAID = 'I am 18 or older, I agree to the Greenroom Beta Tester Non-Disclosure Agreement and Terms of Use, and I have read the Privacy Policy.';
   var LEGAL_ORDER = ['nda', 'terms', 'privacy'];
@@ -5594,6 +5681,12 @@
       if (how === 'agreed') { refetchTries = 0; scheduleRefetch(); }
     } catch (e2) {   } finally { legalWaking = false; }
   }
+  var APP_STORE_URL = 'https://apps.apple.com/app/id6824688968';
+  function getAppHtml() {
+    var inShell = !!(window.Capacitor && typeof window.Capacitor.isNativePlatform === 'function' && window.Capacitor.isNativePlatform());
+    if (inShell) return '';
+    return '<a class="btn block gate-getapp" id="gr-gate-getapp" href="' + APP_STORE_URL + '" target="_blank" rel="noopener">Get the app</a>';
+  }
   function gate(note, code) {
     if (typeof window.GR_AT_GATE === 'function') { try { window.GR_AT_GATE(); } catch (e) {   } }
     var mode = code ? 'code' : 'signin';
@@ -5601,7 +5694,7 @@
     wrap.id = 'gr-gate';
     document.body.appendChild(wrap);
     var a = { code: code || '', codeOk: '', legalOk: '', legalFree: false, kinds: [], codeEmail: '', first: '', last: '', handle: '', handleMine: false,
-      month: 0, day: 0, dayPicked: 0, year: 0, birth: '', email: '', pass: '', made: '', madePass: '', sentAt: 0,
+      month: 0, day: 0, dayPicked: 0, year: 0, birth: '', email: '', pass: '', pass2: '', made: '', madePass: '', sentAt: 0,
       tried: '', triedPass: '' };
     var signinEmail = '';
     function toSignin(email) {
@@ -5936,12 +6029,16 @@
           rolePickerHtml('gr-gate-role', '')) +
         '<input class="input" type="password" id="gr-gate-pass" placeholder="Password" ' +
           'autocomplete="' + (signin ? 'current-password' : 'new-password') + '" aria-label="Password">' +
+        (signin ? '' :
+          '<input class="input" type="password" id="gr-gate-pass2" placeholder="Type it again" ' +
+            'autocomplete="new-password" aria-label="Type the password again">') +
         '<div class="gate-err" id="gr-gate-err" role="alert"></div>' +
         '<button class="btn primary block" type="submit">' +
           (signin ? 'Sign in' : 'Create account') + '</button>' +
         '</form>' +
         '<button class="linkbtn quiet" id="gr-gate-forgot" type="button">Forgot password?</button>' +
         '<button class="linkbtn quiet" id="gr-gate-code-link" type="button">I have a code</button>' +
+        getAppHtml() +
         '<p class="gate-note">Greenroom is invite-only. You need a code to make an account.</p>' +
         '</div>';
       var form = wrap.querySelector('#gr-gate-form');
@@ -5989,6 +6086,9 @@
         if (roleI && !tourRole) { errEl.textContent = 'Pick your role on the tour.'; wrap.querySelector('#gr-gate-role-btn').focus(); return; }
         if (email.indexOf('@') < 1) { errEl.textContent = 'Type your email address.'; emailI.focus(); return; }
         if (pass.length < (signin ? 1 : PASS_MIN)) { errEl.textContent = signin ? 'Type your password.' : 'Password needs at least ' + PASS_MIN + ' characters.'; passI.focus(); return; }
+        var pass2I = wrap.querySelector('#gr-gate-pass2');
+        var twice = pass2I ? sgPassAgain(pass, pass2I.value) : '';
+        if (twice) { errEl.textContent = twice; pass2I.focus(); return; }
         btn.disabled = true;
         try {
           var res = signin
@@ -6122,7 +6222,7 @@
     var a = { first: String(m0.first_name || typed.split(/\s+/)[0] || '').trim(),
       last: String(m0.last_name || typed.split(/\s+/).slice(1).join(' ') || '').trim(),
       role: roleName(m0.tour_role), phone: String(m0.phone || '').trim(), phoneSkipped: false,
-      handle: '', handleMine: false, month: 0, day: 0, year: 0, birth: '', pass: '' };
+      handle: '', handleMine: false, month: 0, day: 0, year: 0, birth: '', pass: '', pass2: '' };
     var steps = [];
     if (!a.first || !a.last) steps.push(askName);
     if (!m0.tour_role) steps.push(askRole);
@@ -6273,6 +6373,8 @@
       '<form id="gr-pass-form" novalidate>' +
       '<input class="input" type="password" id="gr-pass-new" placeholder="New password" ' +
         'autocomplete="new-password" aria-label="New password">' +
+      '<input class="input" type="password" id="gr-pass-again" placeholder="Type it again" ' +
+        'autocomplete="new-password" aria-label="Type the new password again">' +
       '<div class="gate-err" id="gr-pass-err" role="alert"></div>' +
       '<button class="btn primary block" type="submit">Save</button>' +
       '</form>' +
@@ -6282,11 +6384,14 @@
     if (!must) wrap.querySelector('#gr-pass-keep').addEventListener('click', function () { wrap.remove(); });
     var form = wrap.querySelector('#gr-pass-form');
     var passI = wrap.querySelector('#gr-pass-new');
+    var againI = wrap.querySelector('#gr-pass-again');
     var errEl = wrap.querySelector('#gr-pass-err');
     form.addEventListener('submit', async function (e) {
       e.preventDefault();
       var pass = String(passI.value || '');
       if (pass.length < PASS_MIN) { errEl.textContent = 'Password needs at least ' + PASS_MIN + ' characters.'; passI.focus(); return; }
+      var twice = sgPassAgain(pass, againI.value);
+      if (twice) { errEl.textContent = twice; againI.focus(); return; }
       form.querySelector('button').disabled = true;
       try {
         var q = await sb.auth.updateUser({ password: pass });
