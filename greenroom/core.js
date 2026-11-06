@@ -2192,6 +2192,47 @@
     var k = +m[1] * 12 + (+m[2] - 1) + (n || 0);
     return Math.floor(k / 12) + '-' + ('0' + (k % 12 + 1)).slice(-2);
   }
+  function monthShape(month) {
+    var m = /^(\d{4})-(\d{2})$/.exec(String(month || ''));
+    if (!m || +m[2] < 1 || +m[2] > 12) return null;
+    var lead = parseDay(month + '-01').getDay(), days = +addDays(monthStep(month, 1) + '-01', -1).slice(8);
+    return { month: month, lead: lead, days: days, weeks: Math.ceil((lead + days) / 7) };
+  }
+  function monthStack(from, n, row, lab) {
+    var out = [], top = 0;
+    for (var i = 0, m = from; i < (n || 0); i += 1, m = monthStep(m, 1)) {
+      var s = monthShape(m);
+      if (!s) break;
+      s.top = top; s.height = lab + s.weeks * row; top += s.height;
+      out.push(s);
+    }
+    return out;
+  }
+  function monthAt(stack, y) {
+    if (!Array.isArray(stack) || !stack.length) return -1;
+    var lo = 0, hi = stack.length - 1;
+    while (lo < hi) {
+      var mid = (lo + hi + 1) >> 1;
+      if (stack[mid].top <= y) lo = mid; else hi = mid - 1;
+    }
+    return lo;
+  }
+  function monthsInView(stack, top, height, pad) {
+    var a = monthAt(stack, top - (pad || 0)), b = monthAt(stack, top + height + (pad || 0));
+    return a < 0 ? { from: 0, to: -1 } : { from: a, to: b };
+  }
+  function monthDayTop(stack, date, row, lab) {
+    var d = parseDay(date);
+    if (!d || !Array.isArray(stack)) return null;
+    var month = String(date).slice(0, 7), s = stack.filter(function (x) { return x && x.month === month; })[0];
+    return s ? s.top + lab + Math.floor((s.lead + d.getDate() - 1) / 7) * row : null;
+  }
+  function monthTitle(month, today) {
+    var s = monthShape(month);
+    if (!s) return '';
+    return HOME_MONTHS[+month.slice(5) - 1] + (month.slice(0, 4) === String(today || '').slice(0, 4) ? '' : ' ' + month.slice(0, 4));
+  }
+  function monthShort(month) { return monthShape(month) ? HOME_MONTHS[+month.slice(5) - 1].slice(0, 3) : ''; }
   function dayMarks(entries, from, to) {
     var out = {};
     if (!parseDay(from) || !parseDay(to) || to < from) return out;
@@ -8379,6 +8420,7 @@
     DAY_KINDS: DAY_KINDS, keptDayKind: keptDayKind, tourDaySpan: tourDaySpan, dayKind: dayKind, dayKindPatch: dayKindPatch,
     SHOW_DAYS_REACH: SHOW_DAYS_REACH, isShowDoc: isShowDoc, showDocName: showDocName, showDocDays: showDocDays, showDoc: showDoc,
     monthGrid: monthGrid, monthStep: monthStep, dayMarks: dayMarks,
+    monthShape: monthShape, monthStack: monthStack, monthAt: monthAt, monthsInView: monthsInView, monthDayTop: monthDayTop, monthTitle: monthTitle, monthShort: monthShort,
     calc: calc, stateOf: stateOf, caption: caption,
     reimbursementsOf: null,
     balanceSeries: balanceSeries, latestChange: latestChange,
