@@ -2172,6 +2172,44 @@
     if (firstReh) doc.rehearsalStart = firstReh.date;
     return doc;
   }
+  function showDocLogged(t) {
+    var off = isObj(t) && isObj(t.offDays) ? t.offDays : {};
+    return Object.keys(off).sort().map(function (d) { return { date: d, kind: keptDayKind(t, d) }; })
+      .filter(function (x) { return x.kind === 'travel' || x.kind === 'rehearsal'; });
+  }
+  function showDaysPatch(t, days, date) {
+    var s = rows(isObj(t) ? t.shows : null)[0];
+    if (!s || !parseDay(s.date)) return null;
+    var on = parseDay(date) ? date : s.date;
+    var base = showDoc({ date: s.date, days: showDocLogged(t) }), made = showDoc({ date: on, days: days });
+    var was = base.offDays || {}, want = made.offDays || {}, had = isObj(t.offDays) ? t.offDays : {};
+    var listed = {};
+    showDocDays(on, days).forEach(function (x) { listed[x.date] = true; });
+    var theirs = function (d) {
+      return (parseDay(t.spanStart) && t.spanStart !== (base.spanStart || null) && d >= t.spanStart && d < on) ||
+        (parseDay(t.spanEnd) && t.spanEnd !== (base.spanEnd || null) && d > on && d <= t.spanEnd) ||
+        (parseDay(t.rehearsalStart) && parseDay(t.rehearsalEnd) && d >= t.rehearsalStart && d <= t.rehearsalEnd);
+    };
+    var patch = {}, off = {};
+    Object.keys(was).concat(Object.keys(want)).sort().forEach(function (d, i, all) {
+      if (all[i - 1] === d) return;
+      var b = was[d] ? was[d].kind : null, m = want[d] ? want[d].kind : null, k = keptDayKind(t, d);
+      if (b === m || k === m) return;
+      if (!m) {
+        if (k && k === b && Object.keys(had[d]).every(function (x) { return x === 'kind'; })) off[d] = null;
+      } else if (listed[d] || (k ? k === b : !theirs(d))) off[d] = { kind: m };
+    });
+    if (Object.keys(off).length) patch.offDays = off;
+    ['spanStart', 'spanEnd'].forEach(function (key) {
+      var b = base[key] || null, m = made[key] || null, cur = t[key] || null;
+      if (b === m) return;
+      if (cur === b) patch[key] = m;
+      else if (m && (key === 'spanStart' ? m < (parseDay(cur) ? cur : on) : m > (parseDay(cur) ? cur : on))) patch[key] = m;
+    });
+    var r = made.rehearsalStart || null;
+    if ((base.rehearsalStart || null) !== r && (t.rehearsalStart || null) === (base.rehearsalStart || null) && !parseDay(t.rehearsalEnd)) patch.rehearsalStart = r;
+    return patch;
+  }
   function monthGrid(month) {
     var m = /^(\d{4})-(\d{2})$/.exec(String(month || ''));
     if (!m || +m[2] < 1 || +m[2] > 12) return [];
@@ -8418,7 +8456,7 @@
     cardPaidDetail: cardPaidDetail, preTourCutoff: preTourCutoff,
     tourStart: tourStart, tourEnd: tourEnd, tourLiveOnGreenroom: tourLiveOnGreenroom, daysLeftOnTour: daysLeftOnTour, cardWindow: cardWindow, cardMoved: cardMoved, cardPaidOff: cardPaidOff,
     DAY_KINDS: DAY_KINDS, keptDayKind: keptDayKind, tourDaySpan: tourDaySpan, dayKind: dayKind, dayKindPatch: dayKindPatch,
-    SHOW_DAYS_REACH: SHOW_DAYS_REACH, isShowDoc: isShowDoc, showDocName: showDocName, showDocDays: showDocDays, showDoc: showDoc,
+    SHOW_DAYS_REACH: SHOW_DAYS_REACH, isShowDoc: isShowDoc, showDocName: showDocName, showDocDays: showDocDays, showDoc: showDoc, showDocLogged: showDocLogged, showDaysPatch: showDaysPatch,
     monthGrid: monthGrid, monthStep: monthStep, dayMarks: dayMarks,
     monthShape: monthShape, monthStack: monthStack, monthAt: monthAt, monthsInView: monthsInView, monthDayTop: monthDayTop, monthTitle: monthTitle, monthShort: monthShort,
     calc: calc, stateOf: stateOf, caption: caption,
