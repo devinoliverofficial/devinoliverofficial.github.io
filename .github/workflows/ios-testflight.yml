@@ -51,7 +51,7 @@ jobs:
     runs-on: macos-26
     timeout-minutes: 60
     env:
-      MARKETING_VERSION: "1.1.0"
+      MARKETING_VERSION: "1.2.0"
       # The lock-screen day bar's server pushes (Devin, Oct 22: "turn on the bar pushes"): 1 = the app carries Apple's
       # push permission and the signing step switches Push Notifications on for the app's bundle ID (ios-app/README.md,
       # "The day bar's pushes"). It comes from the GitHub variable DAYBAR_PUSH (set to 1 on Oct 22); unset is 0.
