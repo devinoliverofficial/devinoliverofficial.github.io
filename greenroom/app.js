@@ -129,6 +129,7 @@
     tabguest: '<circle cx="9" cy="8" r="3.4"/><path d="M3.5 20c.6-3.4 2.9-5.2 5.5-5.2s4.9 1.8 5.5 5.2"/><path d="M17 9h5M19.5 6.5v5"/>',
     tabcost: '<path d="M4 20V10M10 20V5M16 20v-7M22 20H2"/>',
     tabstats: '<path d="M8 4h8v5a4 4 0 0 1-8 0V4z"/><path d="M8 6H5.5a2.5 2.5 0 0 0 2.6 3.6M16 6h2.5a2.5 2.5 0 0 1-2.6 3.6M12 13v4M8.5 20.5h7M10 17h4"/>',
+    tabteam: '<circle cx="9" cy="8" r="3.4"/><path d="M3 20c0-3.3 2.7-6 6-6s6 2.7 6 6"/><circle cx="17" cy="9" r="2.6"/><path d="M16.5 14.1c2.6.4 4.5 2.8 4.5 5.9"/>',
     tabchat: '<path d="M21 11.5c0 3.6-4 6.5-9 6.5-1.1 0-2.1-.13-3-.37L4 20l1.5-3.4C4.1 15.4 3 13.6 3 11.5 3 7.9 7 5 12 5s9 2.9 9 6.5z"/>',
     bell: '<path d="M18 16v-5a6 6 0 1 0-12 0v5l-2 3h16l-2-3z"/><path d="M10.5 21a2.2 2.2 0 0 0 3 0"/>',
     search: '<circle cx="11" cy="11" r="6.5"/><path d="m16 16 4.5 4.5"/>',
@@ -6282,7 +6283,7 @@
       if (!ok(m)) return;
       var roles = m.role ? [rolesShort(m.role)] : personRoles(m);
       var sub = roles.slice(0, 2).join(' · ');
-      var row = { userId: m.userId, name: m.name || 'Someone', avatar: m.avatar || '', sub: sub, role: sub || (m.kind === 'crew' ? 'Crew' : 'Member') };
+      var row = { userId: m.userId, name: m.name || 'Someone', avatar: m.avatar || '', sub: sub };
       (m.kind === 'crew' ? out.crew : m.kind === 'band' ? out.members : []).push(row);
     });
     var inv = teamPeopleOf(id) || (todosOn() && B.todoInvites ? B.todoInvites(id) : null);
@@ -6293,9 +6294,7 @@
       inv.forEach(function (v) {
         if (seen[v.userId]) return;
         var lines = G.teamRowWords(v);
-        var title = String(v.title || v.role || '').trim();
         out.team.push({ userId: v.userId, name: v.name || 'Someone', avatar: v.avatar || '', sub: lines[0] || '', sub2: lines[1] || '',
-          role: (title || 'Team') + (v.waiting ? ' \u00b7 Waiting' : ''),
           title: v.title || v.role || '', level: v.level || 'todo', yes: v.yes || 'todo', waiting: !!v.waiting });
       });
     }
@@ -6304,10 +6303,6 @@
   function homePeopleNodes(p, o) {
     o = o || {};
     var group = function (title, list, none, open) {
-      if (o.page) return list.length ? [h('h4', { class: 'td-cat cs-h' }, title), h('div', { class: 'ledger crew-list hm-people cs-people' }, list.map(function (x) {
-        return h('div', { class: 'row crew-row' }, h('div', { class: 'row-label crew-label' }, personPhoto(x, 'xs crew-face'),
-          h('div', { class: 'crew-who' }, h('span', { class: 'crew-name' }, x.name), h('span', { class: 'hint crew-sub cs-role' }, x.role))));
-      }))] : null;
       if (!list.length && !none) return null;
       return [h('h4', { class: 'td-cat' }, title + (list.length ? ' · ' + list.length : '')),
         list.length ? h('div', { class: 'ledger crew-list hm-people' }, list.map(function (x) {
@@ -6863,9 +6858,25 @@
       var p = homePeople(a.id);
       return h('section', { class: 'hm-stat' }, h('h3', { class: 'ds-sec-h hm-stat-h' }, acting ? a.name
         : h('button', { class: 'hm-stat-open', type: 'button', 'aria-label': 'Open ' + a.name + ': its team, tours and books',
-          onclick: function () { openHomeArtist(a.id, a.name); } }, h('span', null, a.name), icon('chevron', 16))), homePeopleNodes(p, { page: true }));
+          onclick: function () { openHomeArtist(a.id, a.name); } }, h('span', null, a.name), icon('chevron', 16))), teamArtistRows(p));
     }) : emptyState('No artists yet');
-    return offHomePage('Crew Stats', 'stats', body, 'fw-page hm-page');
+    return offHomePage('Team', 'stats', body, 'fw-page hm-page team-page');
+  }
+  function teamArtistRows(p) {
+    if (!p.loaded) return h('p', { class: 'note' }, p.failed ? 'Couldn\u2019t load this. Check your signal and try again.' : 'Loading\u2026');
+    var rows = [];
+    var add = function (list, access) {
+      list.forEach(function (x) {
+        var y = { userId: x.userId, name: x.name, avatar: x.avatar, role: access === 'Team' ? x.title || '' : x.sub || '',
+          access: access + (x.waiting ? ' \u00b7 Waiting' : '') };
+        rows.push(teamRow(y, x.userId ? function () {
+          openTeamCard({ uid: x.userId, name: y.name, avatar: y.avatar, role: y.role, access: y.access,
+            mine: !!(window.GR_BACKEND && window.GR_BACKEND.uid && window.GR_BACKEND.uid() === x.userId), loadStats: teamCardStats(x.userId) });
+        } : null));
+      });
+    };
+    add(p.members, 'Member'); add(p.team, 'Team'); add(p.crew, 'Crew');
+    return rows.length ? teamList(rows) : null;
   }
   var SPOT_KINDS = [['food', 'Food'], ['coffee', 'Coffee'], ['bar', 'Bar'],
     ['club', 'Club'], ['to do', 'To do'], ['other', 'Other']];
@@ -18157,7 +18168,7 @@
           h('span', { class: 'wordmark-full', role: 'img', 'aria-label': 'Greenroom' }), h('span', { class: 'band-brand-t' }, 'Chat'))),
         dbBanner(), emptyState(NO_TOUR, 'The tour’s chat opens once a tour is on the calendar.'), bar);
     }
-    if (view === 'stats') return page('Crew Stats', '');
+    if (view === 'stats') return page('Team', '');
     if (view === 'day') return page('Day Sheet', 'Each day of a tour gets its own day sheet here once a tour has dates.');
     if (view === 'guests') return page('Guest List', 'Each night gets its own guest list here once a tour has dates.');
     return page('Off Tour', artistSide() ? 'Create a tour and give it dates, and it shows up here: its name, its first show and how far off that is.'
@@ -24370,7 +24381,7 @@
     { view: 'day', label: 'Day sheet', icon: 'tabsheet' },
     { view: 'costs', label: 'Expenses', icon: 'tabcost' },
     { view: 'guests', label: 'Guest list', icon: 'tabguest' },
-    { view: 'stats', label: 'Crew Stats', icon: 'tabstats' },
+    { view: 'stats', label: 'Team', icon: 'tabteam' },
     { view: 'chat', label: 'Chat', icon: 'tabchat' }
   ];
   var BOOK_TABS = ['costs', 'cards', 'money', 'mypay'];
@@ -28399,33 +28410,6 @@
     var tier = st ? G.historyTier(st) : null;
     return tier ? h('span', { class: 'hist-tier sm tier-' + tier.key, title: plural(G.num(st.shows), 'show') + ' on the road' }, tier.label) : null;
   }
-  function flowerCard(id, p, me, data) {
-    var mine = p.userId === me;
-    var open = !!(S.fwOpen && S.fwOpen[p.userId]);
-    var toggle = function () { S.fwOpen = S.fwOpen || {}; S.fwOpen[p.userId] = !open; render(true); };
-    return h('li', { class: 'fw-card' + (mine ? ' me' : '') + (open ? ' open' : '') },
-      h('div', { class: 'fw-main' },
-        h('button', { class: 'fw-face', type: 'button', 'aria-label': mine ? 'Your profile' : 'Open ' + fwName(p) + '’s profile',
-          onclick: function () { openProfile(p.userId); } }, personPhoto(p, 'fw-photo')),
-        h('div', { class: 'fw-side' },
-          h('button', { class: 'fw-name fw-name-btn', type: 'button', 'aria-expanded': open ? 'true' : 'false',
-            'aria-label': (open ? 'Hide' : 'Show') + ' the flowers ' + (mine ? 'you were' : fwName(p) + ' was') + ' given', onclick: toggle },
-            h('span', { class: 'fw-name-t' }, fwName(p)),
-            personChecked(p.verified, (roadTiers(id).by || {})[p.userId], p.counts && p.counts.endorsements) ? verifiedBadge('sm') : null,
-            mine ? h('span', { class: 'fw-you' }, 'You') : null,
-            h('span', { class: 'fw-chev', 'aria-hidden': 'true' }, icon('chevron', 14))),
-          roadPill(id, p.userId) ? h('div', { class: 'fw-tier' }, roadPill(id, p.userId)) : null,
-          p.tourRole ? h('p', { class: 'fw-role' }, p.tourRole) : null,
-          fwStats(p.here, p.counts)),
-        !data.canGive ? null : mine
-          ? h('span', { class: 'fw-left sm', 'aria-label': Math.max(0, data.left) + ' of ' + FLOWERS_EACH + ' flowers left to give this year' },
-              Math.max(0, data.left) + ' left ', h('span', { 'aria-hidden': 'true' }, FLOWER))
-          : h('button', { class: 'fw-give sm', type: 'button', disabled: data.left <= 0,
-          'aria-label': data.left > 0 ? 'Give flowers to ' + fwName(p) : 'All ' + FLOWERS_EACH + ' flowers given',
-          onclick: function () { openGiveFlowers(id, p, data.left); } },
-          data.left > 0 ? ['Give ', h('span', { 'aria-hidden': 'true' }, FLOWER)] : 'All given')),
-      open ? fwGiven(p, me, data) : null);
-  }
   function fwGiven(p, me, data) {
     var by = {};
     data.people.forEach(function (x) { by[x.userId] = x; });
@@ -28708,14 +28692,136 @@
       ? emptyState('Flowers are for a signed-in tour', 'Once everyone’s signed in, each of you gets ' + FLOWERS_EACH + ' to give.')
       : !data ? fwLoading('Picking the flowers…')
       : data.error ? fwFailed(function () { B.flowersFor(id, true); })
-      : [h('ul', { class: 'fw-list' }, data.people.slice()
-           .sort(function (a, b) { return (b.userId === me ? 1 : 0) - (a.userId === me ? 1 : 0); })
-           .map(function (p) { return flowerCard(id, p, me, data); }))];
-    return h('div', { class: 'page tour has-tabs fw-page' },
-      tourBar(id, 'Crew Stats'),
+      : teamList(teamTourRows(id, data, me));
+    return h('div', { class: 'page tour has-tabs fw-page team-page' },
+      tourBar(id, 'Team'),
       dbBanner(),
       body,
       tourTabs(id, 'stats'));
+  }
+  function teamTourRows(id, data, me) {
+    var by = {};
+    data.people.forEach(function (p) { if (p && p.userId) by[p.userId] = p; });
+    var crew = crewRowsShown(id), held = S.crewCache && S.crewCache[id];
+    if ((!held || Date.now() - held.at > 60e3) && S.mode === 'db' && crewAskDue(id)) crewAskOnce(id, 1).catch(function () {   });
+    var tiers = roadTiers(id).by || {};
+    var list = (crew || data.people.map(function (p) { return { userId: p.userId, name: fwName(p), joined: true, tourRole: p.tourRole, fromFlowers: true }; }))
+      .slice().sort(function (a, b) { return (b.userId && b.userId === me ? 1 : 0) - (a.userId && a.userId === me ? 1 : 0); });
+    return list.map(function (m) {
+      var p = m.userId ? by[m.userId] : null, pending = !m.joined;
+      var name = p ? fwName(p) : (m.name || m.username || m.email || 'Someone');
+      var access = m.fromFlowers ? '' : m.owner ? 'Creator' : (m.manager || m.role === 'editor') ? 'Manager' : 'Crew';
+      var checked = !!p && personChecked(p.verified, tiers[p.userId], p.counts && p.counts.endorsements);
+      var x = { userId: m.userId, name: name, avatar: (p && p.avatar) || '', checked: checked, role: m.tourRole || (p && p.tourRole) || '',
+        access: access, pending: pending };
+      return teamRow(x, pending || !m.userId ? null : p ? function () { openTeamCard(teamTourCard(id, p, x, me, data)); }
+        : function () { openTeamCard({ uid: m.userId, name: x.name, avatar: x.avatar, role: x.role, access: x.access, mine: m.userId === me, loadStats: teamCardStats(m.userId) }); });
+    });
+  }
+  function teamTourCard(id, p, x, me, data) {
+    var mine = p.userId === me;
+    return { uid: p.userId, name: x.name, avatar: x.avatar, checked: x.checked, role: x.role, access: x.access, mine: mine,
+      tier: roadPill(id, p.userId), stats: fwStats(p.here, p.counts),
+      give: !data.canGive ? null : mine ? { left: Math.max(0, data.left) }
+        : { left: data.left, go: function () { closeSheet(true); openGiveFlowers(id, p, data.left); } },
+      given: fwGiven(p, me, data) };
+  }
+  function teamRow(x, tap) {
+    var who = h('div', { class: 'row-label crew-label' }, personPhoto(x, 'xs crew-face'),
+      h('div', { class: 'crew-who' },
+        h('span', { class: 'crew-name' }, x.name, x.checked ? verifiedBadge('sm') : null),
+        x.access || x.pending ? h('span', { class: 'hint crew-sub' }, x.access,
+          x.pending ? h('span', { class: 'pending' }, (x.access ? ' \u00b7 ' : '') + 'Pending') : null) : null));
+    var side = h('div', { class: 'crew-side' },
+      h('span', { class: 'role-slot' }, h('span', { class: 'role-box' }, x.role ? h('span', { class: 'role-tag aa' }, x.role) : null)),
+      h('span', { class: 'crew-contact' }, h('span', { class: 'team-chev', 'aria-hidden': 'true' }, tap ? icon('chevron', 16) : null)));
+    return tap ? h('button', { class: 'row rowbtn crew-row team-row', type: 'button', onclick: tap }, who, side)
+      : h('div', { class: 'row crew-row team-row' }, who, side);
+  }
+  function teamList(rows) {
+    var list = h('div', { class: 'ledger crew-list crew-sym team-list' }, rows);
+    requestAnimationFrame(function () { if (list.isConnected) sizeTeamList(list); });
+    return list;
+  }
+  function sizeTeamList(list) {
+    var rowsEl = list.querySelectorAll('.crew-row');
+    if (!rowsEl.length) return;
+    var first = rowsEl[0], cs = getComputedStyle(first);
+    var content = first.clientWidth - parseFloat(cs.paddingLeft) - parseFloat(cs.paddingRight), widest = 0;
+    Array.prototype.forEach.call(rowsEl, function (r) {
+      var who = r.querySelector('.crew-who'), pic = r.querySelector('.crew-face');
+      var extra = pic ? pic.getBoundingClientRect().width + 8 : 0;
+      Array.prototype.forEach.call(who ? who.childNodes : [], function (n) {
+        var rg = document.createRange();
+        rg.selectNodeContents(n);
+        widest = Math.max(widest, rg.getBoundingClientRect().width + extra);
+      });
+    });
+    var room = content - 16 - 2 * 8 - 72;
+    if (!(room > 60)) return;
+    list.style.setProperty('--team-name-w', Math.ceil(Math.min(widest + 2, room)) + 'px');
+    list.classList.add('sized');
+  }
+  function openTeamCard(o) {
+    var statsBox = h('div', { class: 'tc-stats' }, o.stats || h('p', { class: 'note' }, 'Loading\u2026'));
+    var contactBox = o.mine ? null : h('div', { class: 'tc-contact' }, h('p', { class: 'note' }, 'Loading\u2026'));
+    var give = o.give;
+    openSheet(function () {
+      return [
+        h('div', { class: 'tc-head' }, personPhoto(o, 'tc-photo'),
+          h('h2', { class: 'tc-name' }, o.name, o.checked ? verifiedBadge('sm') : null),
+          o.tier || null,
+          o.role || o.access ? h('p', { class: 'tc-role' }, o.role ? h('span', { class: 'tc-r' }, o.role) : null,
+            o.role && o.access ? ' \u00b7 ' : null, o.access || null) : null),
+        statsBox,
+        contactBox,
+        !give ? null : give.go
+          ? h('button', { class: 'btn primary block tc-give', type: 'button', disabled: give.left <= 0, onclick: give.go },
+              give.left > 0 ? ['Give flowers ', h('span', { 'aria-hidden': 'true' }, FLOWER)] : 'All ' + FLOWERS_EACH + ' flowers given')
+          : h('p', { class: 'note tc-left' }, plural(give.left, 'flower') + ' left to give this year'),
+        o.given ? [h('h3', { class: 'tc-h' }, 'Flowers'), o.given] : null,
+        o.uid ? h('div', { class: 'stack tc-acts' }, h('button', { class: 'btn ghost block', type: 'button',
+          onclick: function () { closeSheet(true); openProfile(o.uid); } }, o.mine ? 'Your profile' : 'View profile')) : null
+      ];
+    }, { label: o.name + '\u2019s card', cls: 'tc-sheet' });
+    if (contactBox) teamContact(o.uid, contactBox);
+    if (!o.stats && o.loadStats) o.loadStats(function (node) { if (statsBox.isConnected) fillTo(statsBox, node); });
+  }
+  function teamContact(uid, box) {
+    var B = window.GR_BACKEND;
+    if (!B || !B.contactOf || !uid) { fillTo(box, h('p', { class: 'note' }, 'No phone or email to show.')); return; }
+    B.contactOf(uid).then(function (c) {
+      c = c || {};
+      var tel = String(c.phone || '').replace(/[^0-9+]/g, ''), mail = String(c.email || '').trim();
+      if (!box.isConnected) return;
+      fillTo(box, !tel && !mail ? h('p', { class: 'note' }, 'No phone or email to show.') : h('div', { class: 'ct-rows' },
+        tel ? h('div', { class: 'ct-row' },
+          h('span', { class: 'ct-main' }, h('span', { class: 'ct-k' }, 'Phone'), h('span', { class: 'ct-v num' }, c.phone)),
+          h('a', { class: 'ct-act', href: 'tel:' + tel }, icon('phone', 17), 'Call'),
+          h('a', { class: 'ct-act', href: 'sms:' + tel }, icon('mail', 17), 'Text')) : null,
+        mail ? h('div', { class: 'ct-row' },
+          h('span', { class: 'ct-main' }, h('span', { class: 'ct-k' }, 'Email'), h('span', { class: 'ct-v' }, mail)),
+          h('a', { class: 'ct-act', href: 'mailto:' + mail }, icon('mail', 17), 'Email')) : null));
+    }).catch(function () {
+      if (box.isConnected) fillTo(box, h('p', { class: 'note' }, 'Couldn\u2019t load their phone and email. Check your signal and try again.'));
+    });
+  }
+  function teamCardStats(uid) {
+    return function (fill) {
+      var c = cardOf(uid), n = 0;
+      var done = function () {
+        var k = c.card;
+        fill(k ? fwStats(k.flowers || 0, { endorsements: k.endorsements || 0, tours: G.tourTally(Array.isArray(k.tours) ? k.tours : []).tours })
+          : h('p', { class: 'note' }, c.gone ? 'No numbers to show.' : 'Couldn\u2019t load their numbers. Check your signal and try again.'));
+      };
+      if (c.card || c.gone) { done(); return; }
+      var tick = function () {
+        if (!sheet) return;
+        if (c.card || c.gone || (c.failed && !c.asking) || ++n > 50) { done(); return; }
+        setTimeout(tick, 300);
+      };
+      setTimeout(tick, 300);
+    };
   }
   function calendarRows(id, t, o) {
     o = o || {};
