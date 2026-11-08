@@ -6282,7 +6282,7 @@
       if (!ok(m)) return;
       var roles = m.role ? [rolesShort(m.role)] : personRoles(m);
       var sub = roles.slice(0, 2).join(' · ');
-      var row = { userId: m.userId, name: m.name || 'Someone', avatar: m.avatar || '', sub: sub };
+      var row = { userId: m.userId, name: m.name || 'Someone', avatar: m.avatar || '', sub: sub, role: sub || (m.kind === 'crew' ? 'Crew' : 'Member') };
       (m.kind === 'crew' ? out.crew : m.kind === 'band' ? out.members : []).push(row);
     });
     var inv = teamPeopleOf(id) || (todosOn() && B.todoInvites ? B.todoInvites(id) : null);
@@ -6293,7 +6293,9 @@
       inv.forEach(function (v) {
         if (seen[v.userId]) return;
         var lines = G.teamRowWords(v);
+        var title = String(v.title || v.role || '').trim();
         out.team.push({ userId: v.userId, name: v.name || 'Someone', avatar: v.avatar || '', sub: lines[0] || '', sub2: lines[1] || '',
+          role: (title || 'Team') + (v.waiting ? ' \u00b7 Waiting' : ''),
           title: v.title || v.role || '', level: v.level || 'todo', yes: v.yes || 'todo', waiting: !!v.waiting });
       });
     }
@@ -6302,6 +6304,10 @@
   function homePeopleNodes(p, o) {
     o = o || {};
     var group = function (title, list, none, open) {
+      if (o.page) return list.length ? [h('h4', { class: 'td-cat cs-h' }, title), h('div', { class: 'ledger crew-list hm-people cs-people' }, list.map(function (x) {
+        return h('div', { class: 'row crew-row' }, h('div', { class: 'row-label crew-label' }, personPhoto(x, 'xs crew-face'),
+          h('div', { class: 'crew-who' }, h('span', { class: 'crew-name' }, x.name), h('span', { class: 'hint crew-sub cs-role' }, x.role))));
+      }))] : null;
       if (!list.length && !none) return null;
       return [h('h4', { class: 'td-cat' }, title + (list.length ? ' · ' + list.length : '')),
         list.length ? h('div', { class: 'ledger crew-list hm-people' }, list.map(function (x) {
@@ -6766,7 +6772,7 @@
       none = emptyState('Nothing on this day yet.', null);
       none.classList.add('ds-empty');
     }
-    return offHomePage('Day sheet', 'day', [rail, place, section('Schedule', hd.timed, true), section('To Do List', hd.open, !hd.timed.length), none,
+    return offHomePage('Day Sheet', 'day', [rail, place, section('Schedule', hd.timed, true), section('To Do List', hd.open, !hd.timed.length), none,
       filled ? null : h('div', { class: 'btnrow ov-actions', style: 'margin-top:14px' },
         h('button', { class: 'btn quiet glow', type: 'button', onclick: function () { openHomeAdd(date); } }, icon('edit', 18), 'Fill in your day'))], 'ds-page hm-page');
   }
@@ -6857,8 +6863,8 @@
       var p = homePeople(a.id);
       return h('section', { class: 'hm-stat' }, h('h3', { class: 'ds-sec-h hm-stat-h' }, acting ? a.name
         : h('button', { class: 'hm-stat-open', type: 'button', 'aria-label': 'Open ' + a.name + ': its team, tours and books',
-          onclick: function () { openHomeArtist(a.id, a.name); } }, h('span', null, a.name), icon('chevron', 16))), homePeopleNodes(p));
-    }) : emptyState('No artists yet', 'The artists you work with show up here, with their members, team and crew.');
+          onclick: function () { openHomeArtist(a.id, a.name); } }, h('span', null, a.name), icon('chevron', 16))), homePeopleNodes(p, { page: true }));
+    }) : emptyState('No artists yet');
     return offHomePage('Crew Stats', 'stats', body, 'fw-page hm-page');
   }
   var SPOT_KINDS = [['food', 'Food'], ['coffee', 'Coffee'], ['bar', 'Bar'],
@@ -18151,10 +18157,10 @@
           h('span', { class: 'wordmark-full', role: 'img', 'aria-label': 'Greenroom' }), h('span', { class: 'band-brand-t' }, 'Chat'))),
         dbBanner(), emptyState(NO_TOUR, 'The tour’s chat opens once a tour is on the calendar.'), bar);
     }
-    if (view === 'stats') return page('Crew Stats', 'Flowers are given on a tour. They show up here once one is on the calendar.');
-    if (view === 'day') return page('Day sheet', 'Each day of a tour gets its own day sheet here once a tour has dates.');
-    if (view === 'guests') return page('Guest list', 'Each night gets its own guest list here once a tour has dates.');
-    return page('Off tour', artistSide() ? 'Create a tour and give it dates, and it shows up here: its name, its first show and how far off that is.'
+    if (view === 'stats') return page('Crew Stats', '');
+    if (view === 'day') return page('Day Sheet', 'Each day of a tour gets its own day sheet here once a tour has dates.');
+    if (view === 'guests') return page('Guest List', 'Each night gets its own guest list here once a tour has dates.');
+    return page('Off Tour', artistSide() ? 'Create a tour and give it dates, and it shows up here: its name, its first show and how far off that is.'
       : 'Once you are on a tour that is coming up, it shows up here: its name, its first show and how far off that is.',
       [artistSide() ? ovMonthCal() : null,
       undatedRows(),
@@ -22037,17 +22043,21 @@
   function tourListBack(id) {
     return S.route && S.route.name === 'tour' && S.route.id === id && G.isObj(S.route.list) ? S.route.list : null;
   }
-  function pageBar(mid, ls) {
+  function pageBar(mid, ls, sub) {
     var under = Array.isArray(mid) ? mid.slice(1) : null, back = G.isObj(ls);
     if (Array.isArray(mid)) mid = mid[0];
     var band = h('div', { class: 'headband dark pg-head' },
       h('header', { class: 'topbar pg-top' + (back ? ' pg-back' : '') + (/(^| )pay-tabs( |$)/.test((mid && mid.className) || '') ? ' pg-tabs' : '') },
         h('span', { class: 'pg-side' }, h('span', { class: 'logo-mark bar', 'aria-hidden': 'true' }), back ? listBack(ls) : null),
-        typeof mid === 'string' ? h('h1', { class: 'pg-title' }, mid) : mid || null,
+        typeof mid === 'string' ? (sub ? h('div', { class: 'pg-name' }, h('h1', { class: 'pg-title' }, mid), h('p', { class: 'pg-sub' }, sub))
+          : h('h1', { class: 'pg-title' }, mid)) : mid || null,
         h('div', { class: 'topbar-actions' }, menuBtn())));
     return under ? [band, under] : band;
   }
-  function tourBar(id, mid) { return pageBar(mid, tourListBack(id)); }
+  function tourBar(id, mid) {
+    var t = typeof mid === 'string' ? getTour(id) : null;
+    return pageBar(mid, tourListBack(id), t ? tourNameOf(t) : null);
+  }
   function tourTopbar(t, id, view, center) {
     var ls = tourListBack(id);
     return h('header', { class: 'topbar' },
@@ -24942,7 +24952,7 @@
   }
   function viewAddShows(id, t) {
     return h('div', { class: 'page tour has-tabs' },
-      tourBar(id, 'Add shows'),
+      tourBar(id, 'Add Shows'),
       dbBanner(),
       addShowsBody(id, t),
       tourTabs(id, 'details'));
@@ -25030,7 +25040,7 @@
     }
     if (view === 'daybyday') {
       return h('div', { class: 'page tour has-tabs exp-page' },
-        tourBar(id, 'Day by day'),
+        tourBar(id, 'Day by Day'),
         bookStrip(id, 'costs', null, null, true),
         finishLine(id, t),
         dbBanner(),
@@ -25039,7 +25049,7 @@
     }
     if (view === 'cashlog') {
       return h('div', { class: 'page tour has-tabs exp-page' },
-        tourBar(id, 'MERCH CASH LOG'),
+        tourBar(id, 'Merch Cash Log'),
         bookStrip(id, 'costs', null, null, true),
         finishLine(id, t),
         dbBanner(),
@@ -27605,7 +27615,7 @@
       maybeBusAsk(id, t);
       maybeRateAsk(id, t);
       return h('div', { class: 'page tour has-tabs' },
-        tourBar(id, tourNameOf(t)),
+        tourBar(id, 'Overview'),
         ovCountsRow(t),
         nextTourLine(id, t),
         dbBanner(),
@@ -27613,7 +27623,7 @@
         tourTabs(id, view));
     }
     return h('div', { class: 'page tour has-tabs' + (view === 'guests' ? ' guest-page' : ' ds-page') },
-      tourBar(id, tourNameOf(t)),
+      tourBar(id, view === 'guests' ? 'Guest List' : 'Day Sheet'),
       dbBanner(),
       view === 'guests' ? guestsBody(id, t) : detailsBody(id, t, 'sheet'),
       tourTabs(id, view));
@@ -27695,7 +27705,6 @@
     });
     return [
       h('div', { class: 'gl-top' },
-        h('h2', { class: 'gl-kicker' }, 'Guest List'),
         h('p', { class: 'gl-when glow' }, s.date === today ? 'Today' : dayLong(s.date)),
         s.date === today ? null : h('p', { class: 'gl-where' },
           [String(s.city || '').trim(), String(s.venue || '').trim()].filter(Boolean).join(' · '))),
@@ -28737,7 +28746,7 @@
   function viewCalendar(id, t) {
     var cal = calendarRows(id, t);
     var rowsOut = cal.rows, pastBtn = cal.pastBtn;
-    return h('div', { class: 'page tour has-tabs' },
+    return h('div', { class: 'page tour has-tabs cal-page' },
       tourBar(id, 'Calendar'),
       dbBanner(),
       canEditTour(id) ? h('button', { class: 'btn quiet glow block add-more', type: 'button',
