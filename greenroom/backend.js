@@ -426,7 +426,7 @@
   }
   function keptClear() {
     try {
-      Object.keys(localStorage).forEach(function (k) { if (/^gr-keep-(crew|fw):/.test(k)) localStorage.removeItem(k); });
+      Object.keys(localStorage).forEach(function (k) { if (/^gr-keep-(crew|fw):|^gr-card:/.test(k)) localStorage.removeItem(k); });
     } catch (e) {   }
   }
   function suggestClear() {
