@@ -36630,7 +36630,7 @@
   }
   listenForPlaidBack();
   var DAYBAR_PUSH = true;
-  var HOME_BAR = false;
+  var HOME_BAR = true;
   var DAYBAR_HINT = 'On show days: where the day is, from the day sheet, with a bar to the next thing';
   var DAYBAR_HINT_HOME = 'Where your day is, with a bar to the next thing: the day sheet on show days; your calendar, routines and tasks off tour';
   var BAR_NAMES_HINT = 'Between tours. Off: the bar says Event, Routine, Task or Plan, with the time. No name reaches the bar or Apple’s push.';
