@@ -129,6 +129,7 @@
     tabguest: '<circle cx="9" cy="8" r="3.4"/><path d="M3.5 20c.6-3.4 2.9-5.2 5.5-5.2s4.9 1.8 5.5 5.2"/><path d="M17 9h5M19.5 6.5v5"/>',
     tabcost: '<path d="M4 20V10M10 20V5M16 20v-7M22 20H2"/>',
     tabstats: '<path d="M8 4h8v5a4 4 0 0 1-8 0V4z"/><path d="M8 6H5.5a2.5 2.5 0 0 0 2.6 3.6M16 6h2.5a2.5 2.5 0 0 1-2.6 3.6M12 13v4M8.5 20.5h7M10 17h4"/>',
+    tabteam: '<circle cx="9" cy="8" r="3.4"/><path d="M3 20c0-3.3 2.7-6 6-6s6 2.7 6 6"/><circle cx="17" cy="9" r="2.6"/><path d="M16.5 14.1c2.6.4 4.5 2.8 4.5 5.9"/>',
     tabchat: '<path d="M21 11.5c0 3.6-4 6.5-9 6.5-1.1 0-2.1-.13-3-.37L4 20l1.5-3.4C4.1 15.4 3 13.6 3 11.5 3 7.9 7 5 12 5s9 2.9 9 6.5z"/>',
     bell: '<path d="M18 16v-5a6 6 0 1 0-12 0v5l-2 3h16l-2-3z"/><path d="M10.5 21a2.2 2.2 0 0 0 3 0"/>',
     search: '<circle cx="11" cy="11" r="6.5"/><path d="m16 16 4.5 4.5"/>',
@@ -2538,21 +2539,97 @@
       .then(function () { S.socialSig = sig; S.socialTry = 0; lsSet(key, sig); })
       .catch(function () {   });
   }
+  var CARD_KEEP = ['creditTours', 'credits'];
+  var CARD_RETRY = [3e3, 8e3, 20e3, 60e3];
+  var CARD_WAIT = 15e3;
+  function cardKeptKey(uid) { return 'gr-card:' + uid; }
+  function cardMine(uid) {
+    var B = window.GR_BACKEND;
+    return !!(uid && B && B.uid && B.uid() === uid);
+  }
+  function cardKept(uid) {
+    if (!cardMine(uid)) return null;
+    S.cardKept = S.cardKept || {};
+    if (!Object.prototype.hasOwnProperty.call(S.cardKept, uid)) {
+      var got = null, mine = cardKeptKey(uid);
+      try { got = JSON.parse(lsGet(mine) || 'null'); } catch (e) { got = null; }
+      var card = G.isObj(got) && G.isObj(got.card) && Array.isArray(got.card.creditTours) ? got.card : null;
+      S.cardKept[uid] = card ? { creditTours: card.creditTours.filter(G.isObj),
+        credits: (Array.isArray(card.credits) ? card.credits : []).filter(G.isObj) } : null;
+      try {
+        var ls = window.localStorage, gone = [];
+        for (var i = 0; i < ls.length; i++) { var k = ls.key(i); if (k && k.indexOf('gr-card:') === 0 && k !== mine) gone.push(k); }
+        gone.forEach(function (k) { ls.removeItem(k); });
+      } catch (e) {   }
+    }
+    return S.cardKept[uid];
+  }
+  function keepCard(uid, card) {
+    if (!cardMine(uid) || !G.isObj(card)) return;
+    var keep = {};
+    CARD_KEEP.forEach(function (k) { keep[k] = Array.isArray(card[k]) ? card[k] : []; });
+    S.cardKept = S.cardKept || {};
+    S.cardKept[uid] = keep;
+    if (!lsSet(cardKeptKey(uid), JSON.stringify({ at: Date.now(), card: keep }))) {
+      try { window.localStorage.removeItem(cardKeptKey(uid)); } catch (e) {   }
+    }
+  }
+  function cardRetry(uid) {
+    var c = S.cards && S.cards[uid];
+    if (!c || !c.failed || c.retry || !cardMine(uid)) return;
+    var wait = CARD_RETRY[Math.min(c.tries || 0, CARD_RETRY.length - 1)];
+    c.tries = (c.tries || 0) + 1;
+    c.retry = setTimeout(function () {
+      c.retry = 0;
+      if (!c.failed || c.asking || S.cards[uid] !== c || !cardMine(uid)) return;
+      if (document.hidden) { c.owed = true; return; }
+      cardOf(uid, true);
+    }, wait);
+  }
+  function cardWake() {
+    var B = window.GR_BACKEND, uid = S.mode === 'db' && B && B.uid ? B.uid() : null;
+    var c = uid && S.cards ? S.cards[uid] : null;
+    if (!c || !c.owed) return;
+    c.owed = false;
+    if (c.failed && !c.asking) cardOf(uid, true);
+  }
+  document.addEventListener('visibilitychange', function () {
+    if (document.visibilityState === 'visible') cardWake();
+  });
   function cardOf(uid, fresh) {
     S.cards = S.cards || {};
-    var c = S.cards[uid] || (S.cards[uid] = { card: null, at: 0, asking: false, gone: false });
+    var c = S.cards[uid] || (S.cards[uid] = { card: null, at: 0, asking: false, gone: false, kept: cardKept(uid) });
     if (fresh && c.asking) c.again = true;
     if (!c.asking && (fresh || Date.now() - c.at > 60e3 || (S.flowersAt && c.at < S.flowersAt))) {
       c.asking = true;
-      window.GR_BACKEND.profileCard(uid).then(function (card) {
-        c.asking = false;
-        if (c.again) { c.again = false; cardOf(uid, true); return; }
-        var B = window.GR_BACKEND;
-        if (!card && B && B.uid && B.uid() === uid) { c.failed = true; c.at = Date.now(); render(); return; }
-        c.card = card; c.gone = !card; c.at = Date.now(); c.failed = false;
-        keepRoad(uid, card);
+      var n = c.seq = (c.seq || 0) + 1, over = false;
+      var failed = function () {
+        c.asking = false; c.failed = true; c.at = Date.now();
+        if (c.again) { c.again = false; cardOf(uid, true); } else cardRetry(uid);
         render();
-      }).catch(function () { c.asking = false; c.failed = true; c.at = Date.now(); if (c.again) { c.again = false; cardOf(uid, true); } render(); });
+      };
+      var wait = setTimeout(function () { over = true; failed(); }, CARD_WAIT);
+      window.GR_BACKEND.profileCard(uid).then(function (card) {
+        clearTimeout(wait);
+        var B = window.GR_BACKEND, ownEmpty = !card && B && B.uid && B.uid() === uid;
+        if (over) {
+          if (n < (c.landed || 0) || ownEmpty) return;
+        } else {
+          c.asking = false;
+          if (c.again) { c.again = false; cardOf(uid, true); return; }
+          if (ownEmpty) { c.failed = true; c.at = Date.now(); cardRetry(uid); render(); return; }
+        }
+        c.landed = n;
+        c.card = card; c.gone = !card; c.at = Date.now(); c.failed = false;
+        c.kept = null; c.tries = 0; c.owed = false;
+        if (c.retry) { clearTimeout(c.retry); c.retry = 0; }
+        keepRoad(uid, card);
+        keepCard(uid, card);
+        render();
+      }).catch(function () {
+        clearTimeout(wait);
+        if (!over) failed();
+      });
     }
     return c;
   }
@@ -4219,22 +4296,20 @@
       if (saved && !done && o.onDone) o.onDone(item);
     };
     var late = !done && item.due && item.due < (o.today || G.ymd(new Date()));
+    var card = S.actCards && S.actCards[artistId] ? S.actCards[artistId].card : null;
+    var m = item.assignedTo ? ((card && card.members) || []).filter(function (x) { return x.userId === item.assignedTo; })[0] : null;
+    var who = item.assignedTo ? { name: item.assignedName || (m && m.name) || 'Someone', avatar: (m && m.avatar) || '' } : null;
     var sub = [];
+    if (!o.mine) sub.push(h('span', { class: 'td-for' + (who ? '' : ' td-any') }, who ? personPhoto(who, 'td-face') : null, who ? who.name : 'Anyone'));
     if (o.artist) sub.push(h('span', { class: 'td-aname' }, o.artist));
     if (item.due) sub.push(h('span', { class: 'td-due' + (late ? ' late' : '') }, 'Due ' + dayMD(item.due)));
     var line = [];
     sub.forEach(function (s, i) { if (i) line.push(' · '); line.push(s); });
-    var card = S.actCards && S.actCards[artistId] ? S.actCards[artistId].card : null;
-    var m = item.assignedTo ? ((card && card.members) || []).filter(function (x) { return x.userId === item.assignedTo; })[0] : null;
-    var who = item.assignedTo ? { name: item.assignedName || (m && m.name) || 'Someone', avatar: (m && m.avatar) || '' } : null;
     return h('li', { class: 'am-li td-li' + (o.mine ? ' ht-own' : '') }, tick,
       h('button', { class: 'fl-row td-open', type: 'button', onclick: function () { openTodoEdit(artistId, artistName, item, o.sheet); } },
-        o.mine ? null : h('span', { class: 'crew-label td-doer' },
-          who ? personPhoto(who, 'xs crew-face') : h('span', { class: 'pf-photo xs crew-face td-noone', 'aria-hidden': 'true' }),
-          h('span', { class: 'crew-who' }, h('span', { class: 'crew-name' + (who ? '' : ' td-any') }, who ? who.name : 'Anyone'))),
         h('span', { class: 'lr-text td-task' },
           h('span', { class: 'lr-title td-body' + (done ? ' done' : '') }, item.body),
-          line.length ? h('span', { class: 'lr-sub' }, line) : null)));
+          line.length ? h('span', { class: 'lr-sub td-meta' }, line) : null)));
   }
   function todoGroups(artistId, artistName, items) {
     var open = items.filter(function (x) { return !x.doneAt; });
@@ -4268,7 +4343,7 @@
     (teamPeopleOf(artistId) || B.todoInvites(artistId) || []).forEach(function (v) {
       if (!seen[v.userId]) { seen[v.userId] = true; who.push({ name: v.name || 'Someone', avatar: v.avatar || '', kind: 'Invited' }); }
     });
-    return h('section', { class: 'tf-block td-block', 'aria-label': card.name + ' To Do List' },
+    return h('section', { class: 'tf-block td-block td-clean', 'aria-label': card.name + ' To Do List' },
       who.length ? h('details', { class: 'tf-more td-collab' },
         h('summary', null, 'Collaborators · ' + who.length),
         h('div', { class: 'ledger crew-list td-collab-list' }, who.map(function (p) {
@@ -5345,7 +5420,7 @@
       else openHomeTask(null, { list: isList ? chip.slice(5) : '', date: month ? st.sel : today });
     };
     return [bar, chipRow, sharedOn ? h('button', { class: 'linkbtn ht-shared', type: 'button', onclick: function () { openListPeople(sharedOn.id); } }, homeSharedLine(sharedOn.shared)) : null,
-      h('section', { class: 'tf-block td-block ht-wrap ht-room', 'aria-label': 'To Do List' }, body),
+      h('section', { class: 'tf-block td-block td-clean ht-wrap ht-room', 'aria-label': 'To Do List' }, body),
       h('button', { class: 'ht-fab', type: 'button', 'aria-label': 'Add a task', onclick: add }, icon('plus', 28))];
   }
   function homeSharedLine(s) {
@@ -6399,7 +6474,7 @@
   }
   function offHomePage(title, view, body, cls) {
     var fr = offFrame();
-    return h('div', { class: 'page tour has-tabs ' + (cls || '') }, offBand(), h('h1', { class: 'tour-title' }, title), dbBanner(), body, tourTabs(fr.bar, view));
+    return h('div', { class: 'page tour has-tabs ' + (cls || '') }, pageBar(title), dbBanner(), body, tourTabs(fr.bar, view));
   }
   function viewOffHome(view) {
     var today = G.tourToday();
@@ -6486,7 +6561,7 @@
         connect ? h('div', { class: 'hm-bar-r' }, h('button', { class: 'btn primary hm-pill' + cfCls(true), type: 'button', onclick: calendarConnect },
           icon('calendar', 16), h('span', { class: 'hm-pill-t' }, 'Connect Calendar'))) : null)];
   }
-  var OV_CAL = { back: 60, ahead: 120, row: 50, lab: 22, weeks: 6, pad: 400, gap: 16 };
+  var OV_CAL = { back: 60, ahead: 120, row: 50, lab: 26, weeks: 6, pad: 400, gap: 16 };
   var ovCalLive = null, ovCalSized = false;
   function ovCalRoom(box, min) {
     var page = box.closest('.page');
@@ -6692,7 +6767,7 @@
       none = emptyState('Nothing on this day yet.', null);
       none.classList.add('ds-empty');
     }
-    return offHomePage('Day sheet', 'day', [rail, place, section('Schedule', hd.timed, true), section('To Do List', hd.open, !hd.timed.length), none,
+    return offHomePage('Day Sheet', 'day', [rail, place, section('Schedule', hd.timed, true), section('To Do List', hd.open, !hd.timed.length), none,
       filled ? null : h('div', { class: 'btnrow ov-actions', style: 'margin-top:14px' },
         h('button', { class: 'btn quiet glow', type: 'button', onclick: function () { openHomeAdd(date); } }, icon('edit', 18), 'Fill in your day'))], 'ds-page hm-page');
   }
@@ -6783,9 +6858,25 @@
       var p = homePeople(a.id);
       return h('section', { class: 'hm-stat' }, h('h3', { class: 'ds-sec-h hm-stat-h' }, acting ? a.name
         : h('button', { class: 'hm-stat-open', type: 'button', 'aria-label': 'Open ' + a.name + ': its team, tours and books',
-          onclick: function () { openHomeArtist(a.id, a.name); } }, h('span', null, a.name), icon('chevron', 16))), homePeopleNodes(p));
-    }) : emptyState('No artists yet', 'The artists you work with show up here, with their members, team and crew.');
-    return offHomePage('Crew Stats', 'stats', body, 'fw-page hm-page');
+          onclick: function () { openHomeArtist(a.id, a.name); } }, h('span', null, a.name), icon('chevron', 16))), teamArtistRows(p));
+    }) : emptyState('No artists yet');
+    return offHomePage('Team', 'stats', body, 'fw-page hm-page team-page');
+  }
+  function teamArtistRows(p) {
+    if (!p.loaded) return h('p', { class: 'note' }, p.failed ? 'Couldn\u2019t load this. Check your signal and try again.' : 'Loading\u2026');
+    var rows = [];
+    var add = function (list, access) {
+      list.forEach(function (x) {
+        var y = { userId: x.userId, name: x.name, avatar: x.avatar, role: access === 'Team' ? x.title || '' : x.sub || '',
+          access: access + (x.waiting ? ' \u00b7 Waiting' : '') };
+        rows.push(teamRow(y, x.userId ? function () {
+          openTeamCard({ uid: x.userId, name: y.name, avatar: y.avatar, role: y.role, access: y.access,
+            mine: !!(window.GR_BACKEND && window.GR_BACKEND.uid && window.GR_BACKEND.uid() === x.userId), loadStats: teamCardStats(x.userId) });
+        } : null));
+      });
+    };
+    add(p.members, 'Member'); add(p.team, 'Team'); add(p.crew, 'Crew');
+    return rows.length ? teamList(rows) : null;
   }
   var SPOT_KINDS = [['food', 'Food'], ['coffee', 'Coffee'], ['bar', 'Bar'],
     ['club', 'Club'], ['to do', 'To do'], ['other', 'Other']];
@@ -6847,15 +6938,61 @@
     if (state) return city + ', ' + state;
     return country && country !== 'United States' ? city + ', ' + country : city;
   }
-  function spotRowEl(x, f) {
-    var meta = spotMetaLine(x, f);
-    return h('li', { class: 'am-li td-li' },
-      h('button', { class: 'fl-row td-open sp-item', type: 'button', onclick: function () { openSpotCard(x, { own: true }); } },
-        h('span', { class: 'sp-glyph' }, icon(spotKindIcon(x.kind), 18)),
-        h('span', { class: 'lr-text' },
-          h('span', { class: 'lr-title' }, x.name),
-          h('span', { class: 'lr-sub sp-meta' }, meta),
-          x.note ? h('span', { class: 'sp-note' }, x.note) : null)));
+  function spotRowEl(x, words) {
+    words = words || [];
+    var name = String(x.name || '').trim(), city = String(x.city || '').trim();
+    var pic = spotPic(x);
+    return h('li', { class: 'sp-row' },
+      h('button', { class: 'sp-open list-row', type: 'button', onclick: function () { openSpotCard(x, { own: true }); } },
+        h('span', { class: 'sp-tile' + (pic ? ' pic' : ''), 'aria-hidden': 'true' },
+          pic ? h('img', { src: pic, alt: '' }) : icon(spotKindIcon(x.kind), 20)),
+        h('span', { class: 'sp-words lr-text' },
+          h('span', { class: 'sp-name lr-title' }, spotFindLit(name, words)),
+          h('span', { class: 'sp-sub lr-sub' }, icon('tabmap', 12),
+            h('span', { class: 'sp-sub-t' }, spotFindLit([city, spotKindLabel(x.kind)].filter(Boolean).join(' \u2022 '), words))))),
+      h('a', { class: 'sp-go', href: spotMapsHref(name, spotApplePt(x), String(x.address || '').trim(), city),
+        target: '_blank', rel: 'noopener', 'aria-label': 'Open ' + (name || 'this spot') + ' in Maps' }, icon('spgo', 15)));
+  }
+  function spotPic(x) {
+    var p = String((x && (x.photo || x.picture)) || '').trim();
+    return /^(https:\/\/|data:image\/)/i.test(p) ? p : '';
+  }
+  function spotMapsHref(name, pt, address, city) {
+    return pt ? 'https://maps.apple.com/?q=' + encodeURIComponent(name) + '&ll=' + pt.lat + ',' + pt.lon
+      : mapsHref([name, address, city].filter(Boolean).join(', '));
+  }
+  function spotFindPlain(s) {
+    var t = String(s || '');
+    try { t = t.normalize('NFD').replace(/[\u0300-\u036f]/g, ''); } catch (e) {   }
+    return t.toLowerCase().replace(/['\u2018\u2019`]/g, '').replace(/[^\p{L}\p{N}]+/gu, ' ');
+  }
+  function spotFindWords(q) { return spotFindPlain(q).split(' ').filter(Boolean); }
+  function spotFindHit(x, words) {
+    var hay = spotFindPlain([x.name, x.city, spotKindLabel(x.kind), x.note].join(' '));
+    return words.every(function (w) { return hay.indexOf(w) >= 0; });
+  }
+  function spotFindLit(text, words) {
+    text = String(text || '');
+    if (!words || !words.length || !text) return text;
+    var plain = '', at = [], lit = [];
+    for (var i = 0; i < text.length; i++) {
+      var c = spotFindPlain(text.charAt(i));
+      for (var j = 0; j < c.length; j++) { plain += c.charAt(j); at.push(i); }
+    }
+    words.forEach(function (w) {
+      for (var k = plain.indexOf(w); k >= 0; k = plain.indexOf(w, k + 1)) {
+        for (var m = k; m < k + w.length; m++) lit[at[m]] = true;
+      }
+    });
+    var out = [], run = '', on = false;
+    for (var n = 0; n < text.length; n++) {
+      var now = !!lit[n];
+      if (now !== on && run) { out.push(on ? h('span', { class: 'sp-lit' }, run) : run); run = ''; }
+      on = now;
+      run += text.charAt(n);
+    }
+    if (run) out.push(on ? h('span', { class: 'sp-lit' }, run) : run);
+    return out;
   }
   function spotMetaLine(x, f, more) {
     f = f || {};
@@ -6943,7 +7080,7 @@
       S.spotHrs[id] = { hours: a && G.isObj(a.details) ? String(a.details.hours || '') : '', at: Date.now() };
       var i = q.live.indexOf(id);
       if (i >= 0) q.live.splice(i, 1);
-      render(true);
+      spotsRedraw();
       if (q.list.length && !q.timer) q.timer = setTimeout(spotsHoursNext, 0);
     };
     setTimeout(function () { finish(null); }, 20000);
@@ -6956,9 +7093,14 @@
     S.spotHereWait = true;
     spotHereQuiet(function (here) {
       S.spotHereWait = false;
-      if (here || spotsHolding()) setTimeout(function () { render(true); }, 0);
+      if (here || spotsHolding()) setTimeout(spotsRedraw, 0);
     });
     return null;
+  }
+  function spotsRedraw() {
+    var a = document.activeElement;
+    if (a && a.classList && a.classList.contains('sp-q-in')) { S.pendingRender = true; return; }
+    render(true);
   }
   function spotsSettle(key, ids, pending) {
     var book = S.spotSettle = S.spotSettle || Object.create(null);
@@ -6967,7 +7109,7 @@
     if (!e.ids) {
       var left = e.since + SPOT_SETTLE_MS - Date.now();
       if (pending && left > 0 && ids.length > 1) {
-        if (!e.timer) e.timer = setTimeout(function () { e.timer = 0; render(true); }, left + 20);
+        if (!e.timer) e.timer = setTimeout(function () { e.timer = 0; spotsRedraw(); }, left + 20);
         return null;
       }
       e.ids = ids.slice();
@@ -7092,62 +7234,83 @@
     }
     return r.pt ? r : null;
   }
-  function spotsHead() {
-    return h('h3', { class: 'mn-h mn-over td-h sp-h' }, 'Locations');
+  function spotsTop(paint) {
+    var top = h('div', { class: 'sp-top' });
+    var draw = function (focus) {
+      var finding = !!(paint && S.spotFind);
+      top.classList.toggle('finding', finding);
+      if (!finding) {
+        fillEl(top, [
+          paint ? h('button', { class: 'sp-find-btn', type: 'button', 'aria-label': 'Search your spots',
+            onclick: function () { S.spotFind = { q: '' }; draw(true); paint(); } }, icon('search', 17))
+            : h('span', { class: 'sp-top-gap', 'aria-hidden': 'true' }),
+          h('h3', { class: 'sp-top-h' }, 'Spots'),
+          h('button', { class: 'sp-add', type: 'button', 'aria-label': 'Add a spot', onclick: function () { openSpotEdit(null); } }, icon('plus', 18))
+        ]);
+        return;
+      }
+      var cancel = function () { S.spotFind = null; blurActive(); draw(false); paint(); };
+      var input = h('input', { class: 'sp-q-in', type: 'search', value: S.spotFind.q || '', placeholder: 'Search your spots', 'data-k': 'spots-q',
+        enterkeyhint: 'search', autocomplete: 'off', autocapitalize: 'none', autocorrect: 'off', spellcheck: 'false',
+        'aria-label': 'Search your spots by name, city or kind',
+        oninput: function (e) { if (!S.spotFind) return; S.spotFind.q = e.target.value; paint(); },
+        onkeydown: function (e) { if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); cancel(); } } });
+      var cancelBtn = pressable(h('button', { class: 'sp-q-cancel', type: 'button' }, 'Cancel'), cancel);
+      fillEl(top, [
+        h('form', { class: 'sp-q', role: 'search', onsubmit: function (e) { e.preventDefault(); blurActive(); } }, icon('search', 17), input),
+        cancelBtn
+      ]);
+      if (focus) { try { input.focus({ preventScroll: true }); } catch (e) {   } }
+    };
+    draw(false);
+    return top;
+  }
+  function spotsTabUp() {
+    try { return !!document.querySelector('.sp-top'); } catch (e) { return true; }
   }
   function pfSpots() {
     var B = window.GR_BACKEND;
     var all = spotsOn() ? B.mySpots() : null;
     if (!all) return h('p', { class: 'note', style: 'margin-top:24px' }, 'Loading…');
-    var addBtn = h('div', { class: 'am-more td-add' },
-      h('button', { class: 'add-pill', type: 'button', onclick: function () { openSpotEdit(null); } },
-        icon('plus', 16), 'Add a spot'));
+    if (!spotsTabUp()) S.spotFind = null;
     if (!all.length) {
-      return [spotsHead(),
-        emptyState('No spots saved yet', 'Save the restaurants, coffee shops, bars, clubs and things you love in each city, and find them again next run.'),
-        addBtn];
+      return [spotsTop(null),
+        emptyState('No spots saved yet', 'Save the restaurants, coffee shops, bars, clubs and things you love in each city, and find them again next run.')];
     }
     var day = placeDayNow(), nowKey = day ? G.roadCityKey(day.city.split(',')[0]) : '';
-    S.spotOpen = S.spotOpen || {};
-    var isOpen = function (k) { return S.spotOpen[k] === true; };
-    var anyOpen = all.some(function (x) { return isOpen(G.roadCityKey(String(x.city || '').split(',')[0])); });
-    var here = anyOpen || !nowKey ? spotsHereQuiet() : null;
+    var here = spotsHereQuiet();
     var groups0 = spotGroups(all, nowKey, here);
     var gBy = Object.create(null);
     groups0.forEach(function (g) { gBy[g.key] = g; });
     var groups = spotsSettle('spots-tab', groups0.map(function (g) { return g.key; }), false).map(function (k) { return gBy[k]; });
-    var lead = groups[0];
     var ref = nowKey ? spotsRefNow() : null;
-    if (lead && (lead.key === nowKey || lead.near != null)) spotsHoursAsk(spotsLocal(lead.items, here), true);
-    var miles = G.usesMiles(navigator.language);
-    return [
-      spotsHead(),
-      groups.map(function (g, gi) {
-        var open = isOpen(g.key), rows = null, from = '', hold = 'spots|' + g.key, waiting = false;
-        if (open) {
-          var ctx = { here: here, hrs: S.spotHrs || null, ref: ref && ref.town === g.key ? ref.pt : null };
-          var local = spotsLocal(g.items, here);
-          spotsHoursAsk(local, true);
-          var pending = (g.key === nowKey && spotsRefPending()) || (!here && !!S.spotHereWait) || spotsHoursPending(local);
-          var facts = g.items.map(function (x) { return { x: x, f: spotListFacts(x, ctx) }; });
-          rows = spotsSettled(hold, facts, pending);
-          if (!rows) { rows = facts; waiting = true; }
-          if (ctx.ref && rows.some(function (r) { return r.f.far != null; })) from = ref.label;
-        }
-        return h('section', { class: 'pt-run' + (open ? ' open' : ''), 'data-sp-hold': gi === 0 ? 'spots-tab' : null },
-          h('button', { class: 'pt-run-h', type: 'button', 'aria-expanded': open ? 'true' : 'false',
-            onclick: function () { S.spotOpen[g.key] = !open; render(true); } },
-            h('span', { class: 'lr-text' },
-              h('span', { class: 'lr-title' }, g.city),
-              h('span', { class: 'lr-sub' }, plural(g.items.length, 'spot') + (from ? ' · distances from ' + from : ''))),
-            icon('chevron', 16)),
-          !open ? null : h('ul', { class: 'rows td-list sp-list' + (waiting ? ' sp-holding' : ''), 'data-sp-hold': hold,
-            'aria-busy': waiting ? 'true' : null }, rows.map(function (r) {
-            return spotRowEl(r.x, { open: r.f.open, far: r.f.far != null ? G.distanceText(r.f.far, miles) : '' });
-          })));
-      }),
-      addBtn
-    ];
+    groups.slice().reverse().forEach(function (g) { spotsHoursAsk(spotsLocal(g.items, here), true); });
+    var cities = groups.map(function (g) {
+      var hold = 'spots|' + g.key;
+      var ctx = { here: here, hrs: S.spotHrs || null, ref: ref && ref.town === g.key ? ref.pt : null };
+      var pending = (g.key === nowKey && spotsRefPending()) || (!here && !!S.spotHereWait) || spotsHoursPending(spotsLocal(g.items, here));
+      var facts = g.items.map(function (x) { return { x: x, f: spotListFacts(x, ctx) }; });
+      var rows = spotsSettled(hold, facts, pending);
+      return { city: g.city, hold: hold, waiting: !rows, items: (rows || facts).map(function (r) { return r.x; }) };
+    });
+    var list = h('div', { class: 'sp-all', 'data-sp-hold': 'spots-tab' });
+    var said = h('p', { class: 'sp-said', 'aria-live': 'polite' });
+    var paint = function () {
+      var q = S.spotFind ? String(S.spotFind.q || '') : '';
+      var words = spotFindWords(q), n = 0, towns = [];
+      fillEl(list, cities.map(function (c) {
+        var hits = words.length ? c.items.filter(function (x) { return spotFindHit(x, words); }) : c.items;
+        if (hits.length) { n += hits.length; towns.push(c.city); }
+        var hold = c.waiting && !words.length;
+        return h('ul', { class: 'sp-rows' + (hold ? ' sp-holding' : ''), 'data-sp-hold': c.hold, hidden: hits.length ? null : true,
+          'aria-busy': hold ? 'true' : null }, hits.map(function (x) { return spotRowEl(x, words); }));
+      }));
+      said.textContent = !words.length ? '' : !n ? 'No spots match "' + q.trim() + '"'
+        : plural(n, 'spot') + (towns.length === 1 ? ' in ' + towns[0] : '');
+      said.hidden = !words.length;
+    };
+    paint();
+    return [spotsTop(paint), said, list];
   }
   function openSpotEdit(item) {
     var B = window.GR_BACKEND;
@@ -7308,6 +7471,7 @@
   ICONS.spcoffee = '<path d="M4 9h13v5a5 5 0 0 1-5 5H9a5 5 0 0 1-5-5V9z"/><path d="M17 11h1.5a2.5 2.5 0 0 1 0 5H17"/>' +
     '<path d="M8 3.5c0 1.2 1 1.3 1 2.5M12 3.5c0 1.2 1 1.3 1 2.5"/>';
   ICONS.spbar = '<path d="M4 4h16l-8 9z"/><path d="M12 13v8M8 21h8"/>';
+  ICONS.spgo = '<path d="M3.5 10.8 20.5 3.5l-7.3 17-2-8.2z" fill="currentColor"/>';
   function spotKindIcon(k) {
     var m = { food: 'spfood', coffee: 'spcoffee', bar: 'spbar', club: 'music', 'to do': 'star' };
     return Object.prototype.hasOwnProperty.call(m, k) ? m[k] : 'tabmap';
@@ -7514,8 +7678,7 @@
       web ? spotLine('Website', h('a', { class: 'spc-v spc-link spc-one', href: web, target: '_blank', rel: 'noopener' },
         web.replace(/^https?:\/\/(www\.)?/i, '').split(/[\/?#]/)[0])) : null,
       address ? spotLine('Address', h('a', { class: 'spc-v spc-link', target: '_blank', rel: 'noopener',
-        href: pt ? 'https://maps.apple.com/?q=' + encodeURIComponent(name) + '&ll=' + pt.lat + ',' + pt.lon
-          : mapsHref([name, address, city].filter(Boolean).join(', ')) }, address)) : null
+        href: spotMapsHref(name, pt, address, city) }, address)) : null
     ].filter(Boolean);
     var whoName = String(st.who || '').trim() || 'Someone';
     var sdOn = !!(B && B.spotDetailsOn && B.spotDetailsOn());
@@ -9766,7 +9929,7 @@
     }
     var items = rows.slice().sort(function (a, b) { return G.num(a.rank) - G.num(b.rank); });
     return h('section', { class: 'tf-block', 'aria-label': 'Top 10 artists' },
-      h('h3', { class: 'mn-h mn-over' }, 'Top 10 artists'),
+      h('h3', { class: 'mn-h mn-over tt-h' }, 'Top 10 Artists'),
       h('ul', { class: 'tour-list rows vp-list' }, items.map(function (f) {
         var name = String(f.name || '').trim() || 'Artist', pic = actPic(f.avatar);
         return h('li', null, h('button', { class: 'list-row art-row', type: 'button', onclick: function () { openAct(f.artistId); } },
@@ -9774,7 +9937,7 @@
             pic ? h('img', { class: 'brand-logo', src: pic, alt: '' }) : ncFace('topTen', name)),
           h('span', { class: 'lr-text' },
             h('span', { class: 'lr-title' }, name),
-            h('span', { class: 'lr-sub' }, 'No. ' + G.num(f.rank))),
+            h('span', { class: 'lr-sub tt-rank' }, 'No. ' + G.num(f.rank))),
           icon('chevron', 18)));
       })),
       own ? h('div', { class: 'am-more' },
@@ -15972,7 +16135,7 @@
       !x.none && !x.wait && !x.failed && x.pool.tours.length && c.words.mixed ? h('p', { class: 'note pnl-note' }, c.words.mixed) : null,
       !x.none && !x.wait && !x.failed && c.words.old ? h('p', { class: 'note pnl-note' }, c.words.old) : null,
       !x.none && !x.wait && !x.failed && x.pool.tours.length ? pnlKindLine(x, id, t) : null,
-      x.blocks.map(function (b) { return b.key === 'merch' ? [summarySection(b), byCityDoor(x.artistId, x.artist, here)] : summarySection(b); }),
+      x.blocks.map(function (b) { return summarySection(b); }),
       pnlSheetBlock(m, id, t, x.artist, stem, x.book),
       pnlFinishBlock(id, t, x),
       h('details', { class: 'tf-more bh-every', open: (x.book ? S.pnlEvery[id] !== false : S.pnlEvery[id]) || null, ontoggle: function (e) { S.pnlEvery[id] = e.currentTarget.open; } },
@@ -15980,11 +16143,6 @@
         m.sections.map(summarySection),
         (m.notes || []).map(function (n) { return h('p', { class: 'note bh-foot' }, G.pnlPlain(n)); }))
     ];
-  }
-  function byCityDoor(artistId, artist, here) {
-    var B = window.GR_BACKEND;
-    if (!pnlOn() || !artistId || !B.pnlSees(artistId) || pnlTwoPages(artist)) return null;
-    return h('p', { class: 'pnl-city' }, pnlLinkEl('By city', function () { go({ name: 'history', back: here, city: { artistId: artistId, name: artist } }); }));
   }
   function cityBooks(artistId, artist) {
     var B = window.GR_BACKEND;
@@ -16093,8 +16251,7 @@
         var d = G.isObj(r.doc) ? r.doc : {};
         return { label: r.name, amount: null, hint: G.parseDay(r.first_day) ? tourSpan(r.first_day, r.last_day || r.first_day) : '',
           onTap: function () { openPnlRead({ artistId: artistId, artist: name, key: r.gk, name: r.name, first: r.first_day, last: r.last_day, n: d.shows, row: r }); } };
-      }) }) : null,
-      byCityDoor(artistId, name, here)]);
+      }) }) : null]);
   }
   function downloadSummary(m, kind, stem) {
     var bytes;
@@ -16635,7 +16792,7 @@
     entries = entries.filter(function (e) { return tourIsLive(e[1]); })
       .concat(entries.filter(function (e) { return !tourIsLive(e[1]); }));
     var B = window.GR_BACKEND, meC = socialOn() && B && B.uid ? cardOf(B.uid()) : null;
-    var meCard = meC ? meC.card : null;
+    var meCard = meC ? meC.card || meC.kept || null : null;
     var ownSpans = entries.map(function (e) { return ownSpanOf(e[1]); });
     var credited = G.tourTimeline(ownSpans, meCard && Array.isArray(meCard.creditTours) ? meCard.creditTours : [], G.tourToday())
       .filter(function (r) { return !r.own; });
@@ -16647,7 +16804,7 @@
     })) : null;
     if (!creditedList && meC && !meCard) {
       creditedList = h('p', { class: 'note tl-wait' }, meC.failed
-        ? 'Your confirmed tours could not load. It keeps trying on its own.'
+        ? 'Your confirmed tours could not load. Trying again…'
         : 'Loading your confirmed tours.');
     }
     if (!entries.length) {
@@ -16775,7 +16932,7 @@
       profileTabs(entries, byArtist, loose, declared),
       (function () {
         if (S.pfTab !== 'tours') return null;
-        var B = window.GR_BACKEND, mc = socialOn() && B && B.uid ? cardOf(B.uid()).card : null;
+        var B = window.GR_BACKEND, mc0 = socialOn() && B && B.uid ? cardOf(B.uid()) : null, mc = mc0 ? mc0.card || mc0.kept : null;
         return mc && Array.isArray(mc.credits) && mc.credits.length ? setlistCredit() : null;
       })(),
       h('span', { class: 'logo-mark home-mark', 'aria-hidden': 'true' }),
@@ -17530,7 +17687,7 @@
     var artist = offArtistFor(r.artist);
     if (!artist && !seesBudgets()) {
       if (!scopeRolesKnown()) {
-        return h('div', { class: 'page tour has-tabs exp-page' }, offBand(), dbBanner(),
+        return h('div', { class: 'page tour has-tabs exp-page' }, pageBar(), dbBanner(),
           h('p', { class: 'note pay-note' }, 'Loading…'), offBar(fr));
       }
       if (fr.bar) { S.route = { name: 'tour', id: fr.bar, view: 'costs' }; return viewTour(); }
@@ -17571,8 +17728,7 @@
       }
     }
     return h('div', { class: 'page tour has-tabs ' + (view === 'money' ? 'budget-page' : 'exp-page') },
-      offBand(null, r.list),
-      offTopTabs(fr, name, 'off'),
+      pageBar(offTopTabs(fr, name, 'off'), r.list),
       bookStrip(id, view, function (v) { return offRoute(name, v); }),
       dbBanner(),
       offArtistBar(name),
@@ -17719,10 +17875,8 @@
         { kind: true, none: WORDS.noDatesYet }));
     };
     return h('div', { class: 'page tour has-tabs exp-page bt-page' },
-      offBand(),
-      offTopTabs(fr, artist, 'tours'),
+      pageBar(offTopTabs(fr, artist, 'tours')),
       dbBanner(),
-      byCityDoor(pnlOn() ? window.GR_BACKEND.pnlArtistOf({ artist: artist }) : null, artist, here),
       lists.upcoming.length ? h('section', { class: 'hist-year' },
         h('h2', { class: 'mn-h mn-over hist-y' }, WORDS.upcoming),
         h('ul', { class: 'tour-list rows mn-list' }, lists.upcoming.map(function (e) { return row(e, null); }))) : null,
@@ -17761,8 +17915,7 @@
         : emptyState(NO_TOUR, 'Your pay shows up here once you are on a tour.');
     }
     return h('div', { class: 'page tour has-tabs exp-page pay-page' },
-      offBand(null, S.route.list),
-      offTopTabs(fr, artist, 'mypay'),
+      pageBar(offTopTabs(fr, artist, 'mypay'), S.route.list),
       top,
       dbBanner(),
       body,
@@ -18007,8 +18160,7 @@
   function viewOffEmpty(view) {
     var bar = tourTabs(null, view);
     var page = function (title, body, extra) {
-      return h('div', { class: 'page tour has-tabs' }, offBand(),
-        h('h1', { class: 'tour-title' }, title), dbBanner(), emptyState(NO_TOUR, body), extra || null, bar);
+      return h('div', { class: 'page tour has-tabs' }, pageBar(title), dbBanner(), emptyState(NO_TOUR, body), extra || null, bar);
     };
     if (view === 'chat') {
       return h('div', { class: 'page tour has-tabs' },
@@ -18016,10 +18168,10 @@
           h('span', { class: 'wordmark-full', role: 'img', 'aria-label': 'Greenroom' }), h('span', { class: 'band-brand-t' }, 'Chat'))),
         dbBanner(), emptyState(NO_TOUR, 'The tour’s chat opens once a tour is on the calendar.'), bar);
     }
-    if (view === 'stats') return page('Crew Stats', 'Flowers are given on a tour. They show up here once one is on the calendar.');
-    if (view === 'day') return page('Day sheet', 'Each day of a tour gets its own day sheet here once a tour has dates.');
-    if (view === 'guests') return page('Guest list', 'Each night gets its own guest list here once a tour has dates.');
-    return page('Off tour', artistSide() ? 'Create a tour and give it dates, and it shows up here: its name, its first show and how far off that is.'
+    if (view === 'stats') return page('Team', '');
+    if (view === 'day') return page('Day Sheet', 'Each day of a tour gets its own day sheet here once a tour has dates.');
+    if (view === 'guests') return page('Guest List', 'Each night gets its own guest list here once a tour has dates.');
+    return page('Off Tour', artistSide() ? 'Create a tour and give it dates, and it shows up here: its name, its first show and how far off that is.'
       : 'Once you are on a tour that is coming up, it shows up here: its name, its first show and how far off that is.',
       [artistSide() ? ovMonthCal() : null,
       undatedRows(),
@@ -21899,8 +22051,26 @@
     return h('button', { class: 'iconbtn back', type: 'button', style: 'margin-left:0', 'aria-label': 'Back to ' + ls.label,
       onclick: function () { go(ls.to); } }, icon('back', 20), h('span', null, ls.short || ls.label));
   }
+  function tourListBack(id) {
+    return S.route && S.route.name === 'tour' && S.route.id === id && G.isObj(S.route.list) ? S.route.list : null;
+  }
+  function pageBar(mid, ls, sub) {
+    var under = Array.isArray(mid) ? mid.slice(1) : null, back = G.isObj(ls);
+    if (Array.isArray(mid)) mid = mid[0];
+    var band = h('div', { class: 'headband dark pg-head' },
+      h('header', { class: 'topbar pg-top' + (back ? ' pg-back' : '') + (/(^| )pay-tabs( |$)/.test((mid && mid.className) || '') ? ' pg-tabs' : '') },
+        h('span', { class: 'pg-side' }, h('span', { class: 'logo-mark bar', 'aria-hidden': 'true' }), back ? listBack(ls) : null),
+        typeof mid === 'string' ? (sub ? h('div', { class: 'pg-name' }, h('h1', { class: 'pg-title' }, mid), h('p', { class: 'pg-sub' }, sub))
+          : h('h1', { class: 'pg-title' }, mid)) : mid || null,
+        h('div', { class: 'topbar-actions' }, menuBtn())));
+    return under ? [band, under] : band;
+  }
+  function tourBar(id, mid) {
+    var t = typeof mid === 'string' ? getTour(id) : null;
+    return pageBar(mid, tourListBack(id), t ? tourNameOf(t) : null);
+  }
   function tourTopbar(t, id, view, center) {
-    var ls = S.route && S.route.name === 'tour' && S.route.id === id && G.isObj(S.route.list) ? S.route.list : null;
+    var ls = tourListBack(id);
     return h('header', { class: 'topbar' },
       h('span', { class: 'top-side' }, ls ? listBack(ls) : null),
       center || h('span', { class: 'logo-mark bar', 'aria-hidden': 'true' }),
@@ -21924,14 +22094,38 @@
     return done ? [row, h('p', { class: 'note pay-finish' }, done)] : row;
   }
   function finishLine(id, t) { return canSeeMoney(id) && G.tourFinished(t) ? h('p', { class: 'note pay-finish' }, G.finishWords(t.finish).short) : null; }
+  function tabCase(s) { return s === 'MY PAY' ? 'My Pay' : s === 'OFF TOUR' ? 'Off Tour' : s; }
+  var payTabsSlid = { key: '', x: 0 };
   function payTabRow(tabs) {
-    var open = tabs.filter(function (x) { return x.menu && x.menu.open(); })[0];
-    return h('div', { class: 'vp-tabs pt-tabs pay-tabs' + (tabs.length === 1 ? ' one' : tabs.length === 3 ? ' three' : '') + (open ? ' tm-open' : ''), role: 'tablist' }, tabs.map(function (x) {
+    var open = tabs.filter(function (x) { return x.menu && x.menu.open(); })[0], lit = null;
+    var r = S.route || {}, key = [r.name, r.id || '', r.host || '', r.artist || '', tabs.map(function (x) { return x.on ? 1 : 0; }).join('')].join('|');
+    var row = h('div', { class: 'bar-tabs-s', role: 'tablist' }, tabs.map(function (x) {
       var pops = !!x.menu && x.on;
-      return h('button', { class: 'vp-tab pt-tab' + (x.on ? ' on' : '') + (x.menu ? ' tm-tab' : ''), type: 'button', role: 'tab', 'aria-selected': x.on ? 'true' : 'false',
+      var b = h('button', { class: 'pay-tab' + (x.on ? ' on' : '') + (x.menu ? ' tm-tab' : ''), type: 'button', role: 'tab', 'aria-selected': x.on ? 'true' : 'false',
         'aria-haspopup': pops ? 'menu' : null, 'aria-expanded': pops ? String(x === open) : null,
-        onclick: x.go }, h('span', { class: 'pay-tab-t' }, x.label), x.menu ? icon('caret', 12) : null);
-    }), open ? tabMenuNode(open.menu) : null);
+        onclick: x.go }, h('span', { class: 'pay-tab-t' }, tabCase(x.label)), x.menu ? icon('caret', 12) : null);
+      if (x.on) lit = b;
+      return b;
+    }));
+    var ends = function () {
+      var left = row.scrollLeft > 1, right = row.scrollWidth - row.clientWidth - row.scrollLeft > 1;
+      row.className = 'bar-tabs-s' + (left ? ' more-l' : '') + (right ? ' more-r' : '');
+    };
+    row.addEventListener('scroll', function () { ends(); if (row.isConnected) payTabsSlid = { key: key, x: row.scrollLeft }; }, { passive: true });
+    requestAnimationFrame(function () {
+      if (!row.isConnected || !row.getBoundingClientRect) return;
+      if (payTabsSlid.key === key) row.scrollLeft = payTabsSlid.x;
+      else if (lit) {
+        var a = row.getBoundingClientRect(), b = lit.getBoundingClientRect(), x = row.scrollLeft;
+        var left = b.left - a.left + x - (lit.previousElementSibling ? 28 : 0), right = b.right - a.left + x + (lit.nextElementSibling ? 28 : 0);
+        if (right > x + row.clientWidth) x = right - row.clientWidth;
+        if (left < x) x = left;
+        row.scrollLeft = Math.max(0, Math.min(row.scrollWidth - row.clientWidth, x));
+      }
+      ends();
+    });
+    return h('div', { class: 'pay-tabs bar-tabs' + (tabs.length === 1 ? ' one' : tabs.length === 3 ? ' three' : '') + (open ? ' tm-open' : '') },
+      row, open ? tabMenuNode(open.menu) : null);
   }
   function tourTabMenu(id, t, all) {
     var ls = function () { return (S.route && S.route.list) || null; };
@@ -22054,8 +22248,7 @@
   }
   function viewMyPay(id, t) {
     return h('div', { class: 'page tour has-tabs exp-page pay-page' },
-      tourBand(t, id, 'mypay'),
-      payTabs(id, t, 'mypay'),
+      tourBar(id, payTabs(id, t, 'mypay')),
       myPayTop(id),
       dbBanner(),
       myPayBody(id, t, { lead: myPayOwnLink(id, t) }),
@@ -24188,7 +24381,7 @@
     { view: 'day', label: 'Day sheet', icon: 'tabsheet' },
     { view: 'costs', label: 'Expenses', icon: 'tabcost' },
     { view: 'guests', label: 'Guest list', icon: 'tabguest' },
-    { view: 'stats', label: 'Crew Stats', icon: 'tabstats' },
+    { view: 'stats', label: 'Team', icon: 'tabteam' },
     { view: 'chat', label: 'Chat', icon: 'tabchat' }
   ];
   var BOOK_TABS = ['costs', 'cards', 'money', 'mypay'];
@@ -24770,8 +24963,7 @@
   }
   function viewAddShows(id, t) {
     return h('div', { class: 'page tour has-tabs' },
-      tourBand(t, id, 'addshows'),
-      h('h1', { class: 'tour-title' }, 'Add shows'),
+      tourBar(id, 'Add Shows'),
       dbBanner(),
       addShowsBody(id, t),
       tourTabs(id, 'details'));
@@ -24833,7 +25025,7 @@
     if (view === 'calendar') return viewCalendar(id, t);
     if (view === 'stats') return viewStats(id, t);
     if (view === 'costs' && !canSeeMoney(id) && !roleKnown(id)) {
-      return h('div', { class: 'page tour has-tabs exp-page' }, tourBand(t, id, 'costs'), dbBanner(),
+      return h('div', { class: 'page tour has-tabs exp-page' }, tourBar(id), dbBanner(),
         h('p', { class: 'note pay-note' }, 'Loading\u2026'), tourTabs(id, 'costs'));
     }
     var wanted = view === 'costs' ? bookWanted(id) : null;
@@ -24842,8 +25034,7 @@
     var c = G.calc(t);
     if (view === 'costs') {
       return h('div', { class: 'page tour has-tabs exp-page' },
-        tourBand(t, id, 'costs'),
-        payTabs(id, t, 'costs'),
+        tourBar(id, payTabs(id, t, 'costs')),
         bookStrip(id, 'costs'),
         dbBanner(),
         heroNode(t, id),
@@ -24852,8 +25043,7 @@
     }
     if (view === 'cards') {
       return h('div', { class: 'page tour has-tabs exp-page' },
-        tourBand(t, id, 'cards'),
-        payTabs(id, t, 'costs'),
+        tourBar(id, payTabs(id, t, 'costs')),
         bookStrip(id, 'cards'),
         dbBanner(),
         tabCards(id, t),
@@ -24861,8 +25051,7 @@
     }
     if (view === 'daybyday') {
       return h('div', { class: 'page tour has-tabs exp-page' },
-        tourBand(t, id, 'daybyday'),
-        h('h1', { class: 'tour-title' }, 'Day by day'),
+        tourBar(id, 'Day by Day'),
         bookStrip(id, 'costs', null, null, true),
         finishLine(id, t),
         dbBanner(),
@@ -24871,8 +25060,7 @@
     }
     if (view === 'cashlog') {
       return h('div', { class: 'page tour has-tabs exp-page' },
-        tourBand(t, id, 'cashlog'),
-        h('h1', { class: 'tour-title' }, 'MERCH CASH LOG'),
+        tourBar(id, 'Merch Cash Log'),
         bookStrip(id, 'costs', null, null, true),
         finishLine(id, t),
         dbBanner(),
@@ -24881,8 +25069,7 @@
     }
     var body = tabShows(id, t, c);
     return h('div', { class: 'page tour has-tabs budget-page' },
-      tourBand(t, id, 'money'),
-      payTabs(id, t, 'costs'),
+      tourBar(id, payTabs(id, t, 'costs')),
       bookStrip(id, 'money'),
       dbBanner(),
       !t.setupDone && canEditTour(id)
@@ -27439,9 +27626,7 @@
       maybeBusAsk(id, t);
       maybeRateAsk(id, t);
       return h('div', { class: 'page tour has-tabs' },
-        tourBand(t, id, view),
-        h('div', { class: 'title-row' },
-          h('h1', { class: 'tour-title' }, tourNameOf(t))),
+        tourBar(id, 'Overview'),
         ovCountsRow(t),
         nextTourLine(id, t),
         dbBanner(),
@@ -27449,8 +27634,7 @@
         tourTabs(id, view));
     }
     return h('div', { class: 'page tour has-tabs' + (view === 'guests' ? ' guest-page' : ' ds-page') },
-      tourBand(t, id, view),
-      h('h1', { class: 'tour-title' }, tourNameOf(t)),
+      tourBar(id, view === 'guests' ? 'Guest List' : 'Day Sheet'),
       dbBanner(),
       view === 'guests' ? guestsBody(id, t) : detailsBody(id, t, 'sheet'),
       tourTabs(id, view));
@@ -27532,7 +27716,6 @@
     });
     return [
       h('div', { class: 'gl-top' },
-        h('h2', { class: 'gl-kicker' }, 'Guest List'),
         h('p', { class: 'gl-when glow' }, s.date === today ? 'Today' : dayLong(s.date)),
         s.date === today ? null : h('p', { class: 'gl-where' },
           [String(s.city || '').trim(), String(s.venue || '').trim()].filter(Boolean).join(' · '))),
@@ -28227,33 +28410,6 @@
     var tier = st ? G.historyTier(st) : null;
     return tier ? h('span', { class: 'hist-tier sm tier-' + tier.key, title: plural(G.num(st.shows), 'show') + ' on the road' }, tier.label) : null;
   }
-  function flowerCard(id, p, me, data) {
-    var mine = p.userId === me;
-    var open = !!(S.fwOpen && S.fwOpen[p.userId]);
-    var toggle = function () { S.fwOpen = S.fwOpen || {}; S.fwOpen[p.userId] = !open; render(true); };
-    return h('li', { class: 'fw-card' + (mine ? ' me' : '') + (open ? ' open' : '') },
-      h('div', { class: 'fw-main' },
-        h('button', { class: 'fw-face', type: 'button', 'aria-label': mine ? 'Your profile' : 'Open ' + fwName(p) + '’s profile',
-          onclick: function () { openProfile(p.userId); } }, personPhoto(p, 'fw-photo')),
-        h('div', { class: 'fw-side' },
-          h('button', { class: 'fw-name fw-name-btn', type: 'button', 'aria-expanded': open ? 'true' : 'false',
-            'aria-label': (open ? 'Hide' : 'Show') + ' the flowers ' + (mine ? 'you were' : fwName(p) + ' was') + ' given', onclick: toggle },
-            h('span', { class: 'fw-name-t' }, fwName(p)),
-            personChecked(p.verified, (roadTiers(id).by || {})[p.userId], p.counts && p.counts.endorsements) ? verifiedBadge('sm') : null,
-            mine ? h('span', { class: 'fw-you' }, 'You') : null,
-            h('span', { class: 'fw-chev', 'aria-hidden': 'true' }, icon('chevron', 14))),
-          roadPill(id, p.userId) ? h('div', { class: 'fw-tier' }, roadPill(id, p.userId)) : null,
-          p.tourRole ? h('p', { class: 'fw-role' }, p.tourRole) : null,
-          fwStats(p.here, p.counts)),
-        !data.canGive ? null : mine
-          ? h('span', { class: 'fw-left sm', 'aria-label': Math.max(0, data.left) + ' of ' + FLOWERS_EACH + ' flowers left to give this year' },
-              Math.max(0, data.left) + ' left ', h('span', { 'aria-hidden': 'true' }, FLOWER))
-          : h('button', { class: 'fw-give sm', type: 'button', disabled: data.left <= 0,
-          'aria-label': data.left > 0 ? 'Give flowers to ' + fwName(p) : 'All ' + FLOWERS_EACH + ' flowers given',
-          onclick: function () { openGiveFlowers(id, p, data.left); } },
-          data.left > 0 ? ['Give ', h('span', { 'aria-hidden': 'true' }, FLOWER)] : 'All given')),
-      open ? fwGiven(p, me, data) : null);
-  }
   function fwGiven(p, me, data) {
     var by = {};
     data.people.forEach(function (x) { by[x.userId] = x; });
@@ -28536,15 +28692,136 @@
       ? emptyState('Flowers are for a signed-in tour', 'Once everyone’s signed in, each of you gets ' + FLOWERS_EACH + ' to give.')
       : !data ? fwLoading('Picking the flowers…')
       : data.error ? fwFailed(function () { B.flowersFor(id, true); })
-      : [h('ul', { class: 'fw-list' }, data.people.slice()
-           .sort(function (a, b) { return (b.userId === me ? 1 : 0) - (a.userId === me ? 1 : 0); })
-           .map(function (p) { return flowerCard(id, p, me, data); }))];
-    return h('div', { class: 'page tour has-tabs fw-page' },
-      tourBand(t, id, 'stats'),
-      h('h1', { class: 'tour-title' }, 'Crew Stats'),
+      : teamList(teamTourRows(id, data, me));
+    return h('div', { class: 'page tour has-tabs fw-page team-page' },
+      tourBar(id, 'Team'),
       dbBanner(),
       body,
       tourTabs(id, 'stats'));
+  }
+  function teamTourRows(id, data, me) {
+    var by = {};
+    data.people.forEach(function (p) { if (p && p.userId) by[p.userId] = p; });
+    var crew = crewRowsShown(id), held = S.crewCache && S.crewCache[id];
+    if ((!held || Date.now() - held.at > 60e3) && S.mode === 'db' && crewAskDue(id)) crewAskOnce(id, 1).catch(function () {   });
+    var tiers = roadTiers(id).by || {};
+    var list = (crew || data.people.map(function (p) { return { userId: p.userId, name: fwName(p), joined: true, tourRole: p.tourRole, fromFlowers: true }; }))
+      .slice().sort(function (a, b) { return (b.userId && b.userId === me ? 1 : 0) - (a.userId && a.userId === me ? 1 : 0); });
+    return list.map(function (m) {
+      var p = m.userId ? by[m.userId] : null, pending = !m.joined;
+      var name = p ? fwName(p) : (m.name || m.username || m.email || 'Someone');
+      var access = m.fromFlowers ? '' : m.owner ? 'Creator' : (m.manager || m.role === 'editor') ? 'Manager' : 'Crew';
+      var checked = !!p && personChecked(p.verified, tiers[p.userId], p.counts && p.counts.endorsements);
+      var x = { userId: m.userId, name: name, avatar: (p && p.avatar) || '', checked: checked, role: m.tourRole || (p && p.tourRole) || '',
+        access: access, pending: pending };
+      return teamRow(x, pending || !m.userId ? null : p ? function () { openTeamCard(teamTourCard(id, p, x, me, data)); }
+        : function () { openTeamCard({ uid: m.userId, name: x.name, avatar: x.avatar, role: x.role, access: x.access, mine: m.userId === me, loadStats: teamCardStats(m.userId) }); });
+    });
+  }
+  function teamTourCard(id, p, x, me, data) {
+    var mine = p.userId === me;
+    return { uid: p.userId, name: x.name, avatar: x.avatar, checked: x.checked, role: x.role, access: x.access, mine: mine,
+      tier: roadPill(id, p.userId), stats: fwStats(p.here, p.counts),
+      give: !data.canGive ? null : mine ? { left: Math.max(0, data.left) }
+        : { left: data.left, go: function () { closeSheet(true); openGiveFlowers(id, p, data.left); } },
+      given: fwGiven(p, me, data) };
+  }
+  function teamRow(x, tap) {
+    var who = h('div', { class: 'row-label crew-label' }, personPhoto(x, 'xs crew-face'),
+      h('div', { class: 'crew-who' },
+        h('span', { class: 'crew-name' }, x.name, x.checked ? verifiedBadge('sm') : null),
+        x.access || x.pending ? h('span', { class: 'hint crew-sub' }, x.access,
+          x.pending ? h('span', { class: 'pending' }, (x.access ? ' \u00b7 ' : '') + 'Pending') : null) : null));
+    var side = h('div', { class: 'crew-side' },
+      h('span', { class: 'role-slot' }, h('span', { class: 'role-box' }, x.role ? h('span', { class: 'role-tag aa' }, x.role) : null)),
+      h('span', { class: 'crew-contact' }, h('span', { class: 'team-chev', 'aria-hidden': 'true' }, tap ? icon('chevron', 16) : null)));
+    return tap ? h('button', { class: 'row rowbtn crew-row team-row', type: 'button', onclick: tap }, who, side)
+      : h('div', { class: 'row crew-row team-row' }, who, side);
+  }
+  function teamList(rows) {
+    var list = h('div', { class: 'ledger crew-list crew-sym team-list' }, rows);
+    requestAnimationFrame(function () { if (list.isConnected) sizeTeamList(list); });
+    return list;
+  }
+  function sizeTeamList(list) {
+    var rowsEl = list.querySelectorAll('.crew-row');
+    if (!rowsEl.length) return;
+    var first = rowsEl[0], cs = getComputedStyle(first);
+    var content = first.clientWidth - parseFloat(cs.paddingLeft) - parseFloat(cs.paddingRight), widest = 0;
+    Array.prototype.forEach.call(rowsEl, function (r) {
+      var who = r.querySelector('.crew-who'), pic = r.querySelector('.crew-face');
+      var extra = pic ? pic.getBoundingClientRect().width + 8 : 0;
+      Array.prototype.forEach.call(who ? who.childNodes : [], function (n) {
+        var rg = document.createRange();
+        rg.selectNodeContents(n);
+        widest = Math.max(widest, rg.getBoundingClientRect().width + extra);
+      });
+    });
+    var room = content - 16 - 2 * 8 - 72;
+    if (!(room > 60)) return;
+    list.style.setProperty('--team-name-w', Math.ceil(Math.min(widest + 2, room)) + 'px');
+    list.classList.add('sized');
+  }
+  function openTeamCard(o) {
+    var statsBox = h('div', { class: 'tc-stats' }, o.stats || h('p', { class: 'note' }, 'Loading\u2026'));
+    var contactBox = o.mine ? null : h('div', { class: 'tc-contact' }, h('p', { class: 'note' }, 'Loading\u2026'));
+    var give = o.give;
+    openSheet(function () {
+      return [
+        h('div', { class: 'tc-head' }, personPhoto(o, 'tc-photo'),
+          h('h2', { class: 'tc-name' }, o.name, o.checked ? verifiedBadge('sm') : null),
+          o.tier || null,
+          o.role || o.access ? h('p', { class: 'tc-role' }, o.role ? h('span', { class: 'tc-r' }, o.role) : null,
+            o.role && o.access ? ' \u00b7 ' : null, o.access || null) : null),
+        statsBox,
+        contactBox,
+        !give ? null : give.go
+          ? h('button', { class: 'btn primary block tc-give', type: 'button', disabled: give.left <= 0, onclick: give.go },
+              give.left > 0 ? ['Give flowers ', h('span', { 'aria-hidden': 'true' }, FLOWER)] : 'All ' + FLOWERS_EACH + ' flowers given')
+          : h('p', { class: 'note tc-left' }, plural(give.left, 'flower') + ' left to give this year'),
+        o.given ? [h('h3', { class: 'tc-h' }, 'Flowers'), o.given] : null,
+        o.uid ? h('div', { class: 'stack tc-acts' }, h('button', { class: 'btn ghost block', type: 'button',
+          onclick: function () { closeSheet(true); openProfile(o.uid); } }, o.mine ? 'Your profile' : 'View profile')) : null
+      ];
+    }, { label: o.name + '\u2019s card', cls: 'tc-sheet' });
+    if (contactBox) teamContact(o.uid, contactBox);
+    if (!o.stats && o.loadStats) o.loadStats(function (node) { if (statsBox.isConnected) fillTo(statsBox, node); });
+  }
+  function teamContact(uid, box) {
+    var B = window.GR_BACKEND;
+    if (!B || !B.contactOf || !uid) { fillTo(box, h('p', { class: 'note' }, 'No phone or email to show.')); return; }
+    B.contactOf(uid).then(function (c) {
+      c = c || {};
+      var tel = String(c.phone || '').replace(/[^0-9+]/g, ''), mail = String(c.email || '').trim();
+      if (!box.isConnected) return;
+      fillTo(box, !tel && !mail ? h('p', { class: 'note' }, 'No phone or email to show.') : h('div', { class: 'ct-rows' },
+        tel ? h('div', { class: 'ct-row' },
+          h('span', { class: 'ct-main' }, h('span', { class: 'ct-k' }, 'Phone'), h('span', { class: 'ct-v num' }, c.phone)),
+          h('a', { class: 'ct-act', href: 'tel:' + tel }, icon('phone', 17), 'Call'),
+          h('a', { class: 'ct-act', href: 'sms:' + tel }, icon('mail', 17), 'Text')) : null,
+        mail ? h('div', { class: 'ct-row' },
+          h('span', { class: 'ct-main' }, h('span', { class: 'ct-k' }, 'Email'), h('span', { class: 'ct-v' }, mail)),
+          h('a', { class: 'ct-act', href: 'mailto:' + mail }, icon('mail', 17), 'Email')) : null));
+    }).catch(function () {
+      if (box.isConnected) fillTo(box, h('p', { class: 'note' }, 'Couldn\u2019t load their phone and email. Check your signal and try again.'));
+    });
+  }
+  function teamCardStats(uid) {
+    return function (fill) {
+      var c = cardOf(uid), n = 0;
+      var done = function () {
+        var k = c.card;
+        fill(k ? fwStats(k.flowers || 0, { endorsements: k.endorsements || 0, tours: G.tourTally(Array.isArray(k.tours) ? k.tours : []).tours })
+          : h('p', { class: 'note' }, c.gone ? 'No numbers to show.' : 'Couldn\u2019t load their numbers. Check your signal and try again.'));
+      };
+      if (c.card || c.gone) { done(); return; }
+      var tick = function () {
+        if (!sheet) return;
+        if (c.card || c.gone || (c.failed && !c.asking) || ++n > 50) { done(); return; }
+        setTimeout(tick, 300);
+      };
+      setTimeout(tick, 300);
+    };
   }
   function calendarRows(id, t, o) {
     o = o || {};
@@ -28575,9 +28852,8 @@
   function viewCalendar(id, t) {
     var cal = calendarRows(id, t);
     var rowsOut = cal.rows, pastBtn = cal.pastBtn;
-    return h('div', { class: 'page tour has-tabs' },
-      tourBand(t, id, 'calendar'),
-      h('h1', { class: 'tour-title' }, 'Calendar'),
+    return h('div', { class: 'page tour has-tabs cal-page' },
+      tourBar(id, 'Calendar'),
       dbBanner(),
       canEditTour(id) ? h('button', { class: 'btn quiet glow block add-more', type: 'button',
         onclick: function () { openAddShowsMenu(id); } }, icon('plus', 18), 'ADD MORE SHOWS') : null,
