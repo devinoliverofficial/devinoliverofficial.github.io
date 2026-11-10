@@ -687,14 +687,15 @@
     toast((refused || (offline ? NO_SIGNAL : 'Couldn\u2019t save that. Try again.')) + (more ? ' ' + more : ''), more ? 5200 : 0, !!more);
   }
   var api = {
-    async create(id, doc) {
-      if (!canWrite()) { toast(VIEW_ONLY); return false; }
+    async create(id, doc, o) {
+      var quiet = !!(o && o.quiet);
+      if (!canWrite()) { if (!quiet) toast(VIEW_ONLY); return false; }
       if (S.mode === 'db') {
         S.pending[id] = doc;
         try {
           await enqueue(id, function () { return withRetry(function () { return store.db.doc('tours/' + id).set(doc); }); });
           return true;
-        } catch (e) { delete S.pending[id]; onWriteError(e); return false; }
+        } catch (e) { delete S.pending[id]; if (!quiet) onWriteError(e); return false; }
       }
       store.local.tours[id] = clone(doc); saveLocal(); render(); return true;
     },
@@ -887,6 +888,8 @@
       if (af) af.focus({ preventScroll: true });
     }
     modeWatch();
+    rtIntroWatch();
+    offAutoWatch();
   }
   var toastTimer = 0;
   var toastNow = null;
@@ -1874,32 +1877,89 @@
   function bandTours(artist) {
     return allTourEntries().filter(function (e) { return artistOf(e[1]) === artist; });
   }
+  function ownsPage(artist) {
+    var key = String(artist || '').trim().toLowerCase(), B = window.GR_BACKEND;
+    if (!key || !socialOn()) return false;
+    if (!S.loaded || S.dbError || !(B && typeof B.toursWhole === 'function' && B.toursWhole())) return false;
+    if (allTourEntries().some(function (e) { return artistOf(e[1]).toLowerCase() === key; })) return false;
+    return ((S.acts && S.acts.list) || []).some(function (x) { return !!x && x.mine === true && String(x.name || '').trim().toLowerCase() === key; });
+  }
   function ownsBand(artist) {
     if (S.mode !== 'db') return canWrite();
-    return bandTours(artist).some(function (e) { return tourRole(e[0]) === 'owner'; });
+    return bandTours(artist).some(function (e) { return tourRole(e[0]) === 'owner'; }) || ownsPage(artist);
   }
   function canSeeOffTour(artist) {
     if (S.mode !== 'db') return true;
     if (offTourOf(artist)) return true;
     return bandTours(artist).some(function (e) { var r = tourRole(e[0]); return r === 'owner' || r === 'editor'; });
   }
-  function mayOpenOff(artist) {
+  function mayOpenOff(artist, pages) {
     artist = String(artist || '').trim();
+    if (pages && artist && !offTourOf(artist) && ownsPage(artist)) return true;
     if (!artist || !canSeeOffTour(artist)) return false;
     if (S.mode !== 'db') return true;
     var book = offTourOf(artist);
     return (!!book && canSeeMoney(book)) || bandTours(artist).some(function (e) { return canSeeMoney(e[0]); });
   }
-  async function ensureOffTour(artist) {
-    var id = offTourOf(artist);
+  async function ensureOffTour(artist, auto) {
+    var id = offTourOf(artist), B = window.GR_BACKEND;
     if (id || !ownsBand(artist) || S.offMaking) return id;
+    var uid = auto && B && B.uid ? B.uid() : '';
+    if (auto && !uid) return null;
     S.offMaking = true;
-    id = newId();
+    id = auto ? offAutoId(uid, artist) : newId();
     var today = G.tourToday();
-    var ok = await api.create(id, { kind: 'offtour', artist: artist, name: 'Off Tour', setupDone: true,
-      offFrom: today.slice(0, 8) + '01', createdAt: Date.now(), shows: {}, expenses: {}, charges: {} });
+    var doc = { kind: 'offtour', artist: artist, name: 'Off Tour', setupDone: true,
+      offFrom: today.slice(0, 8) + '01', createdAt: Date.now(), shows: {}, expenses: {}, charges: {} };
+    if (auto) delete doc.offFrom;
+    var ok = await api.create(id, doc, auto ? { quiet: true } : undefined);
     S.offMaking = false;
     return ok ? id : null;
+  }
+  function offAutoId(uid, artist) {
+    var s = String(uid || '') + '|' + String(artist || '').trim().toLowerCase(), a = 0x811c9dc5, b = 0x01000193;
+    for (var i = 0; i < s.length; i += 1) {
+      var c = s.charCodeAt(i);
+      a = Math.imul(a ^ c, 16777619) >>> 0;
+      b = Math.imul(b ^ c ^ (i & 255), 2246822519) >>> 0;
+    }
+    return 'off' + ('0000000' + a.toString(36)).slice(-7) + ('0000000' + b.toString(36)).slice(-7);
+  }
+  var offAuto = { tried: {}, busy: false };
+  function offBookEver(artist) {
+    var key = String(artist || '').trim().toLowerCase(), hit = false;
+    var look = function (t) { if (!hit && isOffTour(t) && artistOf(t).toLowerCase() === key) hit = true; };
+    S.tours.forEach(look);
+    Object.keys(S.pending).forEach(function (id) { look(S.pending[id]); });
+    return hit;
+  }
+  function offAutoNext() {
+    var B = window.GR_BACKEND;
+    if (S.mode !== 'db' || !S.loaded || S.dbError || !B || typeof B.toursWhole !== 'function' || !B.toursWhole()) return null;
+    if (actingAs() || !canWrite() || S.offMaking || !modeKnown() || !offNow() || modeNow() !== 'off') return null;
+    if (B.netTrouble && B.netTrouble()) return null;
+    var uid = B.uid ? B.uid() : '';
+    if (!uid) return null;
+    var list = (S.acts && S.acts.list) || [];
+    for (var i = 0; i < list.length; i += 1) {
+      var x = list[i], name = x && x.mine === true ? String(x.name || '').trim() : '', key = uid + '|' + name.toLowerCase();
+      if (!name || offAuto.tried[key] || offBookEver(name) || !ownsPage(name)) continue;
+      return { name: name, key: key };
+    }
+    return null;
+  }
+  function offAutoWatch() {
+    if (offAuto.busy || !offAutoNext()) return;
+    offAuto.busy = true;
+    setTimeout(function () {
+      var next = offAutoNext();
+      if (!next) { offAuto.busy = false; return; }
+      offAuto.tried[next.key] = true;
+      Promise.resolve().then(function () { return ensureOffTour(next.name, true); }).catch(function () { return null; }).then(function (id) {
+        offAuto.busy = false;
+        if (id) render(); else offAutoWatch();
+      });
+    }, 0);
   }
   function upcomingToursOf(artist, exceptId) {
     var today = G.tourToday();
@@ -5179,22 +5239,11 @@
   function homeOn() { return !!overviewRoute(); }
   function homeOff() { return homeOn() && offNow() && !actingAs(); }
   function homeViews() { return homeOff() ? ['details', 'day', 'stats'] : actingAs() && offNow() ? ['details'] : []; }
-  function calendarConnectRow() {
-    if (!IN_SHELL) return null;
-    var P = calPlugin();
-    if (calWanted() && (cal.auth === 'denied' || cal.auth === 'writeOnly' || cal.auth === 'restricted')) {
-      var label = h('span', { class: 'row-label' }, 'Calendar is off for Greenroom');
-      if (cal.auth === 'restricted' || !P || typeof P.openSettings !== 'function') return h('div', { class: 'ledger' }, h('div', { class: 'row hm-connect' }, label));
-      return h('div', { class: 'ledger' }, h('button', { class: 'row rowbtn hm-connect', type: 'button', onclick: function () { dayBarCall(P.openSettings, {}); } }, label, icon('chevron', 18)));
-    }
-    if (calWanted() && !cal.readOnce && (cal.auth === null || cal.auth === 'full')) return h('p', { class: 'note hm-none' }, 'Reading your calendar…');
-    return null;
-  }
-  function calBarRow() {
-    if (!HOME_BAR || !calOn()) return null;
-    return h('div', { class: 'ledger hm-calbar' }, h('div', { class: 'row' },
-      h('span', { class: 'row-label' }, 'Show calendar on Lock Screen'),
-      segmented(['Off', 'On'], homePrefs().barCal !== false ? 1 : 0, function (i) { homeSavePrefs({ barCal: i === 1 }); if (i === 0) homeBarOff(); dayBarSoon(); }, 'Show calendar on Lock Screen')));
+  function calAgain(P) {
+    if (cal.auth === 'full') { calSync(true, true); toast('Your calendar is connected.'); return; }
+    if ((cal.auth === 'denied' || cal.auth === 'writeOnly') && typeof P.openSettings === 'function') { dayBarCall(P.openSettings, {}); return; }
+    if (cal.auth === 'denied' || cal.auth === 'writeOnly' || cal.auth === 'restricted') { toast('Calendar is off for Greenroom.'); return; }
+    calAsk(P);
   }
   function calAsk(P) {
     return Promise.resolve().then(function () { return P.connect({}); }).then(function (r) {
@@ -5207,7 +5256,7 @@
   function calendarConnect() {
     var P = calPlugin();
     if (!P) { toast(IN_SHELL ? 'Calendar connects in the next update of the app.' : 'Connect Calendar comes with the next iPhone update.'); return; }
-    if (calWanted()) { calAsk(P); return; }
+    if (calWanted()) { calAgain(P); return; }
     dayBarCall(P.status, {}).then(function (st) {
       var asks = !st || st.auth === 'notDetermined';
       openSheet(function () {
@@ -5216,7 +5265,7 @@
           h('p', { class: 'sh-sub clean' }, 'Greenroom shows your iPhone’s calendars in your day. It adds, changes or deletes an event only when you tell it to.'),
           HOME_BAR ? [
             h('p', { class: 'sh-sub clean' }, 'While your Lock Screen bar is on, today’s event times, and their names while Show names is on, go through Greenroom’s server and Apple’s push service, so the bar can move on while your phone is locked. We delete them from our servers at midnight, though a backup can hold a copy for about a week. Nothing else on your calendar leaves this iPhone.'),
-            h('p', { class: 'sh-sub clean' }, (homeBarNames() ? 'Show names is on.' : 'Show names is off.') + ' You can change that in Settings, Notifications, and keep your calendar off the bar with the row under your calendar.')] : null,
+            h('p', { class: 'sh-sub clean' }, (homeBarNames() ? 'Show names is on.' : 'Show names is off.') + ' You can change that, and keep your calendar off the bar, in Settings, Notifications.')] : null,
           h('div', { class: 'stack lf-acts' },
             h('button', { class: 'btn primary block', type: 'button', onclick: function () { lsSet('gr-cal:' + calUid(), '1'); closeSheet(); calAsk(P); } }, asks ? 'Continue' : 'Connect'),
             asks ? null : h('button', { class: 'btn plain block', type: 'button', onclick: function () { closeSheet(); } }, 'Not now'))
@@ -5866,10 +5915,14 @@
           if (await homeDel('routine:' + r.id)) { toast('Routine deleted'); render(true); }
         } }, icon('trash', 16), 'Delete')], { noTapOpen: true, tapOnlyCloses: true });
     };
-    var shape = prefs.wake || prefs.bed ? h('p', { class: 'pt-next hm-up' },
-      [prefs.wake ? 'Up ' + G.homeClock(prefs.wake) : '', prefs.bed ? 'Bed ' + G.homeClock(prefs.bed) : ''].filter(Boolean).join(' · ')) : null;
+    var shape = h('button', { class: 'pt-next hm-up hm-ideal', type: 'button', onclick: function () { openHomeTimes(); } },
+      G.homeMins(prefs.wake) != null ? 'Ideal wake-up ' + G.homeClock(prefs.wake) + ' · Bed ' + G.homeClock(G.homeMins(prefs.bed) != null ? prefs.bed : '00:00')
+        : 'Set your wake-up time and Greenroom fits your day around it.');
+    var fit = h('div', { class: 'ledger hm-calbar hm-fit' }, h('div', { class: 'row' },
+      h('span', { class: 'row-label' }, 'Fit my day', h('span', { class: 'hint' }, 'Your routines move to fit when you get up and your calendar')),
+      segmented(['Off', 'On'], prefs.fit !== false ? 1 : 0, function (i) { homeSavePrefs({ fit: i === 1 }); dayBarSoon(); }, 'Fit my day')));
     return [
-      routines.length ? h('div', { class: 'ds-page pt-ds hm-rts ht-room' }, shape,
+      routines.length ? h('div', { class: 'ds-page pt-ds hm-rts ht-room' }, shape, fit,
         h('section', { class: 'ds-sec' }, h('div', { class: 'ledger hm-ledger' }, routines.map(row))),
         h('div', { class: 'am-more ht-plan-more' }, h('button', { class: 'add-pill', type: 'button', onclick: function () { openHomeFlow({}); } }, icon('sun', 16), 'Plan your day')))
         : h('div', { class: 'ht-room' }, homeCalm('No routines yet',
@@ -5883,7 +5936,7 @@
     var busy = false;
     openSheet(function () {
       var titleIn = h('input', { class: 'input', type: 'text', maxlength: 60, value: f.title, 'aria-label': 'What it is', autocomplete: 'off', oninput: function (e) { f.title = e.target.value; } });
-      var timeIn = h('input', { class: 'input', type: 'time', value: f.time, 'aria-label': 'Time', onchange: function (e) { f.time = e.target.value; paintLen(); } });
+      var timeIn = h('input', { class: 'input', type: 'time', value: f.time, 'aria-label': 'Ideal time', onchange: function (e) { f.time = e.target.value; paintLen(); } });
       var lenBox = h('div', { class: 'ht-lenbox' }), daysBox = h('div', { class: 'ht-daysbox' });
       var paintLen = function () {
         fillTo(lenBox, f.time ? [h('p', { class: 'ht-k' }, 'How long'), homePills(HOME_LENGTHS, f.mins, function (m) { f.mins = m; paintLen(); }, 'How long')] : null);
@@ -5892,7 +5945,7 @@
       paintLen(); paintDays();
       return [
         h('h2', { class: 'sh-title clean' }, 'Edit routine'),
-        h('div', { class: 'ledger lf-card' }, rowField('Routine', titleIn), rowField('Time', timeIn)),
+        h('div', { class: 'ledger lf-card' }, rowField('Routine', titleIn), rowField('Ideal time', timeIn)),
         lenBox, h('p', { class: 'ht-k' }, 'Days'), daysBox,
         h('div', { class: 'stack lf-acts' },
           h('button', { class: 'btn primary block', type: 'button', onclick: async function (e) {
@@ -5915,6 +5968,30 @@
           h('button', { class: 'btn plain block', type: 'button', onclick: function () { closeSheet(); } }, 'Cancel'))
       ];
     }, { label: 'Edit routine', cls: 'ht-sheet' });
+  }
+  function openHomeTimes() {
+    var prefs = homePrefs(), f = { wake: G.homeMins(prefs.wake) != null ? prefs.wake : '', bed: G.homeMins(prefs.bed) != null ? prefs.bed : '' };
+    var busy = false;
+    openSheet(function () {
+      var wakeIn = h('input', { class: 'input', type: 'time', value: f.wake, 'aria-label': 'Ideal wake-up', onchange: function (e) { f.wake = e.target.value; } });
+      var bedIn = h('input', { class: 'input', type: 'time', value: f.bed, 'aria-label': 'Bed', onchange: function (e) { f.bed = e.target.value; } });
+      return [
+        h('h2', { class: 'sh-title clean' }, 'Your ideal day'),
+        h('p', { class: 'sh-sub clean' }, 'If you wake up later, Greenroom moves your routines to fit around it and your calendar.'),
+        h('div', { class: 'ledger lf-card' }, rowField('Ideal wake-up', wakeIn), rowField('Bed', bedIn)),
+        h('div', { class: 'stack lf-acts' },
+          h('button', { class: 'btn primary block' + cfCls(true), type: 'button', onclick: async function (e) {
+            var btn = e.currentTarget;
+            if (busy) return;
+            busy = true; btn.disabled = true;
+            var ok = await homeSavePrefs({ wake: G.homeMins(f.wake) != null ? f.wake : '', bed: G.homeMins(f.bed) != null ? f.bed : '' });
+            busy = false;
+            if (!ok) { btn.disabled = false; return; }
+            closeSheet(); render(true); dayBarSoon();
+          } }, 'Save'),
+          h('button', { class: 'btn ghost block' + cfCls(false), type: 'button', onclick: function () { closeSheet(); } }, 'Cancel'))
+      ];
+    }, { label: 'Your ideal day', cls: 'ht-sheet' });
   }
   function homeDayPicker(days, onChange, o) {
     o = o || {};
@@ -5994,7 +6071,10 @@
     var saveThis = async function () {
       var title = d.title.replace(/\s+/g, ' ').trim();
       var patch = { intro: true };
-      if (d.wakeSet) patch.wake = G.homeTime(d.wake);
+      if (d.wakeSet && d.date === today) {
+        if (homeAwakeHere()) homeUpSet(today, G.homeTime(d.wake));
+        if (G.homeMins(homePrefs().wake) == null) patch.wake = G.homeTime(d.wake);
+      } else if (d.wakeSet) patch.wake = G.homeTime(d.wake);
       if (d.bedSet) patch.bed = G.homeTime(d.bed);
       if (d.wakeSet || d.bedSet || title) patch.planned = d.date;
       if (title && !d.saved) {
@@ -6138,10 +6218,26 @@
       all.length > shown.length ? h('button', { class: 'linkbtn ht-more', type: 'button',
         onclick: function () { S.pfTab = 'todos'; (S.homeTodo || (S.homeTodo = {})).chip = 'all'; if (S.route.name === 'home') render(true); else go(PF_HOME); } }, 'See all ' + all.length) : null);
   }
+  function homeAwakeHere() {
+    return IN_SHELL;
+  }
+  function homeUpKey() {
+    var B = window.GR_BACKEND;
+    return 'gr-awake:' + ((S.mode === 'db' && B && B.uid && B.uid()) || 'me');
+  }
+  function homeUp(date) {
+    if (!homeAwakeHere()) return '';
+    var v = String(lsGet(homeUpKey()) || '').split('|');
+    return v.length === 2 && v[0] === date && G.homeMins(v[1]) != null ? v[1] : '';
+  }
+  function homeUpSet(date, time) {
+    return lsSet(homeUpKey(), time ? date + '|' + G.homeUpCap(date, time, Date.now()) : '');
+  }
   function homeDayFor(date, all, keepDone) {
-    var today = G.tourToday();
-    var artist = homeArtistTasks().filter(function (t) { return all ? !!t.date : !!t.planned; });
-    return G.homeDay({ date: date, today: today, events: homeEvents(date), routines: homeRoutines(), tasks: homeTasks().concat(artist), day: homeDayDoc(date), keepDone: !!keepDone });
+    var today = G.tourToday(), assigned = homeArtistTasks(), prefs = homePrefs();
+    var artist = assigned.filter(function (t) { return all ? !!t.date : !!t.planned; });
+    return G.homeDayPlan({ date: date, today: today, events: homeEvents(date), routines: homeRoutines(), tasks: homeTasks().concat(artist), day: homeDayDoc(date), keepDone: !!keepDone },
+      { wake: prefs.wake, bed: prefs.bed, fit: prefs.fit, up: homeUp(today), road: modeNow() === 'on', fan: !notFan(), assigned: assigned });
   }
   async function homeToggle(item, date, quiet) {
     var B = window.GR_BACKEND;
@@ -6206,17 +6302,24 @@
   }
   function homeDayLine(it, date) {
     var event = it.kind === 'event';
+    var due = it.due ? [it.sub === 'Late' ? null : it.sub + ' · ', h('span', { class: 'td-due' + (it.done ? '' : ' late') }, 'Due ' + dayMD(it.due))] : null;
+    var said = homeMovedWords(it);
     return homeLine({ title: it.title, time: it.start != null ? homeSheetTime(it.start, 0) : event ? 'All day' : '',
-      hint: it.due ? [it.sub === 'Late' ? null : it.sub + ' · ', h('span', { class: 'td-due' + (it.done ? '' : ' late') }, 'Due ' + dayMD(it.due))] : null,
+      hint: due && said ? due.concat([' · ' + said]) : due || said || null,
       open: calEventOpen(it, date) || function () { S.homeDate = date; go({ name: 'offtour', view: 'day' }); },
       end: homeDoneSlot(event ? null : it, date) });
   }
-  function homeAssignedLine(t, today) {
+  function homeMovedWords(it) {
+    if (it.noRoom) return 'No room today';
+    return it.ideal != null && it.start != null ? 'Ideally ' + G.homeClock(it.ideal) : '';
+  }
+  function homeAssignedLine(t, today, fit) {
     var late = !t.doneAt && t.due && t.due < today;
     var planned = !!t.planned;
     var face = homeLine({ title: t.body,
       hint: [t.artist, t.due ? ' · ' : null, t.due ? h('span', { class: 'td-due' + (late ? ' late' : '') }, 'Due ' + dayMD(t.due)) : null,
-        planned ? h('span', { class: 'hint ht-plan' }, 'Planned for ' + G.homeWhen(t.date, t.time, today)) : null],
+        planned ? h('span', { class: 'hint ht-plan' }, 'Planned for ' + G.homeWhen(t.date, t.time, today)) : null,
+        fit != null ? h('span', { class: 'hint ht-plan' }, 'Fits at ' + G.homeClock(fit % 1440)) : null],
       open: function () { openTodoEdit(t.artistId, t.artist, t.raw, mouseOnly() ? { plan: t } : null); },
       end: homeDoneSlot({ kind: 'task', id: t.key, title: t.body, done: !!t.doneAt }, today) });
     return swipeRow(face, [
@@ -6229,10 +6332,11 @@
     var chip = function (c) { return c ? pfCountChip(c.n, c.words, c.said) : pfCountChip(null); };
     var day = dayRow(h('span', { class: 'pt-chip on' }, 'Today'), today);
     day.classList.add('hm-day');
-    var top = [cd.left ? h('div', { class: 'pt-headrow hm-head' }, chip(cd.left), h('div', { class: 'pt-tourbar', 'aria-hidden': 'true' }), chip(cd.right)) : null, day];
+    var hd = homeDayFor(today, false, true);
+    var top = [cd.left ? h('div', { class: 'pt-headrow hm-head' }, chip(cd.left), h('div', { class: 'pt-tourbar', 'aria-hidden': 'true' }), chip(cd.right)) : null, day,
+      homeAwakeRow(hd, today)];
     var assigned = homeArtistTasks().filter(function (t) { return !t.doneAt || G.tourToday(Date.parse(t.doneAt)) === today; })
       .sort(function (a, b) { return String(a.due || '9999').localeCompare(String(b.due || '9999')) || a.createdAt - b.createdAt; });
-    var hd = homeDayFor(today, false, true);
     var B = window.GR_BACKEND, me = B.uid ? B.uid() : null, below = {};
     hd.timed.concat(hd.open).forEach(function (x) { below[x.id] = true; });
     var handed = homeTasks().filter(function (t) { return t.src === 'list' && t.assignedTo === me && t.createdBy !== me && !below['task:' + t.id]
@@ -6250,15 +6354,56 @@
     var section = function (title, rows, more) {
       return rows.length ? h('section', { class: 'ds-sec' }, h('h3', { class: 'ds-sec-h' }, title), h('div', { class: 'ledger ds-block hm-ledger' }, rows), more || null) : null;
     };
+    var now = Date.now(), fits = (hd.plan && hd.plan.fits) || {};
+    var passed = function (x) { return !!x.fit && !x.done && G.homeRowOver(hd, x, now); };
+    var fitAt = function (t) {
+      var m = fits[t.key];
+      return m == null || t.doneAt || G.homeRowOver(hd, { at: m, end: m + G.HOME_FIT_MINS }, now) ? null : m;
+    };
+    var later = hd.timed.filter(passed).map(function (x) { return Object.assign({}, x, { start: null }); });
     return top.concat(h('div', { class: 'ds-page pt-ds' },
-      section('Assigned to you', shown.map(function (t) { return homeAssignedLine(t, today); }).concat(handed.map(function (t) {
+      section('Assigned to you', shown.map(function (t) { return homeAssignedLine(t, today, fitAt(t)); }).concat(handed.map(function (t) {
         return homeLine({ title: t.body, hint: homeListName(t.list), open: function () { openHomeTask(t); },
           end: homeDoneSlot({ kind: 'task', id: 'task:' + t.id, title: t.body, done: !!t.doneAt }, today) });
       })),
         assigned.length > shown.length ? h('button', { class: 'linkbtn ht-more', type: 'button',
           onclick: function () { S.pfTab = 'todos'; (S.homeTodo || (S.homeTodo = {})).chip = 'all'; render(true); } }, 'See all ' + assigned.filter(function (t) { return !t.doneAt; }).length) : null),
-      section('Schedule', mine(hd.open.filter(isEvent).concat(hd.timed))),
-      section('To Do List', mine(hd.open.filter(function (x) { return !isEvent(x); })))));
+      section('Schedule', mine(hd.open.filter(isEvent).concat(hd.timed.filter(function (x) { return !passed(x); })))),
+      section('To Do List', mine(hd.open.filter(function (x) { return !isEvent(x); }).concat(later)))));
+  }
+  function homeAwakeRow(hd, today) {
+    var p = hd && hd.plan;
+    if (!homeAwakeHere() || !p || !p.awake) return null;
+    if (p.up) {
+      return h('p', { class: 'pt-next hm-up hm-awoke' }, 'Up at ' + G.homeClock(p.up), ' · ',
+        h('button', { class: 'linkbtn', type: 'button', onclick: function () { openHomeUpAt(today, p.up); } }, 'Change'), ' · ',
+        h('button', { class: 'linkbtn', type: 'button', 'aria-label': 'Undo AWAKE', onclick: function () { homeAwake(today, ''); } }, 'Undo'));
+    }
+    var now = Date.now();
+    if (!p.waiting || !G.homeAwakeUp(homeBarTl(today, now), now, true)) return null;
+    return h('div', { class: 'hm-awake' },
+      h('button', { class: 'btn primary block hm-awake-b' + cfCls(true), type: 'button', onclick: function () {
+        var up = G.homeUpAt(Date.now());
+        homeAwake(up.date, up.time);
+      } }, G.HOME_AWAKE_WORD),
+      h('p', { class: 'note' }, 'Tap when you’re up. Your routines move to fit.'));
+  }
+  function homeAwake(date, time) {
+    homeUpSet(date, time);
+    render(true);
+    dayBarSync(true);
+  }
+  function openHomeUpAt(date, time) {
+    var ref = { v: Math.round((G.homeMins(time) || 0) / 15) * 15 % 1440 };
+    openSheet(function () {
+      return [
+        h('h2', { class: 'sh-title clean' }, 'When did you wake up?'),
+        h('div', { class: 'no-pull' }, homeWheel(ref, 'Wake up time')),
+        h('div', { class: 'stack lf-acts' },
+          h('button', { class: 'btn primary block' + cfCls(true), type: 'button', onclick: function () { closeSheet(); homeAwake(date, G.homeTime(ref.v)); } }, 'Save'),
+          h('button', { class: 'btn ghost block' + cfCls(false), type: 'button', onclick: function () { closeSheet(); } }, 'Cancel'))
+      ];
+    }, { label: 'When did you wake up', cls: 'ht-sheet' });
   }
   function homeMyArtists() {
     var list = ((myActs().list) || []).filter(function (a) { return a && a.id && a.name; });
@@ -6492,24 +6637,12 @@
         h('span', { class: 'hm-next-s' }, [artistOf(nx.t), first ? (one ? '' : 'First show ') + dayMD(first) + ' \u00b7 ' + (n === 1 ? 'tomorrow' : 'in ' + n + ' days') : ''].filter(Boolean).join(' \u00b7 ')),
         icon('chevron', 18)));
     }
-    var evs = acting ? [] : homeEvents(today).concat(homeEvents(G.addDays(today, 1)));
-    var calAddLink = calWriter() ? h('button', { class: 'linkbtn ht-more hm-add', type: 'button', onclick: function () { openHomeAdd(today, undefined, true); } }, 'Add to your calendar') : null;
-    if (evs.length) body.push(h('section', { class: 'tf-block td-block ht-wrap', 'aria-label': 'On your calendar' }, h('h4', { class: 'td-cat' }, 'On your calendar'),
-      h('div', { class: 'ledger hm-events' }, evs.map(function (e) {
-        var open = calEventOpen({ kind: 'event', id: 'event:' + e.id }, e.date);
-        return h('div', open ? calRowAttrs('row ds-row hm-row', e.title, open) : { class: 'row ds-row hm-row' }, h('span', { class: 'td-tick ghost cal', 'aria-hidden': 'true' }, icon('calendar', 14)),
-          h('span', { class: 'row-label hm-label' }, h('span', { class: 'hm-t' }, e.title), h('span', { class: 'hint hm-kind' }, [e.date === today ? 'Today' : 'Tomorrow', e.place].filter(Boolean).join(' · '))),
-          h('span', { class: 'ds-time num' }, e.allDay ? 'All day' : G.homeSpan(e.time, e.mins)));
-      })), calAddLink));
-    else if (calAddLink) body.push(calAddLink);
-    var calLine = acting ? null : calendarConnectRow(), calBar = acting ? null : calBarRow();
-    if (calLine || calBar) body.push(h('section', { class: 'tf-block td-block ht-wrap', 'aria-label': 'Your calendar' }, calLine ? h('h4', { class: 'td-cat' }, 'On your calendar') : null, calLine, calBar));
     var assigned = acting ? null : homeAssignedBlock(6, today);
     if (assigned) body.push(assigned);
     var create = artistSide();
     if (!create && !acting && !nx && !assigned && !undatedTours().length) body.push(emptyState(NO_TOUR, 'Once you are on a tour that is coming up, it shows up here: its name, its first show and how far off that is.'));
     if (create) body.push(ovMonthCal());
-    var connect = !(acting || calLine || Array.isArray(S.homeEvents));
+    var connect = !acting;
     body.push(undatedRows());
     body.push(createBar(create, connect));
     return offHomePage('Overview', 'details', body, 'hm-page');
@@ -6707,12 +6840,12 @@
   function homeSheetRow(hd, it, date) {
     var len = it.end != null ? it.end - it.at : 0;
     var span = it.start != null ? G.timeSpan(G.homeClock(it.start), len > 0 ? G.homeClock(it.start + len) : '') : '';
-    var can = it.kind !== 'event', open = calEventOpen(it, date);
+    var can = it.kind !== 'event', open = calEventOpen(it, date), said = homeMovedWords(it);
     var row = h('div', can ? { class: 'row ds-row', role: 'button', tabindex: '0', 'aria-pressed': it.done ? 'true' : 'false',
       'aria-label': (it.done ? 'Not done yet: ' : 'Done: ') + it.title,
       onclick: function () { homeTap(it, date); },
       onkeydown: function (e) { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); row.click(); } } } : open ? calRowAttrs('row ds-row', it.title, open) : { class: 'row ds-row' },
-      h('span', { class: 'row-label' }, it.title), span ? h('span', { class: 'ds-time num' }, span) : null);
+      h('span', { class: 'row-label' }, it.title, said ? h('span', { class: 'hint' }, said) : null), span ? h('span', { class: 'ds-time num' }, span) : null);
     dsGreyKeep(row, function (now) { return it.done || G.homeRowOver(hd, it, now); });
     var P = it.kind === 'extra' ? calWriter() : null;
     return swipeRow(row, [P ? h('button', { class: 'sw-edit sw-group tray-move', type: 'button', 'aria-label': 'Put ' + it.title + ' on your calendar', onclick: function () { calMove(P, it.id, date); } },
@@ -6738,7 +6871,8 @@
       var sel = rail.querySelector('.ds-chip.on');
       if (sel && sel.scrollIntoView) sel.scrollIntoView({ inline: 'center', block: 'nearest' });
     });
-    var shape = [dayLong(date), prefs.wake ? 'Up ' + G.homeClock(prefs.wake) : '', prefs.bed ? 'Bed ' + G.homeClock(prefs.bed) : ''].filter(Boolean)
+    var up = hd.plan && hd.plan.up ? hd.plan.up : prefs.wake;
+    var shape = [dayLong(date), up ? 'Up ' + G.homeClock(up) : '', prefs.bed ? 'Bed ' + G.homeClock(prefs.bed) : ''].filter(Boolean)
       .map(function (x) { return x.replace(/ /g, '\u00a0'); }).join(' · ');
     var place = h('div', { class: 'ds-venue-row' },
       h('button', { class: 'iconbtn sm ds-pencil', type: 'button', 'aria-label': 'Add to this day', onclick: function () { openHomeAdd(date); } }, icon('edit', 18)),
@@ -6771,11 +6905,10 @@
       filled ? null : h('div', { class: 'btnrow ov-actions', style: 'margin-top:14px' },
         h('button', { class: 'btn quiet glow', type: 'button', onclick: function () { openHomeAdd(date); } }, icon('edit', 18), 'Fill in your day'))], 'ds-page hm-page');
   }
-  function openHomeAdd(date, books, toCal) {
-    if (books === undefined && calWriter()) { calBooks().then(function (list) { openHomeAdd(date, list, toCal); }); return; }
-    if (toCal && !books) { toast('Couldn’t reach your calendar.'); return; }
+  function openHomeAdd(date, books) {
+    if (books === undefined && calWriter()) { calBooks().then(function (list) { openHomeAdd(date, list); }); return; }
     var today = G.tourToday(), was = books ? calPick(books) : 'sheet';
-    var f = { title: '', time: '', mins: 0, book: toCal && was === 'sheet' ? books[0].id : was };
+    var f = { title: '', time: '', mins: 0, book: was };
     var busy = false;
     openSheet(function () {
       var titleIn = h('input', { class: 'input', type: 'text', maxlength: 60, placeholder: 'What are you doing?', 'aria-label': 'What', autocomplete: 'off', autofocus: mouseOnly(),
@@ -13508,6 +13641,7 @@
       var money = IN_SHELL ? appPushSeesMoney(null) : notifSeesMoney(null);
       if (IN_SHELL) add('', 'bell', 'Lock screen day bar', 'Notifications', bell('Lock screen day bar'), { words: [HOME_BAR ? DAYBAR_HINT_HOME : DAYBAR_HINT] });
       if (IN_SHELL && HOME_BAR) add('', 'bell', 'Show names on the Lock Screen', 'Notifications', bell('Show names on the Lock Screen'), { words: [BAR_NAMES_HINT] });
+      if (IN_SHELL && HOME_BAR && calOn()) add('', 'bell', 'Show calendar on Lock Screen', 'Notifications', bell('Show calendar on Lock Screen'));
       if (AL) {
         add('', 'clock', 'Stage alarm', 'Notifications', bell('Stage alarm'), { words: ['30 minutes before your band’s set, the phone rings like an alarm'] });
         add('', 'clock', 'Bus call alarm', 'Notifications', bell('Bus call alarm'), { words: ['At bus call, with an I’m on the bus button on the alarm, and a 20 minute warning before it'] });
@@ -13697,7 +13831,7 @@
     return true;
   }
   function firstRunDue() {
-    if (S.firstRun && S.firstRun.again) return true;
+    if (S.firstRun && (S.firstRun.again || S.firstRun.routines)) return true;
     if (S.firstRunDone && S.firstRunDone === frUid()) return false;
     if (frGateUp()) return false;
     var a = frFacts(), B = window.GR_BACKEND;
@@ -13776,6 +13910,7 @@
   }
   async function frFinish() {
     var B = window.GR_BACKEND, fr = S.firstRun;
+    if (!fr.again && rtDue(fr)) { rtStart(fr); return; }
     if (fr.finishing && Date.now() - fr.finishing < 15000) return;
     fr.finishing = Date.now();
     var op = frBegin(), ok = false;
@@ -13832,7 +13967,7 @@
         h('p', { class: 'fr-err', role: 'alert', hidden: fr.err ? null : true }, fr.err || ''),
         pill,
         o.alt ? h('button', { class: 'btn quiet block fr-alt', type: 'button', onclick: function () { o.alt.onTap(); } }, o.alt.label) : null,
-        o.skip ? h('button', { class: 'fr-skip', type: 'button', onclick: function () { o.skip(); } }, 'Skip for now') : null));
+        o.skip ? h('button', { class: 'fr-skip', type: 'button', onclick: function () { o.skip(); } }, o.skipLabel || 'Skip for now') : null));
   }
   function frField(label, control, mark) {
     return h('label', { class: 'fr-field' },
@@ -13849,7 +13984,7 @@
   function viewFirstRun() {
     frLive = null;
     var fr = S.firstRun, B = window.GR_BACKEND;
-    var a = fr && fr.again ? null : frFacts();
+    var a = fr && (fr.again || fr.routines) ? null : frFacts();
     if (!fr) {
       a = a || {};
       var kinds = frKindList(a.kinds);
@@ -13882,6 +14017,7 @@
       : s === 'f-find' ? frFans(fr)
       : s === 'f-shows' ? frShows(fr)
       : s === 'p-find' ? frPlaces(fr)
+      : /^r-/.test(s) ? rtScreen(fr)
       : frKinds(fr);
   }
   function frHandle(fr) {
@@ -14159,6 +14295,239 @@
     S.pushOn = true;
     f.notifDone = true;
     if (frStill(fr, op)) { fr.fails = 0; frFinish(); }
+  }
+  var RT_PICKS = [['Workout', 'heart'], ['Studio', 'music'], ['Work', 'edit'], ['Stretch', 'sun'], ['Warm Up Vocals', 'music'], ['Rehearsal', 'people']];
+  function rtKey(title) {
+    return String(title == null ? '' : title).replace(/\s+/g, ' ').trim().toLowerCase();
+  }
+  function rtNew() {
+    var w = G.homeMins(homePrefs().wake);
+    return { wake: w != null ? w : 480, wakeSet: false, adding: false, text: '', done: false,
+      items: RT_PICKS.map(function (p) { return { title: p[0], icon: p[1], on: false, time: null, mins: 15, days: [0, 1, 2, 3, 4, 5, 6] }; }) };
+  }
+  function rtHave() {
+    var have = {};
+    homeRoutines().forEach(function (r) { have[rtKey(r.title)] = true; });
+    return have;
+  }
+  function rtPicks(rt) {
+    var have = rtHave();
+    return rt.items.filter(function (it) { return it.on && !have[rtKey(it.title)]; });
+  }
+  function rtDue(fr) {
+    if (fr.again || fr.routines || (fr.rt && fr.rt.done)) return false;
+    var k = frKindsOut(fr);
+    if (!k.length || (k.length === 1 && k[0] === 'fan')) return false;
+    return !homePrefs().routinesIntro;
+  }
+  function rtCalDue() {
+    return !!calPlugin() && !calWanted();
+  }
+  function rtStart(fr) {
+    if (!fr.rt) fr.rt = rtNew();
+    frGo(rtCalDue() ? 'r-cal' : 'r-build');
+  }
+  function rtEnd(fr, finished) {
+    var rt = fr.rt || (fr.rt = rtNew()), today = G.tourToday();
+    rt.done = true;
+    S.rtIntroAsked = frUid();
+    var patch = { routinesIntro: IN_SHELL ? true : 'web', routinesIntroV: RT_INTRO_V };
+    if (rt.wakeSet) patch.wake = G.homeTime(rt.wake);
+    var made = (finished ? rtPicks(rt) : []).map(function (it, i) {
+      var time = it.time != null ? G.homeTime(it.time) : '';
+      return ['routine:' + homeId(), { kind: 'routine', title: it.title, icon: it.icon || '', time: time, mins: time ? it.mins : 0, days: it.days.slice(),
+        from: today, createdAt: Date.now() + i }];
+    });
+    rtSave(patch, made, 0);
+    if (!fr.routines) { frFinish(); return; }
+    S.firstRun = null; frLive = null;
+    window.scrollTo(0, 0);
+    if (made.length) { S.pfTab = 'routines'; go(PF_HOME); } else render(true);
+  }
+  function rtSave(patch, made, tries) {
+    if (homeUnread()) {
+      if (tries < 60) setTimeout(function () { rtSave(patch, made, tries + 1); }, 500);
+      return;
+    }
+    if (made.length) homePutMany(made);
+    homeSavePrefs(patch);
+  }
+  function rtCard(it, long) {
+    var span = it.time != null ? G.homeSpan(G.homeTime(it.time), long ? it.mins : 0) : 'Any time';
+    return h('div', { class: 'hf-card' }, h('span', { class: 'hf-cic', 'aria-hidden': 'true' }, icon(ICONS[it.icon] ? it.icon : 'clock', 22)),
+      h('span', { class: 'hf-ctext' }, h('span', { class: 'hf-ck' }, span + (long && it.time != null && it.mins > 0 ? ' (' + G.homeMinsWords(it.mins) + ')' : '')),
+        h('span', { class: 'hf-cv' }, it.title)));
+  }
+  function rtSuggest(rt, picks, n) {
+    var prev = n > 0 ? picks[n - 1] : null;
+    var from = prev && prev.time != null ? prev.time : rt.wake;
+    return Math.min(1425, Math.round((from + 60) / 15) * 15);
+  }
+  function rtAdd(rt) {
+    var title = String(rt.text || '').replace(/\s+/g, ' ').trim().slice(0, 60), key = rtKey(title);
+    if (!key) return false;
+    if (rtHave()[key]) { frSay('You have that routine already.'); return false; }
+    var same = rt.items.filter(function (it) { return rtKey(it.title) === key; })[0];
+    if (same) same.on = true;
+    else rt.items.push({ title: title, icon: '', on: true, time: null, mins: 15, days: [0, 1, 2, 3, 4, 5, 6] });
+    rt.text = '';
+    return true;
+  }
+  function rtScreen(fr) {
+    var rt = fr.rt || (fr.rt = rtNew()), s = fr.step;
+    var back = fr.trail.length ? frBack : null;
+    if (s === 'r-hello') {
+      var now = Date.now();
+      if (!fr.rtAt) fr.rtAt = now;
+      var past = Math.max(0, now - fr.rtAt);
+      var drops = [
+        ['', '--dx:-150px;--dy:-58px;--s:12px;--d:120ms'], [' rt-streak', '--dx:-122px;--dy:-104px;--s:5px;--r:40deg;--d:140ms'],
+        ['', '--dx:-62px;--dy:-118px;--s:8px;--d:110ms'], ['', '--dx:-8px;--dy:-132px;--s:5px;--o:.8;--d:150ms'],
+        ['', '--dx:48px;--dy:-112px;--s:10px;--d:120ms'], [' rt-streak', '--dx:118px;--dy:-96px;--s:5px;--r:-38deg;--d:160ms'],
+        ['', '--dx:162px;--dy:-44px;--s:9px;--d:130ms'], ['', '--dx:178px;--dy:18px;--s:5px;--o:.75;--d:170ms'],
+        ['', '--dx:150px;--dy:66px;--s:11px;--d:120ms'], [' rt-streak', '--dx:96px;--dy:112px;--s:5px;--r:52deg;--d:150ms'],
+        ['', '--dx:30px;--dy:126px;--s:7px;--d:140ms'], ['', '--dx:-36px;--dy:122px;--s:9px;--d:120ms'],
+        [' rt-streak', '--dx:-104px;--dy:104px;--s:5px;--r:-50deg;--d:160ms'], ['', '--dx:-164px;--dy:46px;--s:7px;--d:130ms'],
+        ['', '--dx:-184px;--dy:-6px;--s:4px;--o:.7;--d:180ms'], ['', '--dx:-92px;--dy:-30px;--s:4px;--o:.6;--d:200ms'],
+        ['', '--dx:96px;--dy:34px;--s:4px;--o:.6;--d:200ms'], ['', '--dx:70px;--dy:-58px;--s:3px;--o:.55;--d:210ms'],
+        ['', '--dx:-70px;--dy:62px;--s:3px;--o:.55;--d:210ms']];
+      return h('div', { class: 'page rt-hello', style: '--rt-past:' + past + 'ms' },
+        back ? h('div', { class: 'fr-top' }, h('button', { class: 'iconbtn fr-back', type: 'button', 'aria-label': 'Back', onclick: function () { back(); } }, icon('back', 26))) : null,
+        h('div', { class: 'rt-splash', 'aria-hidden': 'true' },
+          h('span', { class: 'rt-glow' }), h('span', { class: 'rt-burst' }),
+          h('span', { class: 'rt-ring' }), h('span', { class: 'rt-ring rt-ring2' }),
+          drops.map(function (d) { return h('span', { class: 'rt-drop' + d[0], style: d[1] }); }),
+          h('span', { class: 'rt-word', role: 'img', 'aria-label': 'Greenroom' })),
+        h('div', { class: 'rt-copy' },
+          h('div', { class: 'rt-eyebrow' }, 'Introducing'),
+          h('h1', { class: 'rt-title' }, 'Greenroom Routines'),
+          h('p', { class: 'rt-sub' }, 'Your own day sheet for days off tour, built from your routines and your calendar.')),
+        h('div', { class: 'rt-acts' },
+          h('button', { class: 'rt-go', type: 'button', onclick: function () { frGo(rtCalDue() ? 'r-cal' : 'r-build'); } }, 'Set it up'),
+          h('button', { class: 'rt-not', type: 'button', onclick: function () { rtEnd(fr, false); } }, 'Not now')));
+    }
+    if (s === 'r-cal') {
+      var then = function () { if (fr.calOnly) rtEnd(fr, false); else frGo('r-build'); };
+      return frShell({ title: 'Link your calendar?',
+        sub: 'Greenroom reads your iPhone calendar on your phone, so your day fits around what’s already planned. Places, people and notes never leave your phone.',
+        onBack: back,
+        next: { label: 'Link calendar', ready: true, onTap: function () { then(); calendarConnect(); } },
+        alt: { label: 'Not now', onTap: then } });
+    }
+    if (s === 'r-build') {
+      return frShell({ title: 'Build your daily routine?',
+        sub: 'Tell Greenroom what you’d ideally do each day. It builds your schedule and moves your routines to fit your calendar. Your calendar never moves.',
+        onBack: back,
+        next: { label: 'Yes, let’s do it', ready: true, onTap: function () { frGo('r-wake'); } },
+        skip: function () { rtEnd(fr, false); } });
+    }
+    if (s === 'r-wake') {
+      var ref = { v: rt.wake };
+      return frShell({ title: 'What time do you like to wake up?',
+        sub: 'Your ideal time. If you wake up later, Greenroom moves your routines to fit around it and your calendar.', onBack: back,
+        body: homeWheel(ref, 'Wake up time', function (v) { rt.wake = v; }),
+        next: { label: 'Next', ready: true, onTap: function () { rt.wake = ref.v; rt.wakeSet = true; frGo('r-pick'); } },
+        skip: function () { rt.wakeSet = false; frGo('r-pick'); } });
+    }
+    var m = /^r-(time|long|days):(\d+)$/.exec(s), picks = rtPicks(rt);
+    if (!m || !picks[+m[2]]) { fr.step = 'r-pick'; return rtPickScreen(fr, rt, back); }
+    return rtOneScreen(fr, rt, m[1], +m[2], back);
+  }
+  function rtPickScreen(fr, rt, back) {
+    var have = rtHave();
+    var ready = function () { return rtPicks(rt).length > 0 || !!rtKey(rt.text); };
+    var nx = { label: 'Next', ready: ready(), onTap: function () {
+      if (rtKey(rt.text) && !rtAdd(rt)) return;
+      if (rtPicks(rt).length) frGo('r-time:0');
+    } };
+    var cards = rt.items.map(function (it) {
+      var had = !!have[rtKey(it.title)];
+      var b = h('button', { class: 'fr-kind', type: 'button', role: 'checkbox', 'aria-checked': String(had || it.on), 'aria-disabled': had ? 'true' : null,
+        onclick: function () {
+          if (had) return;
+          it.on = !it.on;
+          b.setAttribute('aria-checked', String(it.on));
+          frSay('');
+          nx.set(ready());
+        } },
+        h('span', { class: 'fr-kind-text' }, h('span', { class: 'fr-kind-t' }, it.title), had ? h('span', { class: 'fr-kind-s' }, 'Already added') : null),
+        h('span', { class: 'fr-tick', 'aria-hidden': 'true' }, icon('check', 15)));
+      return b;
+    });
+    var added = function () { if (rtAdd(rt)) render(true); };
+    var add = rt.adding
+      ? frField('Something else', h('input', { class: 'fr-in', type: 'text', 'data-k': 'rt-add', value: rt.text, maxlength: 60, autocomplete: 'off',
+          enterkeyhint: 'done', 'aria-label': 'Something else',
+          oninput: function (e) { rt.text = e.target.value; frSay(''); nx.set(ready()); },
+          onkeydown: function (e) { if (e.key === 'Enter') { e.preventDefault(); added(); } } }),
+        h('button', { class: 'iconbtn', type: 'button', 'aria-label': 'Add it', onclick: function (e) { e.preventDefault(); added(); } }, icon('plus', 20)))
+      : h('button', { class: 'fr-kind fr-add', type: 'button', onclick: function () { rt.adding = true; render(true); } },
+          h('span', { class: 'fr-kind-text' }, h('span', { class: 'fr-kind-t' }, '+ Add something else')));
+    return frShell({ title: 'Pick your daily routines', sub: 'Tap any that fit or create something new. You’ll set a time for each.', onBack: back,
+      body: [h('div', { class: 'fr-kinds fr-rts', role: 'group', 'aria-label': 'Your daily routines' }, cards), add],
+      next: nx, skip: function () { rtEnd(fr, false); } });
+  }
+  function rtOneScreen(fr, rt, kind, n, back) {
+    var picks = rtPicks(rt), it = picks[n], last = n === picks.length - 1, long = kind !== 'time';
+    var card = rtCard(it, long);
+    var swap = function () { var c = rtCard(it, long); if (card.parentNode) card.replaceWith(c); card = c; };
+    if (kind === 'time') {
+      var ref = { v: it.time != null ? it.time : rtSuggest(rt, picks, n) };
+      return frShell({ title: 'At what time?', sub: 'Choose a start time for it.', onBack: back,
+        body: [card, homeWheel(ref, 'Start time', function (v) { it.time = v; swap(); })],
+        next: { label: 'Next', ready: true, onTap: function () { it.time = ref.v; if (!(it.mins > 0)) it.mins = 15; frGo('r-long:' + n); } },
+        skip: function () { it.time = null; it.mins = 0; frGo('r-days:' + n); } });
+    }
+    if (kind === 'long') {
+      var pillBox = h('div', { class: 'hf-pills', role: 'group', 'aria-label': 'How long' });
+      var paint = function () {
+        fillTo(pillBox, HOME_PILLS.map(function (p) {
+          return h('button', { class: 'hf-pill' + (it.mins === p[0] ? ' on' : ''), type: 'button', 'aria-pressed': String(it.mins === p[0]),
+            onclick: function () { it.mins = p[0]; paint(); swap(); } }, p[1]);
+        }));
+      };
+      paint();
+      return frShell({ title: 'How long?', sub: 'Set how long it takes.', onBack: back, body: [card, pillBox],
+        next: { label: 'Next', ready: true, onTap: function () { frGo('r-days:' + n); } },
+        skip: function () { it.mins = 0; frGo('r-days:' + n); } });
+    }
+    var daysBox = h('div', { class: 'hf-daysbox' });
+    var paintDays = function () { fillTo(daysBox, homeDayPicker(it.days, function (next) { it.days = next; paintDays(); })); };
+    paintDays();
+    return frShell({ title: 'Which days?', sub: 'Pick the days it happens.', onBack: back, body: [card, daysBox],
+      next: { label: last ? 'Finish' : 'Next', ready: true, onTap: function () { if (last) rtEnd(fr, true); else frGo('r-time:' + (n + 1)); } } });
+  }
+  var RT_INTRO_V = 2;
+  function rtIntroSeen(p) {
+    return Number(p && p.routinesIntroV) >= RT_INTRO_V;
+  }
+  var rtIntroUp = false;
+  function rtIntroDue() {
+    var p = homePrefs(), seen = p.routinesIntro, now = rtIntroSeen(p);
+    if (!IN_SHELL || S.firstRun || S.rtIntroAsked === frUid() || !modeKnown() || homeUnread() || (now && seen !== 'web')) return false;
+    if (now && !rtCalDue()) return false;
+    return notFan() && homeOff() && modeNow() === 'off' && !firstRunDue();
+  }
+  function rtIntroWatch() {
+    if (rtIntroUp || !rtIntroDue()) return;
+    rtIntroUp = true;
+    var tries = 0, clear = 0;
+    var look = function () {
+      if (!rtIntroDue() || tries++ > 100) { rtIntroUp = false; return; }
+      if (modeUp || modeBusy()) { clear = 0; setTimeout(look, 600); return; }
+      if (clear++ < 1) { setTimeout(look, 600); return; }
+      rtIntroUp = false;
+      S.rtIntroAsked = frUid();
+      var p = homePrefs();
+      if (rtIntroSeen(p)) S.firstRun = frNew({ routines: true, calOnly: true, step: 'r-cal', rt: rtNew() });
+      else {
+        S.firstRun = frNew({ routines: true, step: 'r-hello', rt: rtNew() });
+        homeSavePrefs({ routinesIntroV: RT_INTRO_V });
+      }
+      window.scrollTo(0, 0);
+      render(true);
+    };
+    setTimeout(look, 900);
   }
   var cardLine = Promise.resolve();
   function cardPatch(change) {
@@ -17594,15 +17963,42 @@
       var key = want.toLowerCase(), book = offTourOf(want);
       var spelled = (book ? [artistOf(getTour(book))] : [])
         .concat(allTourEntries().map(function (e) { return artistOf(e[1]); }).filter(function (n) { return n.toLowerCase() === key; }), [want]);
-      return spelled.filter(function (n) { return n && mayOpenOff(n); })[0] || '';
+      return spelled.filter(function (n) { return n && mayOpenOff(n, true); })[0] || '';
     }
+    var n = String(offPickGet() || '').trim().toLowerCase();
+    return (n && offPillNames().filter(function (x) { return x.toLowerCase() === n; })[0]) || offHomeArtist();
+  }
+  function offHomeArtist() {
+    return offHomeChoices()[0] || '';
+  }
+  function offHomeChoices() {
     var list = historyArtists();
     var pick = function (n) {
       n = String(n || '').trim().toLowerCase();
       return (n && list.filter(function (x) { return x.toLowerCase() === n; })[0]) || '';
     };
     var nx = nextTourEntry(), recent = scopedTours()[0];
-    return pick(S.offArtist) || pick(nx && artistOf(nx.t)) || pick(recent && artistOf(recent[1])) || list[0] || '';
+    return [pick(nx && artistOf(nx.t)), pick(recent && artistOf(recent[1]))].concat(list).filter(Boolean);
+  }
+  function offPayArtist(fr) {
+    var a = fr && fr.host ? artistOf(getTour(fr.host)) : '';
+    if (a) return offArtistFor(a);
+    var c = offHomeChoices();
+    for (var i = 0; i < c.length; i += 1) if (offPayOf(c[i])) return c[i];
+    return c[0] || '';
+  }
+  function offPickKey() {
+    var B = window.GR_BACKEND;
+    return 'gr-off-pick:' + ((S.mode === 'db' && B && B.uid && B.uid()) || 'me');
+  }
+  function offPickGet() {
+    var k = offPickKey();
+    return S.offArtist && S.offArtist.key === k ? S.offArtist.name : (lsGet(k) || '');
+  }
+  function offPickSet(name) {
+    var k = offPickKey();
+    S.offArtist = { key: k, name: String(name || '').trim() };
+    lsSet(k, S.offArtist.name);
   }
   function offRoute(artist, view, host) {
     var r = { name: 'offtour', view: view || 'costs', artist: String(artist || '').trim() };
@@ -17634,7 +18030,7 @@
           if (menu && current === 'tours') menu.toggle(e); else back(bookTabNow())();
         } });
       }
-      if (offPayOf(artist)) {
+      if (offPayOf(offPayArtist(fr))) {
         tabs.push({ label: 'MY PAY', on: current === 'mypay', go: function () {
           if (current !== 'mypay') go(Object.assign(offRoute(artist, 'mypay', fr.host), { list: (S.route && S.route.list) || null }));
         } });
@@ -17648,32 +18044,51 @@
     return payTabRow(tabs);
   }
   function offBar(fr) { return tourTabs(fr.bar, 'costs', { off: true }); }
-  function offArtistBar(name) {
-    var list = historyArtists(), key = String(name || '').toLowerCase();
-    var listed = list.some(function (n) { return n.toLowerCase() === key; });
-    if (list.length < 2 && listed) return null;
-    return h('div', { class: 'pt-tourbar' },
-      h('span', { class: 'pt-tourname' }, h('span', null, 'Off Tour book: ' + name)),
-      list.length > 1 || (list.length && !listed) ? h('button', { class: 'mn-change', type: 'button', 'aria-label': 'Change artist',
-        onclick: function () { openOffArtistPicker(name); } }, 'Change') : null);
+  function offPillNames() {
+    var seen = Object.create(null);
+    var pages = actingAs() ? [] : ((myActs().list) || []).filter(function (x) { return !!x && x.mine === true; })
+      .map(function (x) { return String(x.name || '').trim(); }).filter(function (n) { return n && mayOpenOff(n, true); });
+    return historyArtists().concat(pages).filter(function (n) { var k = n.toLowerCase(); return !seen[k] && (seen[k] = true); });
   }
-  function openOffArtistPicker(cur) {
-    var list = historyArtists();
-    openSheet(function () {
-      return [
-        h('h2', { class: 'sh-title' }, 'Which artist?'),
-        h('p', { class: 'sh-sub' }, 'OFF TOUR opens this artist’s book.'),
-        h('div', { class: 'fl-list' }, list.map(function (n) {
-          var on = n === cur;
-          return h('button', { class: 'fl-row', type: 'button', 'aria-pressed': on ? 'true' : 'false',
-            onclick: function () { S.offArtist = n; closeSheet(); go(offRoute(n, bookTabNow())); } },
-            h('span', { class: 'lr-text' }, h('span', { class: 'lr-title' }, n)),
-            on ? h('span', { class: 'acct-on', 'aria-hidden': 'true' }, icon('check', 14)) : null);
-        })),
-        h('div', { class: 'stack' },
-          h('button', { class: 'btn ghost block', type: 'button', onclick: function () { closeSheet(); } }, 'Close'))
-      ];
-    }, { label: 'Which artist?' });
+  var offPillsSlid = { key: '', x: 0 };
+  function offArtistPills(name) {
+    var own = offPillNames(), key = String(name || '').trim().toLowerCase(), r = S.route || {};
+    var extra = !!key && !own.some(function (n) { return n.toLowerCase() === key; });
+    var names = extra ? own.concat([String(name).trim()]) : own;
+    if (names.length < 2 && !extra) return null;
+    var slid = names.join('\n') + '\n' + key;
+    var row = h('div', { class: 'bar-tabs-s op-pills', role: 'group', 'aria-label': 'Off Tour books' }, names.map(function (n) {
+      var on = n.toLowerCase() === key;
+      return h('button', { class: 'op-pill' + (on ? ' on' : ''), type: 'button', 'aria-pressed': on ? 'true' : 'false',
+        onclick: function () {
+          if (on) return;
+          offPickSet(n);
+          var to = offRoute(n, bookTabNow(), r.host);
+          if (r.list) to.list = r.list;
+          go(to);
+        } }, n);
+    }));
+    row.addEventListener('scroll', function () { offPillsEnds(row); if (row.isConnected) offPillsSlid = { key: slid, x: row.scrollLeft }; }, { passive: true });
+    requestAnimationFrame(function () { offPillsFit(row, offPillsSlid.key === slid ? offPillsSlid.x : null); });
+    return row;
+  }
+  function offPillsFit(row, x) {
+    if (!row.isConnected || !row.getBoundingClientRect) return;
+    var lit = row.querySelector('.op-pill.on');
+    if (x != null) row.scrollLeft = x;
+    else if (lit) {
+      var a = row.getBoundingClientRect(), b = lit.getBoundingClientRect(), at = row.scrollLeft;
+      var left = lit.previousElementSibling ? b.left - a.left + at - 28 : 0;
+      var right = lit.nextElementSibling ? b.right - a.left + at + 28 : row.scrollWidth;
+      if (right > at + row.clientWidth) at = right - row.clientWidth;
+      if (left < at) at = left;
+      row.scrollLeft = Math.max(0, Math.min(row.scrollWidth - row.clientWidth, at));
+    }
+    offPillsEnds(row);
+  }
+  function offPillsEnds(row) {
+    var left = row.scrollLeft > 1, right = row.scrollWidth - row.clientWidth - row.scrollLeft > 1;
+    row.className = 'bar-tabs-s op-pills' + (left ? ' more-l' : '') + (right ? ' more-r' : '');
   }
   function viewOffFrame() {
     var r = S.route, view = r.view || 'details', fr = offFrame();
@@ -17696,7 +18111,7 @@
     if (view === 'tours' && fr.host && !(r.host === fr.host && fr.host === roadTourId())) view = bookTabNow();
     if (!artist && view !== 'mypay') view = 'tours';
     if (view === 'mypay') {
-      if (fr.host && !offPayOf(artist)) { S.route = { name: 'tour', id: fr.host, view: 'mypay', list: r.list || null }; return viewTour(); }
+      if (fr.host && !offPayOf(offPayArtist(fr))) { S.route = { name: 'tour', id: fr.host, view: 'mypay', list: r.list || null }; return viewTour(); }
       return viewOffPay(fr, artist);
     }
     if (view === 'tours') return viewOffTours(fr, artist);
@@ -17729,9 +18144,9 @@
     }
     return h('div', { class: 'page tour has-tabs ' + (view === 'money' ? 'budget-page' : 'exp-page') },
       pageBar(offTopTabs(fr, name, 'off'), r.list),
+      offArtistPills(name),
       bookStrip(id, view, function (v) { return offRoute(name, v); }),
       dbBanner(),
-      offArtistBar(name),
       body,
       offBar(fr));
   }
@@ -17903,7 +18318,7 @@
     return function () { go({ name: 'history', back: here, sum: { kind: 'tour', id: e[0], ls: { to: here, label: 'Tours', short: 'Back' } } }); };
   }
   function viewOffPay(fr, artist) {
-    var own = offPayOf(artist), body, top = null;
+    var own = offPayOf(offPayArtist(fr)), body, top = null;
     if (own) {
       top = myPayTop(own);
       body = myPayBody(own, getTour(own), { lead: h('p', { class: 'hist-who', style: 'margin-top:0' }, 'Your own book, between tours') });
@@ -17925,6 +18340,7 @@
   function offMoveOk(id, r) {
     var t = getTour(id), B = window.GR_BACKEND;
     if (!r || !r.chargeId || !t || !isOffTour(t) || offPayOf(artistOf(t)) !== id || !canWrite() || !canEditTour(id)) return false;
+    if (offPayOf(offPayArtist(offFrame())) !== id) return false;
     if (!B || !(B.patchMyPayBook || B.saveMyPayBook)) return false;
     var ch = G.isObj(t.charges) ? t.charges[r.chargeId] : null;
     if (!(G.isObj(ch) && !ch.accounted && G.num(ch.amount) > 0 && !ch.crewId && !G.crewSplitOf(ch))) return false;
@@ -36483,8 +36899,12 @@
   }
   function feedWaitingWhere() {
     var by = {}, out = [];
-    var books = 0;
-    S.tours.forEach(function (t) { if (isOffTour(t) && !t.deletedAt) books += 1; });
+    var inBook = {};
+    ((S.feed && S.feed.items) || []).forEach(function (it) {
+      var t = it.tour_id ? getTour(it.tour_id) : null;
+      if (t && isOffTour(t) && !t.deletedAt) inBook[it.tour_id] = true;
+    });
+    var books = Object.keys(inBook).length;
     ((S.feed && S.feed.items) || []).forEach(function (it) {
       var t = it.tour_id ? getTour(it.tour_id) : null;
       var kind = !it.tour_id ? 'none' : feedTourGone(it.tour_id) ? 'gone' : isOffTour(t) ? 'offtour' : 'tour';
@@ -36630,7 +37050,7 @@
   }
   listenForPlaidBack();
   var DAYBAR_PUSH = true;
-  var HOME_BAR = false;
+  var HOME_BAR = true;
   var DAYBAR_HINT = 'On show days: where the day is, from the day sheet, with a bar to the next thing';
   var DAYBAR_HINT_HOME = 'Where your day is, with a bar to the next thing: the day sheet on show days; your calendar, routines and tasks off tour';
   var BAR_NAMES_HINT = 'Between tours. Off: the bar says Event, Routine, Task or Plan, with the time. No name reaches the bar or Apple’s push.';
@@ -36699,12 +37119,12 @@
     }
     var s = home ? {} : pick.show;
     if (!home && (state.nowKey === 'buscall' || state.nextKey === 'buscall')) state = Object.assign({}, state, barBusWord(pick.tourId));
-    var endAt = Math.floor(((home || pick).tl.end + G.DAY_BAR_GRACE) / 1000);
+    var endAt = Math.floor((home ? G.dayBarEnd(home.tl) : pick.tl.end + G.DAY_BAR_GRACE) / 1000);
     if (home) endAt = Math.min(endAt, Math.floor(homeBarUntil(home.date) / 1000));
     var payload = {
       key: home ? 'home|' + home.date : pick.tourId + '|' + pick.showId,
       place: home ? '' : [String(s.venue || '').trim(), String(s.city || '').trim()].filter(Boolean).join(' · '),
-      url: home ? 'greenroom://daysheet?day=' + home.date : 'greenroom://daysheet?tour=' + encodeURIComponent(pick.tourId) + '&show=' + encodeURIComponent(pick.showId),
+      url: home ? 'greenroom://daysheet?day=' + home.date + '&bar=1' : 'greenroom://daysheet?tour=' + encodeURIComponent(pick.tourId) + '&show=' + encodeURIComponent(pick.showId),
       state: state,
       staleAt: state.nextAt || endAt,
       endAt: endAt,
@@ -36760,6 +37180,7 @@
     var P = dayBarPlugin();
     var d = dayBarDevice();
     var jobs = [];
+    homeUpSet('', '');
     if (P) jobs.push(dayBarCall(P.end, { forget: true }));
     if (d && B && typeof B.dayBarDevice === 'function') {
       var plan = HOME_BAR && typeof B.dayBarHome === 'function' ? B.dayBarHome(d.id, d.secret, null, 0) : Promise.resolve();
@@ -36872,13 +37293,8 @@
       try { q[decodeURIComponent(kv[0] || '')] = decodeURIComponent(kv.slice(1).join('=') || ''); } catch (e) {   }
     });
     if (q.day) {
-      whenLoaded(function () {
-        if (sheet) closeSheet(true);
-        var today = G.tourToday();
-        S.homeDate = G.parseDay(q.day) && q.day >= today ? q.day : today;
-        if (modeNow() === 'off') go({ name: 'offtour', view: 'day' });
-        else { var to = overviewRoute(); if (to) go(to); }
-      });
+      var tapped = Date.now();
+      whenLoaded(function () { dayBarDayOpened(q.day, tapped, 0, q.bar === '1'); });
       return true;
     }
     whenLoaded(function () {
@@ -36891,6 +37307,25 @@
       if (i >= 0) { S.dsIndex = i; S.dsTour = q.tour; }
       go({ name: 'tour', id: q.tour, view: 'day' });
     });
+    return true;
+  }
+  function dayBarDayOpened(day, at, tries, bar) {
+    if (!modeKnown() && tries < 40) { setTimeout(function () { dayBarDayOpened(day, at, tries + 1, bar); }, 150); return; }
+    if (sheet) closeSheet(true);
+    var today = G.tourToday();
+    S.homeDate = G.parseDay(day) && day >= today ? day : today;
+    if (modeNow() === 'off') { if (!(bar && homeAwakeTap(day, at))) go({ name: 'offtour', view: 'day' }); }
+    else { var to = overviewRoute(); if (to) go(to); }
+  }
+  function homeAwakeTap(day, at) {
+    if (!notFan() || actingAs() || day !== G.tourToday(at)) return false;
+    if (!G.homeAwakeUp(homeBarTl(day, at), at)) return false;
+    var up = G.homeUpAt(at);
+    homeUpSet(up.date, up.time);
+    S.pfTab = 'today';
+    go(PF_HOME);
+    toast('Good morning. Your day moved to fit.');
+    dayBarSync(true);
     return true;
   }
   var share = { asked: false, wait: null };
@@ -37321,6 +37756,7 @@
     Promise.all([barSt, cap(permP, ''), cap(mineP, { ok: false }), cap(alSt, null)]).then(function (got) {
       var bs = got[0], perm = got[1] || '', mine = G.isObj(got[2]) ? got[2] : { ok: false };
       var on = dayBarOn(), names = HOME_BAR && homeBarNames();
+      var calRow = HOME_BAR && calOn(), barCal = homePrefs().barCal !== false;
       var als = G.isObj(got[3]) ? got[3] : {};
       var alStage = alarmOn('stage'), alBus = alarmOn('bus'), alLast = alarmOn('lastcall');
       var alNote = !AL ? ''
@@ -37366,6 +37802,7 @@
               if (HOME_BAR && names !== homeBarNames()) { homeSavePrefs({ barNames: names }); if (!names) homeBarOff(); }
               dayBarSync(true);
             }
+            if (calRow && barCal !== (homePrefs().barCal !== false)) { homeSavePrefs({ barCal: barCal }); if (!barCal) homeBarOff(); dayBarSoon(); }
             if (AL) {
               lsSet(alarmKey('stage'), alStage ? '1' : '0'); lsSet(alarmKey('bus'), alBus ? '1' : '0');
               lsSet(alarmKey('lastcall'), alLast ? '1' : '0');
@@ -37401,6 +37838,9 @@
             h('div', { class: 'row-label', style: 'flex:1' }, 'Show names on the Lock Screen', h('span', { class: 'hint' }, BAR_NAMES_HINT)),
             segmented(['Off', 'On'], names ? 1 : 0, function (i) { names = i === 1; }, 'Show names on the Lock Screen')) : null,
           HOME_BAR && can ? h('p', { class: 'note' }, 'Show names follows your account, on every iPhone you use.') : null,
+          calRow ? h('div', { class: 'ds-yn', style: 'min-height:48px;margin-top:12px' },
+            h('div', { class: 'row-label', style: 'flex:1' }, 'Show calendar on Lock Screen'),
+            segmented(['Off', 'On'], barCal ? 1 : 0, function (i) { barCal = i === 1; }, 'Show calendar on Lock Screen')) : null,
           barNote ? h('p', { class: 'note' }, barNote) : null,
           AL ? h('div', { class: 'ds-yn', style: 'min-height:48px' },
             h('div', { class: 'row-label', style: 'flex:1' }, 'Stage alarm',
@@ -37427,7 +37867,7 @@
           A && perm === 'denied' ? h('p', { class: 'note' },
             'Alerts are off for Greenroom on this iPhone. To get them, open your iPhone’s Settings, then Apps, then ' +
             'Greenroom, then Notifications, and turn on Allow Notifications.') : null,
-          h('div', { class: 'stack' }, can || A || AL ? saveBtn : null,
+          h('div', { class: 'stack' }, can || A || AL || calRow ? saveBtn : null,
             A && alertsOn ? h('button', { class: 'btn ghost block', type: 'button',
               onclick: async function () {
                 var ok = await appPushOff();
@@ -37435,7 +37875,7 @@
                 toast(ok ? 'Alerts off for this phone — tour alerts too'
                   : 'Couldn’t reach Greenroom. Alerts go off the next time the app opens with a signal.');
               } }, 'Turn all alerts off') : null,
-            h('button', { class: 'btn ghost block', type: 'button', onclick: function () { closeSheet(); } }, can || A || AL ? 'Cancel' : 'Close'))
+            h('button', { class: 'btn ghost block', type: 'button', onclick: function () { closeSheet(); } }, can || A || AL || calRow ? 'Cancel' : 'Close'))
         ];
       }, { label: 'Notifications' });
     });
