@@ -157,8 +157,16 @@ enum DayBarGone {
     private static let name = "greenroom.daybar.gone"
     /// The home bars this phone has seen up, by id: a killed app sees no swipe, so the next launch looks for the ones missing.
     private static let upName = "greenroom.daybar.homeup"
+    /// The build of the app that saw each of those up, by id. Updating the app (TestFlight or the App Store) or installing it again takes its
+    /// bars down, and the new build hears of it only at its first launch: a bar noted by another build, or by one that noted no build (223 and
+    /// 224 did not), went with the update. Nobody swiped it.
+    private static let upBuildName = "greenroom.daybar.homeupbuild"
     /// When the bar of a day is due down, as the page last said, by its key (one day at a time): a bar gone after that is over, not swiped.
     private static let endName = "greenroom.daybar.homeend"
+    /// One lock for the two lists above (the bars up, and the build that saw each): every read, change and write of them is one step.
+    /// They are changed from more than one thread (a bar followed, a bar noted down, the look at launch), and a bar that kept its key
+    /// but lost its build would have a real swipe of it let go as an update.
+    private static let lock = NSLock()
 
     static func key() -> String { UserDefaults.standard.string(forKey: name) ?? "" }
     static func mark(_ key: String) {
@@ -166,25 +174,71 @@ enum DayBarGone {
         DayBarReport.send(kind: "gone", token: "", show: key, started: nil)
     }
     static func clear() {
+        lock.lock()
+        defer { lock.unlock() }
         UserDefaults.standard.removeObject(forKey: name)
         UserDefaults.standard.removeObject(forKey: upName)
+        UserDefaults.standard.removeObject(forKey: upBuildName)
         UserDefaults.standard.removeObject(forKey: endName)
+    }
+    /// This app's build (CFBundleVersion). Every TestFlight and App Store upload has a new one.
+    static func build() -> String { Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "" }
+    /// (The two lists as they are kept. Read only while holding the lock.)
+    private static func upKeys() -> [String: String] { UserDefaults.standard.dictionary(forKey: upName) as? [String: String] ?? [:] }
+    private static func upBuilds() -> [String: String] { UserDefaults.standard.dictionary(forKey: upBuildName) as? [String: String] ?? [:] }
+    /// Was this bar noted up by the build running now? No (another build, or none noted): the update or the reinstall ended it.
+    static func sameBuild(_ id: String) -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return upBuilds()[id] == build()
     }
     static func noteEnd(_ key: String, _ at: Date) { UserDefaults.standard.set([key: at.timeIntervalSince1970], forKey: endName) }
     static func over(_ key: String) -> Bool {
         let all = UserDefaults.standard.dictionary(forKey: endName) as? [String: Double] ?? [:]
         return all[key].map { Date().timeIntervalSince1970 >= $0 } ?? false
     }
-    static func up() -> [String: String] { UserDefaults.standard.dictionary(forKey: upName) as? [String: String] ?? [:] }
+    static func up() -> [String: String] {
+        lock.lock()
+        defer { lock.unlock() }
+        return upKeys()
+    }
     static func noteUp(_ id: String, _ key: String) {
-        var all = up()
+        lock.lock()
+        defer { lock.unlock() }
+        var all = upKeys()
         all[id] = key
         UserDefaults.standard.set(all, forKey: upName)
+        var builds = upBuilds()
+        builds[id] = build()
+        UserDefaults.standard.set(builds, forKey: upBuildName)
     }
     static func noteDown(_ id: String) {
-        var all = up()
+        lock.lock()
+        defer { lock.unlock() }
+        var all = upKeys()
         all[id] = nil
         UserDefaults.standard.set(all, forKey: upName)
+        var builds = upBuilds()
+        builds[id] = nil
+        UserDefaults.standard.set(builds, forKey: upBuildName)
+    }
+    /// The look at launch, in one step: each bar noted up that iOS no longer lists as up (stillUp: the ids it does), noted down here and
+    /// handed back with its key and whether this build noted it (read before it is let go). Two looks at once never both take one bar.
+    static func takeMissing(_ stillUp: Set<String>) -> [(id: String, key: String, sameBuild: Bool)] {
+        lock.lock()
+        defer { lock.unlock() }
+        var all = upKeys()
+        var builds = upBuilds()
+        let now = build()
+        let gone = all.filter { !stillUp.contains($0.key) }.map { (id: $0.key, key: $0.value, sameBuild: builds[$0.key] == now) }
+        if gone.isEmpty { return [] }
+        for g in gone {
+            all[g.id] = nil
+            builds[g.id] = nil
+        }
+        UserDefaults.standard.set(all, forKey: upName)
+        UserDefaults.standard.set(builds, forKey: upBuildName)
+        return gone
     }
 }
 
@@ -269,11 +323,12 @@ final class DayBarRunner {
     private var watched = Set<String>()
     private var reported = Set<String>()
     private var watchingStart = false
-    /// Bars this app ended itself: going away is no swipe.
-    private var closing = Set<String>()
     private let lock = NSLock()
     /// When each bar went up (Apple ends a bar 8 hours after), by its id.
     private let startedName = "greenroom.daybar.started"
+    /// Bars this app ended itself, by id, with when: going away is no swipe. Kept on the phone, not only in memory, so the next launch after
+    /// the app was closed still knows them (a day is plenty).
+    private let closingName = "greenroom.daybar.closing"
 
     private func hex(_ data: Data) -> String { data.map { String(format: "%02x", $0) }.joined() }
     private func live(_ a: Activity<DayBarAttributes>) -> Bool {
@@ -283,11 +338,32 @@ final class DayBarRunner {
         let all = UserDefaults.standard.dictionary(forKey: startedName) as? [String: Double] ?? [:]
         return all[id].map { Date(timeIntervalSince1970: $0) }
     }
-    private func closeBar(_ a: Activity<DayBarAttributes>) async {
+    private func closingAll() -> [String: Double] {
+        UserDefaults.standard.dictionary(forKey: closingName) as? [String: Double] ?? [:]
+    }
+    private func noteClosing(_ id: String) {
         lock.lock()
-        closing.insert(a.id)
-        lock.unlock()
+        defer { lock.unlock() }
+        let now = Date().timeIntervalSince1970
+        var all = closingAll().filter { now - $0.value < 24 * 3600 }
+        all[id] = now
+        UserDefaults.standard.set(all, forKey: closingName)
+    }
+    private func closeBar(_ a: Activity<DayBarAttributes>) async {
+        noteClosing(a.id)
         await a.end(nil, dismissalPolicy: .immediate)
+    }
+    /// Did this app end that bar itself? take: and forget it now (the follow, which hears of each bar's end once).
+    private func closedByUs(_ id: String, take: Bool) -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        var all = closingAll()
+        guard all[id] != nil else { return false }
+        if take {
+            all[id] = nil
+            UserDefaults.standard.set(all, forKey: closingName)
+        }
+        return true
     }
     private func markStarted(_ id: String) {
         var all = UserDefaults.standard.dictionary(forKey: startedName) as? [String: Double] ?? [:]
@@ -403,6 +479,9 @@ final class DayBarRunner {
     private func follow(_ a: Activity<DayBarAttributes>) {
         let key = a.attributes.key
         guard key.hasPrefix("home|") else { return }
+        // (A bar already gone when this app first sees it, such as one an update took down that iOS still lists, is never noted up
+        // with this build nor followed: the look at launch has judged it already.)
+        guard a.activityState != .dismissed else { return }
         DayBarGone.noteUp(a.id, key)
         Task { [weak self] in
             for await st in a.activityStateUpdates {
@@ -413,9 +492,7 @@ final class DayBarRunner {
                 }
                 if st == .dismissed {
                     DayBarGone.noteDown(a.id)
-                    self.lock.lock()
-                    let ours = self.closing.remove(a.id) != nil
-                    self.lock.unlock()
+                    let ours = self.closedByUs(a.id, take: true)
                     if !ours && self.swiped(a.id, key) { DayBarGone.mark(key) }
                     return
                 }
@@ -438,14 +515,14 @@ final class DayBarRunner {
     }
 
     /// The same look at launch, and each time the page asks: a home bar noted up and now gone went while the app was not running, or was
-    /// asleep. It saw nothing, so it counts as swiped, by the test above. A bar this app is closing is no swipe.
+    /// asleep. It saw nothing, so it counts as swiped, by the test above. A bar this app is closing, or closed before a relaunch, is no swipe.
+    /// Nor is a bar noted by another build of the app (or by one that noted none): the update or the reinstall took it down. It is let go
+    /// with no word to the server, so this same open starts the day's bar again, as on a phone with none up.
     func swipedWhileAway() {
-        let bars = Activity<DayBarAttributes>.activities
-        for (id, key) in DayBarGone.up() where !bars.contains(where: { $0.id == id && $0.activityState != .dismissed }) {
-            DayBarGone.noteDown(id)
-            lock.lock()
-            let ours = closing.contains(id)
-            lock.unlock()
+        let up = Set(Activity<DayBarAttributes>.activities.filter { $0.activityState != .dismissed }.map { $0.id })
+        for (id, key, same) in DayBarGone.takeMissing(up) {
+            if !same { continue }
+            let ours = closedByUs(id, take: false)
             if !ours && swiped(id, key) { DayBarGone.mark(key) }
         }
     }
@@ -469,6 +546,8 @@ final class DayBarRunner {
         Task { [weak self] in
             for await a in Activity<DayBarAttributes>.activityUpdates {
                 guard let self = self else { return }
+                // (A bar already swiped or taken down is nothing to watch, and no reason to close a live bar of its day.)
+                if a.activityState == .dismissed { continue }
                 // (A bar of a day you swiped away, started by the server before it heard: ended as soon as this phone runs.)
                 if a.attributes.key == DayBarGone.key() {
                     await self.closeBar(a)
