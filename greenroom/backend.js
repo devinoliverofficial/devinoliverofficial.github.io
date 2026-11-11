@@ -426,7 +426,7 @@
   }
   function keptClear() {
     try {
-      Object.keys(localStorage).forEach(function (k) { if (/^gr-keep-(crew|fw):|^gr-card:/.test(k)) localStorage.removeItem(k); });
+      Object.keys(localStorage).forEach(function (k) { if (/^gr-keep-(crew|fw):|^gr-card:|^gr-off-pick:/.test(k)) localStorage.removeItem(k); });
     } catch (e) {   }
   }
   function suggestClear() {
@@ -3531,6 +3531,15 @@
       } catch (e) { n = null; }
       await loadFeed(false);
       return n;
+    },
+    feedLineFollow: async function (ids) {
+      var list = (Array.isArray(ids) ? ids : []).map(String).filter(Boolean).slice(0, 200);
+      if (!list.length) return 0;
+      try {
+        var q = await sb.rpc('feed_line_follow', { ids: list });
+        if (q.error) { if (!fnMissing(q.error)) noteError('cards:follow', q.error); return null; }
+        return Number(q.data) || 0;
+      } catch (e) { return null; }
     },
     feedLeftOut: async function (status, reason, page, after) {
       var st = status === 'skipped' ? 'skipped' : 'left_out', from = Math.max(0, Math.round(Number(page)) || 0) * FEED_LIST;

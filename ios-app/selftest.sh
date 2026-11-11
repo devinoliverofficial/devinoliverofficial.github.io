@@ -449,6 +449,9 @@ grep -B3 'guard let a = info\["alarms"\] as? \[String: Any\]' "$AP2" | grep -q '
 DP="$HERE/native/App/DayBarPlugin.swift"
 grep -q 'CAPPluginMethod(name: "prepare"' "$DP" && grep -q 'CAPPluginMethod(name: "arm"' "$DP" && grep -q 'guard key.hasPrefix("home|") else { return }' "$DP" \
   && grep -q 'MorningMarker.forget()' "$DP" && ok "the day bar's new methods, the swipe watcher for your own day alone, the wake's marker cleared on forget" || bad "DayBarPlugin home changes"
+# Show locked bar (Nov 10 2026): showAgain is a method of the plugin, and it lets go only the swiped mark of the day it is given.
+grep -q 'CAPPluginMethod(name: "showAgain", returnType: CAPPluginReturnPromise)' "$DP" && grep -q 'guard !key.isEmpty, key == self.key() else { return }' "$DP" \
+  && [ "$(grep -c 'DayBarGone.forget(' "$DP")" = "1" ] && ok "Show locked bar: showAgain lets go only that day's swiped mark, from that tap alone" || bad "DayBarPlugin showAgain"
 # How a title is cleaned (GreenroomCalendar.clean), cut out of the plugin and run (plain Swift, no SDK): a control character and a line
 # break become a space, a joined emoji stays whole, and the length is in characters.
 if command -v swiftc >/dev/null; then
