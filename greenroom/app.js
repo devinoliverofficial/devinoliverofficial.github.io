@@ -166,7 +166,8 @@
     music: '<path d="M9 18V5l11-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="17" cy="16" r="3"/>',
     up: '<path d="M12 19V5.5"/><path d="M6 11l6-6 6 6"/>',
     cash: '<rect x="2.5" y="6" width="19" height="12" rx="2"/><circle cx="12" cy="12" r="2.6"/><path d="M6 9.5v.01M18 14.5v.01"/>',
-    refresh: '<path d="M20 11a8 8 0 0 0-14.6-4.4L4 8.5"/><path d="M4 3.5v5h5"/><path d="M4 13a8 8 0 0 0 14.6 4.4l1.4-1.9"/><path d="M20 20.5v-5h-5"/>'
+    refresh: '<path d="M20 11a8 8 0 0 0-14.6-4.4L4 8.5"/><path d="M4 3.5v5h5"/><path d="M4 13a8 8 0 0 0 14.6 4.4l1.4-1.9"/><path d="M20 20.5v-5h-5"/>',
+    lock: '<rect x="5" y="10.5" width="14" height="10" rx="2.2"/><path d="M8.5 10.5V7.5a3.5 3.5 0 0 1 7 0v3"/>'
   };
   function icon(name, size) {
     var s = size || 22;
@@ -484,7 +485,8 @@
         var v = d.data();
         if (G.isObj(v) && v.kind === 'seen') { if (G.num(v.at) >= seenShape(seen[d.id]).at) seen[d.id] = seenShape(v); return; }
         if (G.isObj(v) && (G.isObj(v.cats) || v.kind === 'crew' || v.kind === 'artistLogo' || v.kind === 'artist' || v.kind === 'profile' ||
-          v.kind === 'crewClues' || (HOME_KIND[v.kind] === 1 && String(d.id).indexOf(v.kind + ':') === 0))) m[d.id] = v;
+          v.kind === 'crewClues' || (HOME_KIND[v.kind] === 1 && String(d.id).indexOf(v.kind + ':') === 0) ||
+          (v.kind === 'offcard' && String(d.id).indexOf('offcard:') === 0))) m[d.id] = v;
       });
       Object.keys(homeFlight).forEach(function (k) { var r = homeFlight[k].rec; if (r) m[k] = r; else delete m[k]; });
       S.labels = m;
@@ -637,6 +639,7 @@
     legalNoticeAsk();
     if (first) restoreLastTour();
     if (first) artistAsks(true);
+    if (first) signalKnown();
     render(first);
     if (first) pageReadyWatch();
     reimbRedraw();
@@ -687,14 +690,15 @@
     toast((refused || (offline ? NO_SIGNAL : 'Couldn\u2019t save that. Try again.')) + (more ? ' ' + more : ''), more ? 5200 : 0, !!more);
   }
   var api = {
-    async create(id, doc) {
-      if (!canWrite()) { toast(VIEW_ONLY); return false; }
+    async create(id, doc, o) {
+      var quiet = !!(o && o.quiet);
+      if (!canWrite()) { if (!quiet) toast(VIEW_ONLY); return false; }
       if (S.mode === 'db') {
         S.pending[id] = doc;
         try {
           await enqueue(id, function () { return withRetry(function () { return store.db.doc('tours/' + id).set(doc); }); });
           return true;
-        } catch (e) { delete S.pending[id]; onWriteError(e); return false; }
+        } catch (e) { delete S.pending[id]; if (!quiet) onWriteError(e); return false; }
       }
       store.local.tours[id] = clone(doc); saveLocal(); render(); return true;
     },
@@ -736,7 +740,8 @@
     S.tabMenu = null;
     if (route.name === 'home' && actingAs()) { S.fromMap = {}; route = actHome(); }
     if (route.name === 'tour' && route.view === 'details') { S.dsIndex = null; S.dsMore = null; }
-    if (route.name === 'tour' && route.id) rememberTour(route.id);
+    if (route.name === 'tour' && route.id && G.isPnlDoc(getTour(route.id))) route = pnlBookRoute(route.id, route.back || PF_HOME);
+    if (route.name === 'tour' && route.id && !G.isStudioDoc(getTour(route.id))) rememberTour(route.id);
     if (route.name === 'offtour' && route.host === undefined && S.route && S.route.name === 'offtour' && S.route.host &&
         ['costs', 'cards', 'money', 'mypay'].indexOf(route.view) >= 0) {
       route = Object.assign({}, route, { host: S.route.host, list: S.route.list || null });
@@ -848,6 +853,7 @@
     else if (S.route.name === 'search') node = viewSearch();
     else if (S.route.name === 'mainmenu') node = viewMenu();
     else if (S.route.name === 'merchroom') node = viewMerchroom();
+    else if (S.route.name === 'signal') node = viewSignal();
     else if (S.route.name === 'history') node = viewHistory();
     else if (S.route.name === 'place') node = viewPlace();
     else node = viewHome();
@@ -887,6 +893,9 @@
       if (af) af.focus({ preventScroll: true });
     }
     modeWatch();
+    appTourWatch();
+    rtIntroWatch();
+    offAutoWatch();
   }
   var toastTimer = 0;
   var toastNow = null;
@@ -983,6 +992,7 @@
     if (s.onClose) { try { s.onClose(); } catch (e) {   } }
     s.root.classList.remove('open');
     document.body.classList.remove('locked');
+    if (typeof ovCalRefit === 'function') ovCalRefit(true);
     var finish = function () { if (!sheet) { s.root.replaceChildren(); s.root.hidden = true; } };
     if (immediate || reduced()) finish(); else setTimeout(finish, 300);
     if (!immediate && s.prevFocus && s.prevFocus.isConnected && s.prevFocus.tagName === 'BUTTON') {
@@ -1031,8 +1041,8 @@
   }
   function cfCls(main) { return ' cf-btn ' + (main ? 'cf-main' : 'cf-alt'); }
   function bookPlanned(c) { return !!G.spentOf && G.round(c.out) > G.round(G.spentOf(c)); }
-  function heroCaption(c, book) {
-    if (!book) return G.caption(c);
+  function heroCaption(c, book, studio) {
+    if (!book) return studio && G.stateOf(c) === 'idle' ? 'Add what the studio time costs to start' : G.caption(c);
     if (G.stateOf(c) === 'idle') return 'Nothing in or out yet';
     return bookPlanned(c) ? 'net, counting what is planned' : 'net so far';
   }
@@ -1058,7 +1068,7 @@
     var pct = Math.max(0, Math.min(100, Math.floor(c.coverage * 100)));
     var net = heroNet(c, book);
     var odo = h('div', { class: 'odo num', id: 'odo', role: 'text', 'aria-label': money(net, true) });
-    var cap = h('div', { class: 'hero-cap', id: 'hero-cap' }, heroCaption(c, book));
+    var cap = h('div', { class: 'hero-cap', id: 'hero-cap' }, heroCaption(c, book, G.isStudioDoc(tour)));
     var chip = null;
     if (change) {
       var up = change.delta > 0;
@@ -1091,13 +1101,14 @@
     var dayNote = h('div', { class: 'hero-note', id: 'hero-note', 'aria-live': book ? 'polite' : null });
     var capRow = h('div', { class: 'cap-row' }, cap, dayNote);
     var hero = h('section', { class: 'hero ' + st + (book ? ' book' + (bookPlanned(c) ? ' planned' : '') : ''), id: 'hero',
-      'aria-label': book ? 'Off Tour balance' : 'Tour balance' },
+      'aria-label': book ? 'Off Tour balance' : G.isStudioDoc(tour) ? 'Studio time balance' : 'Tour balance' },
       odo, capRow, chip, chart, prog);
     hero.__calc = c;
     hero.__series = series;
     hero.__pct = pct;
     hero.__id = tourId;
     hero.__book = book;
+    hero.__studio = G.isStudioDoc(tour);
     hero.__net = net;
     return hero;
   }
@@ -1572,10 +1583,11 @@
           (date === today ? ' \u00b7 tonight' : date > today ? ' \u00b7 upcoming' : ' \u00b7 not logged');
       }
       var nxt = showDates.filter(function (d) { return d > date; })[0];
+      if (hero.__studio) { var sd = G.studioDays(getTour(geo.tourId)); return sd.indexOf(date) >= 0 ? 'Studio' : ''; }
       return nxt ? 'Day off \u00b7 next ' + (String(schedule[nxt].city || 'show').split(',')[0]) : 'Day off';
     }
     var restText = money(hero.__net == null ? c.net : hero.__net, true);
-    var restCap = heroCaption(c, hero.__book);
+    var restCap = heroCaption(c, hero.__book, hero.__studio);
     var restPct = hero.__pct;
     var restPctText = pctEl ? pctEl.textContent : '';
     var cur = -1;
@@ -1814,29 +1826,74 @@
     Object.keys(S.pending).forEach(function (id) {
       if (!S.tours.has(id)) entries.push([id, S.pending[id]]);
     });
-    entries = entries.filter(function (e) { return !isOffTour(e[1]); });
+    entries = entries.filter(function (e) { return !isOffTour(e[1]) && !G.isStudioDoc(e[1]) && !G.isPnlDoc(e[1]); });
     if (!includeDeleted) {
       entries = entries.filter(function (e) { return !e[1].deletedAt; });
     }
     entries.sort(function (a, b) { return (b[1].createdAt || 0) - (a[1].createdAt || 0); });
     return entries;
   }
-  function trashedEntries() {
-    return allTourEntries(true).filter(function (e) { return e[1].deletedAt && (S.mode !== 'db' || createdTour(e[0])); });
+  function studioEntries(includeDeleted) {
+    var entries = Array.from(S.tours.entries());
+    Object.keys(S.pending).forEach(function (id) { if (!S.tours.has(id)) entries.push([id, S.pending[id]]); });
+    return entries.filter(function (e) { return G.isStudioDoc(e[1]) && (includeDeleted || !e[1].deletedAt); })
+      .sort(function (a, b) { return (b[1].createdAt || 0) - (a[1].createdAt || 0); });
   }
-  function tourWord(t) { return G.isShowDoc(t) ? 'show' : 'tour'; }
+  function scopedStudios() {
+    var card = actingAs() ? actingCard() : null, key = card && card.name ? String(card.name).trim().toLowerCase() : '';
+    var all = studioEntries();
+    if (!actingAs()) return all;
+    return key ? all.filter(function (e) { return artistOf(e[1]).toLowerCase() === key; }) : [];
+  }
+  function studioRow(r) { return !!(r && r.id && G.isStudioDoc(getTour(r.id))); }
+  function notStudioRow(r) { return !studioRow(r) && !pnlBookRow(r); }
+  function pnlEntries(includeDeleted) {
+    var entries = Array.from(S.tours.entries());
+    Object.keys(S.pending).forEach(function (id) { if (!S.tours.has(id)) entries.push([id, S.pending[id]]); });
+    return entries.filter(function (e) { return G.isPnlDoc(e[1]) && (includeDeleted || !e[1].deletedAt); })
+      .sort(function (a, b) { return (b[1].createdAt || 0) - (a[1].createdAt || 0); });
+  }
+  function scopedPnls() {
+    var card = actingAs() ? actingCard() : null, key = card && card.name ? String(card.name).trim().toLowerCase() : '';
+    var all = pnlEntries();
+    if (!actingAs()) return all;
+    return key ? all.filter(function (e) { return artistOf(e[1]).toLowerCase() === key; }) : [];
+  }
+  function pnlMoneyRows() {
+    return scopedPnls().filter(function (e) { tourRole(e[0]); return roleKnown(e[0]) && canSeeMoney(e[0]); });
+  }
+  function pnlBookWhen(t) { return G.pnlBookWhen(t); }
+  function pnlBookRow(r) { return !!(r && r.id && G.isPnlDoc(getTour(r.id))); }
+  function pnlBookRoute(id, back, ls) {
+    return { name: 'history', back: back, sum: { kind: 'pnl', id: id, ls: ls || { to: back, label: 'Back', short: 'Back' } } };
+  }
+  function studioWhen(t, noYear) {
+    var sp = G.studioSpan(t);
+    return sp ? G.studioSpanWords(sp.from, sp.to, noYear) : '';
+  }
+  function studioOver(t) {
+    var sp = G.studioSpan(t);
+    return !!sp && sp.to < G.tourToday();
+  }
+  function trashedEntries() {
+    return allTourEntries(true).concat(studioEntries(true), pnlEntries(true)).filter(function (e) { return e[1].deletedAt && (S.mode !== 'db' || createdTour(e[0])); });
+  }
+  function tourWord(t) { return G.isShowDoc(t) ? 'show' : G.isStudioDoc(t) ? 'studio time' : G.isPnlDoc(t) ? 'P&L' : 'tour'; }
   function tourNameOf(t) {
+    if (!(t && t.name) && G.isStudioDoc(t)) { var si = G.studioInfo(t); return (si && si.place) || 'Studio time'; }
     return (t && t.name) || WORDS.untitled(tourWord(t));
   }
-  function confirmDeleteTour(id, after) {
+  function confirmDeleteTour(id, after, onClose) {
     var t = getTour(id) || {};
     if (S.mode === 'db' && !createdTour(id)) { toast('Only the ' + tourWord(t) + '\u2019s creator can delete it.'); return; }
+    var studio = G.isStudioDoc(t), pnl = G.isPnlDoc(t);
     confirmSheet({
       title: 'Delete ' + (t.name || 'this ' + tourWord(t)) + '?',
-      body: G.isShowDoc(t) ? WORDS.deleteShowBody(S.mode === 'db') : 'Its budget, day sheets, guest lists and chat go out of sight' +
+      body: pnl ? WORDS.deletePnlBody(S.mode === 'db') : studio ? WORDS.deleteStudioBody(S.mode === 'db') : G.isShowDoc(t) ? WORDS.deleteShowBody(S.mode === 'db') : 'Its budget, day sheets, guest lists and chat go out of sight' +
         (S.mode === 'db' ? ' for everyone on it' : '') + ', and it comes off the tour lists on your page and the artist\u2019s until you restore it. ' +
         'It is kept, not erased: restore it any time from Settings, under Deleted tours.',
-      action: G.isShowDoc(t) ? 'Delete this show' : 'Delete tour', danger: true,
+      action: pnl ? WORDS.deletePnl : studio ? WORDS.deleteStudio : G.isShowDoc(t) ? 'Delete this show' : 'Delete tour', danger: true,
+      onClose: onClose,
       onConfirm: async function () {
         var ok = await deleteTourNow(id);
         if (ok && after) after();
@@ -1874,32 +1931,89 @@
   function bandTours(artist) {
     return allTourEntries().filter(function (e) { return artistOf(e[1]) === artist; });
   }
+  function ownsPage(artist) {
+    var key = String(artist || '').trim().toLowerCase(), B = window.GR_BACKEND;
+    if (!key || !socialOn()) return false;
+    if (!S.loaded || S.dbError || !(B && typeof B.toursWhole === 'function' && B.toursWhole())) return false;
+    if (allTourEntries().some(function (e) { return artistOf(e[1]).toLowerCase() === key; })) return false;
+    return ((S.acts && S.acts.list) || []).some(function (x) { return !!x && x.mine === true && String(x.name || '').trim().toLowerCase() === key; });
+  }
   function ownsBand(artist) {
     if (S.mode !== 'db') return canWrite();
-    return bandTours(artist).some(function (e) { return tourRole(e[0]) === 'owner'; });
+    return bandTours(artist).some(function (e) { return tourRole(e[0]) === 'owner'; }) || ownsPage(artist);
   }
   function canSeeOffTour(artist) {
     if (S.mode !== 'db') return true;
     if (offTourOf(artist)) return true;
     return bandTours(artist).some(function (e) { var r = tourRole(e[0]); return r === 'owner' || r === 'editor'; });
   }
-  function mayOpenOff(artist) {
+  function mayOpenOff(artist, pages) {
     artist = String(artist || '').trim();
+    if (pages && artist && !offTourOf(artist) && ownsPage(artist)) return true;
     if (!artist || !canSeeOffTour(artist)) return false;
     if (S.mode !== 'db') return true;
     var book = offTourOf(artist);
     return (!!book && canSeeMoney(book)) || bandTours(artist).some(function (e) { return canSeeMoney(e[0]); });
   }
-  async function ensureOffTour(artist) {
-    var id = offTourOf(artist);
+  async function ensureOffTour(artist, auto) {
+    var id = offTourOf(artist), B = window.GR_BACKEND;
     if (id || !ownsBand(artist) || S.offMaking) return id;
+    var uid = auto && B && B.uid ? B.uid() : '';
+    if (auto && !uid) return null;
     S.offMaking = true;
-    id = newId();
+    id = auto ? offAutoId(uid, artist) : newId();
     var today = G.tourToday();
-    var ok = await api.create(id, { kind: 'offtour', artist: artist, name: 'Off Tour', setupDone: true,
-      offFrom: today.slice(0, 8) + '01', createdAt: Date.now(), shows: {}, expenses: {}, charges: {} });
+    var doc = { kind: 'offtour', artist: artist, name: 'Off Tour', setupDone: true,
+      offFrom: today.slice(0, 8) + '01', createdAt: Date.now(), shows: {}, expenses: {}, charges: {} };
+    if (auto) delete doc.offFrom;
+    var ok = await api.create(id, doc, auto ? { quiet: true } : undefined);
     S.offMaking = false;
     return ok ? id : null;
+  }
+  function offAutoId(uid, artist) {
+    var s = String(uid || '') + '|' + String(artist || '').trim().toLowerCase(), a = 0x811c9dc5, b = 0x01000193;
+    for (var i = 0; i < s.length; i += 1) {
+      var c = s.charCodeAt(i);
+      a = Math.imul(a ^ c, 16777619) >>> 0;
+      b = Math.imul(b ^ c ^ (i & 255), 2246822519) >>> 0;
+    }
+    return 'off' + ('0000000' + a.toString(36)).slice(-7) + ('0000000' + b.toString(36)).slice(-7);
+  }
+  var offAuto = { tried: {}, busy: false };
+  function offBookEver(artist) {
+    var key = String(artist || '').trim().toLowerCase(), hit = false;
+    var look = function (t) { if (!hit && isOffTour(t) && artistOf(t).toLowerCase() === key) hit = true; };
+    S.tours.forEach(look);
+    Object.keys(S.pending).forEach(function (id) { look(S.pending[id]); });
+    return hit;
+  }
+  function offAutoNext() {
+    var B = window.GR_BACKEND;
+    if (S.mode !== 'db' || !S.loaded || S.dbError || !B || typeof B.toursWhole !== 'function' || !B.toursWhole()) return null;
+    if (actingAs() || !canWrite() || S.offMaking || !modeKnown() || !offReal() || modeNow() !== 'off') return null;
+    if (B.netTrouble && B.netTrouble()) return null;
+    var uid = B.uid ? B.uid() : '';
+    if (!uid) return null;
+    var list = (S.acts && S.acts.list) || [];
+    for (var i = 0; i < list.length; i += 1) {
+      var x = list[i], name = x && x.mine === true ? String(x.name || '').trim() : '', key = uid + '|' + name.toLowerCase();
+      if (!name || offAuto.tried[key] || offBookEver(name) || !ownsPage(name)) continue;
+      return { name: name, key: key };
+    }
+    return null;
+  }
+  function offAutoWatch() {
+    if (offAuto.busy || !offAutoNext()) return;
+    offAuto.busy = true;
+    setTimeout(function () {
+      var next = offAutoNext();
+      if (!next) { offAuto.busy = false; return; }
+      offAuto.tried[next.key] = true;
+      Promise.resolve().then(function () { return ensureOffTour(next.name, true); }).catch(function () { return null; }).then(function (id) {
+        offAuto.busy = false;
+        if (id) render(); else offAutoWatch();
+      });
+    }, 0);
   }
   function upcomingToursOf(artist, exceptId) {
     var today = G.tourToday();
@@ -1908,6 +2022,34 @@
       .filter(function (x) { return x.start && x.start > today; })
       .sort(function (a, b) { return a.start.localeCompare(b.start); });
   }
+  var PAST_DAYS = 60, PAST_MAX = 3;
+  function pastToursOf(artist, exceptId, own) {
+    if (!artist) return [];
+    var today = G.tourToday(), from = G.addDays(today, -PAST_DAYS);
+    return bandTours(artist).filter(function (e) {
+      if (e[0] === exceptId || G.tourFinished(e[1]) || !canEditTour(e[0]) || (own && !createdTour(e[0]))) return false;
+      var end = lastNight(e[1]);
+      return !!end && end < today && end >= from;
+    }).map(function (e) { return { id: e[0], name: String(e[1].name || '').trim() || 'Tour', end: lastNight(e[1]) }; })
+      .sort(function (a, b) { return b.end.localeCompare(a.end); })
+      .slice(0, PAST_MAX);
+  }
+  function pastTourWords(p) { return p.name + ' · ended ' + dayMD(p.end); }
+  function studioChoicesOf(artist, own) {
+    var key = String(artist || '').trim().toLowerCase();
+    if (!key) return [];
+    var today = G.tourToday(), from = G.addDays(today, -PAST_DAYS);
+    return studioEntries().filter(function (e) {
+      var sp = G.studioSpan(e[1]);
+      if (!sp || artistOf(e[1]).toLowerCase() !== key || !canEditTour(e[0]) || (own && !createdTour(e[0]))) return false;
+      return sp.to >= from;
+    }).map(function (e) { var sp = G.studioSpan(e[1]); return { id: e[0], name: tourNameOf(e[1]), from: sp.from, to: sp.to }; })
+      .sort(function (a, b) {
+        var ao = a.to < today, bo = b.to < today;
+        return ao !== bo ? (ao ? 1 : -1) : ao ? b.to.localeCompare(a.to) : a.from.localeCompare(b.from);
+      });
+  }
+  function studioChoiceWords(p) { return p.name + ' · ' + G.studioSpanWords(p.from, p.to, true); }
   function currentTourOf(artist) {
     var today = G.tourToday(), hit = null;
     bandTours(artist).forEach(function (e) {
@@ -2302,6 +2444,7 @@
     var checked = !!(uid && counts.verified);
     syncSocial();
     return h('section', { class: 'pf', 'aria-label': 'Your profile' },
+      modeSwitch(),
       (function () {
         var rs = myRoad(uid);
         var B2 = window.GR_BACKEND, mine = flowersOn() && B2.myFlowers ? B2.myFlowers() : null;
@@ -2814,7 +2957,7 @@
         socialBar(''));
     }
     var roles = personRoles(card);
-    var tours = Array.isArray(card.tours) ? card.tours : [];
+    var tours = (Array.isArray(card.tours) ? card.tours : []).filter(notStudioRow);
     if (preview) tours = tours.filter(function (t) {
       return G.tourLiveOnGreenroom(getTour(t.id) || { shows: { first: { date: t.first } } });
     });
@@ -4018,7 +4161,7 @@
     var bandList = members.filter(function (m) { return m.kind === 'band'; });
     var crewList = members.filter(function (m) { return m.kind === 'crew'; });
     var bandN = bandList.filter(function (m) { return !m.pending; }).length;
-    var tours = Array.isArray(card.tours) ? card.tours : [];
+    var tours = (Array.isArray(card.tours) ? card.tours : []).filter(notStudioRow);
     var unclaimed = !!card.unclaimed;
     var todoTab = !!(todosOn() && B.todoList(id));
     var tab = (S.actTab && S.actTab.id === id && S.actTab.tab) || (unclaimed ? 'tours' : 'band');
@@ -5179,22 +5322,16 @@
   function homeOn() { return !!overviewRoute(); }
   function homeOff() { return homeOn() && offNow() && !actingAs(); }
   function homeViews() { return homeOff() ? ['details', 'day', 'stats'] : actingAs() && offNow() ? ['details'] : []; }
-  function calendarConnectRow() {
-    if (!IN_SHELL) return null;
-    var P = calPlugin();
-    if (calWanted() && (cal.auth === 'denied' || cal.auth === 'writeOnly' || cal.auth === 'restricted')) {
-      var label = h('span', { class: 'row-label' }, 'Calendar is off for Greenroom');
-      if (cal.auth === 'restricted' || !P || typeof P.openSettings !== 'function') return h('div', { class: 'ledger' }, h('div', { class: 'row hm-connect' }, label));
-      return h('div', { class: 'ledger' }, h('button', { class: 'row rowbtn hm-connect', type: 'button', onclick: function () { dayBarCall(P.openSettings, {}); } }, label, icon('chevron', 18)));
-    }
-    if (calWanted() && !cal.readOnce && (cal.auth === null || cal.auth === 'full')) return h('p', { class: 'note hm-none' }, 'Reading your calendar…');
-    return null;
+  function homeTodayGo() {
+    if (!homeOff()) { go({ name: 'offtour', view: 'day', own: true }); return; }
+    S.pfTab = 'today';
+    go(PF_HOME);
   }
-  function calBarRow() {
-    if (!HOME_BAR || !calOn()) return null;
-    return h('div', { class: 'ledger hm-calbar' }, h('div', { class: 'row' },
-      h('span', { class: 'row-label' }, 'Show calendar on Lock Screen'),
-      segmented(['Off', 'On'], homePrefs().barCal !== false ? 1 : 0, function (i) { homeSavePrefs({ barCal: i === 1 }); if (i === 0) homeBarOff(); dayBarSoon(); }, 'Show calendar on Lock Screen')));
+  function calAgain(P) {
+    if (cal.auth === 'full') { calSync(true, true); toast('Your calendar is connected.'); return; }
+    if ((cal.auth === 'denied' || cal.auth === 'writeOnly') && typeof P.openSettings === 'function') { dayBarCall(P.openSettings, {}); return; }
+    if (cal.auth === 'denied' || cal.auth === 'writeOnly' || cal.auth === 'restricted') { toast('Calendar is off for Greenroom.'); return; }
+    calAsk(P);
   }
   function calAsk(P) {
     return Promise.resolve().then(function () { return P.connect({}); }).then(function (r) {
@@ -5207,7 +5344,7 @@
   function calendarConnect() {
     var P = calPlugin();
     if (!P) { toast(IN_SHELL ? 'Calendar connects in the next update of the app.' : 'Connect Calendar comes with the next iPhone update.'); return; }
-    if (calWanted()) { calAsk(P); return; }
+    if (calWanted()) { calAgain(P); return; }
     dayBarCall(P.status, {}).then(function (st) {
       var asks = !st || st.auth === 'notDetermined';
       openSheet(function () {
@@ -5216,7 +5353,7 @@
           h('p', { class: 'sh-sub clean' }, 'Greenroom shows your iPhone’s calendars in your day. It adds, changes or deletes an event only when you tell it to.'),
           HOME_BAR ? [
             h('p', { class: 'sh-sub clean' }, 'While your Lock Screen bar is on, today’s event times, and their names while Show names is on, go through Greenroom’s server and Apple’s push service, so the bar can move on while your phone is locked. We delete them from our servers at midnight, though a backup can hold a copy for about a week. Nothing else on your calendar leaves this iPhone.'),
-            h('p', { class: 'sh-sub clean' }, (homeBarNames() ? 'Show names is on.' : 'Show names is off.') + ' You can change that in Settings, Notifications, and keep your calendar off the bar with the row under your calendar.')] : null,
+            h('p', { class: 'sh-sub clean' }, (homeBarNames() ? 'Show names is on.' : 'Show names is off.') + ' You can change that, and keep your calendar off the bar, in Settings, Notifications.')] : null,
           h('div', { class: 'stack lf-acts' },
             h('button', { class: 'btn primary block', type: 'button', onclick: function () { lsSet('gr-cal:' + calUid(), '1'); closeSheet(); calAsk(P); } }, asks ? 'Continue' : 'Connect'),
             asks ? null : h('button', { class: 'btn plain block', type: 'button', onclick: function () { closeSheet(); } }, 'Not now'))
@@ -5283,7 +5420,7 @@
     if (homeUnread() || (B && B.listsUnread && B.listsUnread())) return false;
     var hd = homeDayFor(today, false), off = onToday ? homeDayDoc(today).hide : [];
     if (G.homeGroups(homeScope('all', today), today).today.filter(function (t) { return off.indexOf(t.key || 'task:' + t.id) < 0; }).length) return false;
-    return !hd.timed.concat(hd.open).some(function (x) { return x.kind !== 'event' && !x.done; });
+    return !hd.timed.concat(hd.open).some(function (x) { return x.kind !== 'event' && x.kind !== 'studio' && !x.done; });
   }
   function homeHorns(today, onToday) { if (homeClear(today, onToday)) hornSplash('Today is clear', null); }
   async function homeTick(t, day, quiet) {
@@ -5866,10 +6003,14 @@
           if (await homeDel('routine:' + r.id)) { toast('Routine deleted'); render(true); }
         } }, icon('trash', 16), 'Delete')], { noTapOpen: true, tapOnlyCloses: true });
     };
-    var shape = prefs.wake || prefs.bed ? h('p', { class: 'pt-next hm-up' },
-      [prefs.wake ? 'Up ' + G.homeClock(prefs.wake) : '', prefs.bed ? 'Bed ' + G.homeClock(prefs.bed) : ''].filter(Boolean).join(' · ')) : null;
+    var shape = h('button', { class: 'pt-next hm-up hm-ideal', type: 'button', onclick: function () { openHomeTimes(); } },
+      G.homeMins(prefs.wake) != null ? 'Ideal wake-up ' + G.homeClock(prefs.wake) + ' · Bed ' + G.homeClock(G.homeMins(prefs.bed) != null ? prefs.bed : '00:00')
+        : 'Set your wake-up time and Greenroom fits your day around it.');
+    var fit = h('div', { class: 'ledger hm-calbar hm-fit' }, h('div', { class: 'row' },
+      h('span', { class: 'row-label' }, 'Fit my day', h('span', { class: 'hint' }, 'Your routines move to fit when you get up and your calendar')),
+      segmented(['Off', 'On'], prefs.fit !== false ? 1 : 0, function (i) { homeSavePrefs({ fit: i === 1 }); dayBarSoon(); }, 'Fit my day')));
     return [
-      routines.length ? h('div', { class: 'ds-page pt-ds hm-rts ht-room' }, shape,
+      routines.length ? h('div', { class: 'ds-page pt-ds hm-rts ht-room' }, shape, fit,
         h('section', { class: 'ds-sec' }, h('div', { class: 'ledger hm-ledger' }, routines.map(row))),
         h('div', { class: 'am-more ht-plan-more' }, h('button', { class: 'add-pill', type: 'button', onclick: function () { openHomeFlow({}); } }, icon('sun', 16), 'Plan your day')))
         : h('div', { class: 'ht-room' }, homeCalm('No routines yet',
@@ -5883,7 +6024,7 @@
     var busy = false;
     openSheet(function () {
       var titleIn = h('input', { class: 'input', type: 'text', maxlength: 60, value: f.title, 'aria-label': 'What it is', autocomplete: 'off', oninput: function (e) { f.title = e.target.value; } });
-      var timeIn = h('input', { class: 'input', type: 'time', value: f.time, 'aria-label': 'Time', onchange: function (e) { f.time = e.target.value; paintLen(); } });
+      var timeIn = h('input', { class: 'input', type: 'time', value: f.time, 'aria-label': 'Ideal time', onchange: function (e) { f.time = e.target.value; paintLen(); } });
       var lenBox = h('div', { class: 'ht-lenbox' }), daysBox = h('div', { class: 'ht-daysbox' });
       var paintLen = function () {
         fillTo(lenBox, f.time ? [h('p', { class: 'ht-k' }, 'How long'), homePills(HOME_LENGTHS, f.mins, function (m) { f.mins = m; paintLen(); }, 'How long')] : null);
@@ -5892,7 +6033,7 @@
       paintLen(); paintDays();
       return [
         h('h2', { class: 'sh-title clean' }, 'Edit routine'),
-        h('div', { class: 'ledger lf-card' }, rowField('Routine', titleIn), rowField('Time', timeIn)),
+        h('div', { class: 'ledger lf-card' }, rowField('Routine', titleIn), rowField('Ideal time', timeIn)),
         lenBox, h('p', { class: 'ht-k' }, 'Days'), daysBox,
         h('div', { class: 'stack lf-acts' },
           h('button', { class: 'btn primary block', type: 'button', onclick: async function (e) {
@@ -5915,6 +6056,30 @@
           h('button', { class: 'btn plain block', type: 'button', onclick: function () { closeSheet(); } }, 'Cancel'))
       ];
     }, { label: 'Edit routine', cls: 'ht-sheet' });
+  }
+  function openHomeTimes() {
+    var prefs = homePrefs(), f = { wake: G.homeMins(prefs.wake) != null ? prefs.wake : '', bed: G.homeMins(prefs.bed) != null ? prefs.bed : '' };
+    var busy = false;
+    openSheet(function () {
+      var wakeIn = h('input', { class: 'input', type: 'time', value: f.wake, 'aria-label': 'Ideal wake-up', onchange: function (e) { f.wake = e.target.value; } });
+      var bedIn = h('input', { class: 'input', type: 'time', value: f.bed, 'aria-label': 'Bed', onchange: function (e) { f.bed = e.target.value; } });
+      return [
+        h('h2', { class: 'sh-title clean' }, 'Your ideal day'),
+        h('p', { class: 'sh-sub clean' }, 'If you wake up later, Greenroom moves your routines to fit around it and your calendar.'),
+        h('div', { class: 'ledger lf-card' }, rowField('Ideal wake-up', wakeIn), rowField('Bed', bedIn)),
+        h('div', { class: 'stack lf-acts' },
+          h('button', { class: 'btn primary block' + cfCls(true), type: 'button', onclick: async function (e) {
+            var btn = e.currentTarget;
+            if (busy) return;
+            busy = true; btn.disabled = true;
+            var ok = await homeSavePrefs({ wake: G.homeMins(f.wake) != null ? f.wake : '', bed: G.homeMins(f.bed) != null ? f.bed : '' });
+            busy = false;
+            if (!ok) { btn.disabled = false; return; }
+            closeSheet(); render(true); dayBarSoon();
+          } }, 'Save'),
+          h('button', { class: 'btn ghost block' + cfCls(false), type: 'button', onclick: function () { closeSheet(); } }, 'Cancel'))
+      ];
+    }, { label: 'Your ideal day', cls: 'ht-sheet' });
   }
   function homeDayPicker(days, onChange, o) {
     o = o || {};
@@ -5994,7 +6159,10 @@
     var saveThis = async function () {
       var title = d.title.replace(/\s+/g, ' ').trim();
       var patch = { intro: true };
-      if (d.wakeSet) patch.wake = G.homeTime(d.wake);
+      if (d.wakeSet && d.date === today) {
+        if (homeAwakeHere()) homeUpSet(today, G.homeTime(d.wake));
+        if (G.homeMins(homePrefs().wake) == null) patch.wake = G.homeTime(d.wake);
+      } else if (d.wakeSet) patch.wake = G.homeTime(d.wake);
       if (d.bedSet) patch.bed = G.homeTime(d.bed);
       if (d.wakeSet || d.bedSet || title) patch.planned = d.date;
       if (title && !d.saved) {
@@ -6138,10 +6306,27 @@
       all.length > shown.length ? h('button', { class: 'linkbtn ht-more', type: 'button',
         onclick: function () { S.pfTab = 'todos'; (S.homeTodo || (S.homeTodo = {})).chip = 'all'; if (S.route.name === 'home') render(true); else go(PF_HOME); } }, 'See all ' + all.length) : null);
   }
+  function homeAwakeHere() {
+    return IN_SHELL;
+  }
+  function homeUpKey() {
+    var B = window.GR_BACKEND;
+    return 'gr-awake:' + ((S.mode === 'db' && B && B.uid && B.uid()) || 'me');
+  }
+  function homeUp(date) {
+    if (!homeAwakeHere()) return '';
+    var v = String(lsGet(homeUpKey()) || '').split('|');
+    return v.length === 2 && v[0] === date && G.homeMins(v[1]) != null ? v[1] : '';
+  }
+  function homeUpSet(date, time) {
+    return lsSet(homeUpKey(), time ? date + '|' + G.homeUpCap(date, time, Date.now()) : '');
+  }
   function homeDayFor(date, all, keepDone) {
-    var today = G.tourToday();
-    var artist = homeArtistTasks().filter(function (t) { return all ? !!t.date : !!t.planned; });
-    return G.homeDay({ date: date, today: today, events: homeEvents(date), routines: homeRoutines(), tasks: homeTasks().concat(artist), day: homeDayDoc(date), keepDone: !!keepDone });
+    var today = G.tourToday(), assigned = homeArtistTasks(), prefs = homePrefs();
+    var artist = assigned.filter(function (t) { return all ? !!t.date : !!t.planned; });
+    return G.homeDayPlan({ date: date, today: today, events: homeEvents(date), routines: homeRoutines(), tasks: homeTasks().concat(artist), day: homeDayDoc(date), keepDone: !!keepDone,
+      studio: actingAs() ? [] : G.studioHomeLines(studioEntries(), date) },
+      { wake: prefs.wake, bed: prefs.bed, fit: prefs.fit, up: homeUp(today), road: modeNow() === 'on', fan: !notFan(), assigned: assigned });
   }
   async function homeToggle(item, date, quiet) {
     var B = window.GR_BACKEND;
@@ -6205,18 +6390,25 @@
     if (last) homeHorns(today, true);
   }
   function homeDayLine(it, date) {
-    var event = it.kind === 'event';
+    var event = it.kind === 'event', studio = it.kind === 'studio';
+    var due = it.due ? [it.sub === 'Late' ? null : it.sub + ' · ', h('span', { class: 'td-due' + (it.done ? '' : ' late') }, 'Due ' + dayMD(it.due))] : null;
+    var said = homeMovedWords(it);
     return homeLine({ title: it.title, time: it.start != null ? homeSheetTime(it.start, 0) : event ? 'All day' : '',
-      hint: it.due ? [it.sub === 'Late' ? null : it.sub + ' · ', h('span', { class: 'td-due' + (it.done ? '' : ' late') }, 'Due ' + dayMD(it.due))] : null,
+      hint: due && said ? due.concat([' · ' + said]) : due || said || (studio && it.sub) || null,
       open: calEventOpen(it, date) || function () { S.homeDate = date; go({ name: 'offtour', view: 'day' }); },
-      end: homeDoneSlot(event ? null : it, date) });
+      end: homeDoneSlot(event || studio ? null : it, date) });
   }
-  function homeAssignedLine(t, today) {
+  function homeMovedWords(it) {
+    if (it.noRoom) return 'No room today';
+    return it.ideal != null && it.start != null ? 'Ideally ' + G.homeClock(it.ideal) : '';
+  }
+  function homeAssignedLine(t, today, fit) {
     var late = !t.doneAt && t.due && t.due < today;
     var planned = !!t.planned;
     var face = homeLine({ title: t.body,
       hint: [t.artist, t.due ? ' · ' : null, t.due ? h('span', { class: 'td-due' + (late ? ' late' : '') }, 'Due ' + dayMD(t.due)) : null,
-        planned ? h('span', { class: 'hint ht-plan' }, 'Planned for ' + G.homeWhen(t.date, t.time, today)) : null],
+        planned ? h('span', { class: 'hint ht-plan' }, 'Planned for ' + G.homeWhen(t.date, t.time, today)) : null,
+        fit != null ? h('span', { class: 'hint ht-plan' }, 'Fits at ' + G.homeClock(fit % 1440)) : null],
       open: function () { openTodoEdit(t.artistId, t.artist, t.raw, mouseOnly() ? { plan: t } : null); },
       end: homeDoneSlot({ kind: 'task', id: t.key, title: t.body, done: !!t.doneAt }, today) });
     return swipeRow(face, [
@@ -6229,10 +6421,11 @@
     var chip = function (c) { return c ? pfCountChip(c.n, c.words, c.said) : pfCountChip(null); };
     var day = dayRow(h('span', { class: 'pt-chip on' }, 'Today'), today);
     day.classList.add('hm-day');
-    var top = [cd.left ? h('div', { class: 'pt-headrow hm-head' }, chip(cd.left), h('div', { class: 'pt-tourbar', 'aria-hidden': 'true' }), chip(cd.right)) : null, day];
+    var hd = homeDayFor(today, false, true);
+    var top = [cd.left ? h('div', { class: 'pt-headrow hm-head' }, chip(cd.left), h('div', { class: 'pt-tourbar', 'aria-hidden': 'true' }), chip(cd.right)) : null, day,
+      homeAwakeRow(hd, today), homeBarBackRow()];
     var assigned = homeArtistTasks().filter(function (t) { return !t.doneAt || G.tourToday(Date.parse(t.doneAt)) === today; })
       .sort(function (a, b) { return String(a.due || '9999').localeCompare(String(b.due || '9999')) || a.createdAt - b.createdAt; });
-    var hd = homeDayFor(today, false, true);
     var B = window.GR_BACKEND, me = B.uid ? B.uid() : null, below = {};
     hd.timed.concat(hd.open).forEach(function (x) { below[x.id] = true; });
     var handed = homeTasks().filter(function (t) { return t.src === 'list' && t.assignedTo === me && t.createdBy !== me && !below['task:' + t.id]
@@ -6250,15 +6443,61 @@
     var section = function (title, rows, more) {
       return rows.length ? h('section', { class: 'ds-sec' }, h('h3', { class: 'ds-sec-h' }, title), h('div', { class: 'ledger ds-block hm-ledger' }, rows), more || null) : null;
     };
+    var now = Date.now(), fits = (hd.plan && hd.plan.fits) || {};
+    var passed = function (x) { return !!x.fit && !x.done && G.homeRowOver(hd, x, now); };
+    var fitAt = function (t) {
+      var m = fits[t.key];
+      return m == null || t.doneAt || G.homeRowOver(hd, { at: m, end: m + G.HOME_FIT_MINS }, now) ? null : m;
+    };
+    var later = hd.timed.filter(passed).map(function (x) { return Object.assign({}, x, { start: null }); });
     return top.concat(h('div', { class: 'ds-page pt-ds' },
-      section('Assigned to you', shown.map(function (t) { return homeAssignedLine(t, today); }).concat(handed.map(function (t) {
+      section('Assigned to you', shown.map(function (t) { return homeAssignedLine(t, today, fitAt(t)); }).concat(handed.map(function (t) {
         return homeLine({ title: t.body, hint: homeListName(t.list), open: function () { openHomeTask(t); },
           end: homeDoneSlot({ kind: 'task', id: 'task:' + t.id, title: t.body, done: !!t.doneAt }, today) });
       })),
         assigned.length > shown.length ? h('button', { class: 'linkbtn ht-more', type: 'button',
           onclick: function () { S.pfTab = 'todos'; (S.homeTodo || (S.homeTodo = {})).chip = 'all'; render(true); } }, 'See all ' + assigned.filter(function (t) { return !t.doneAt; }).length) : null),
-      section('Schedule', mine(hd.open.filter(isEvent).concat(hd.timed))),
-      section('To Do List', mine(hd.open.filter(function (x) { return !isEvent(x); })))));
+      section('Schedule', mine(hd.open.filter(isEvent).concat(hd.timed.filter(function (x) { return !passed(x); })))),
+      section('To Do List', mine(hd.open.filter(function (x) { return !isEvent(x); }).concat(later)))));
+  }
+  function homeAwakeRow(hd, today) {
+    var p = hd && hd.plan;
+    if (!homeAwakeHere() || !p || !p.awake) return null;
+    if (p.up) {
+      return h('p', { class: 'pt-next hm-up hm-awoke' }, 'Up at ' + G.homeClock(p.up), ' · ',
+        h('button', { class: 'linkbtn', type: 'button', onclick: function () { openHomeUpAt(today, p.up); } }, 'Change'), ' · ',
+        h('button', { class: 'linkbtn', type: 'button', 'aria-label': 'Undo AWAKE', onclick: function () { homeAwake(today, ''); } }, 'Undo'));
+    }
+    var now = Date.now();
+    if (!p.waiting || !G.homeAwakeUp(homeBarTl(today, now), now, true)) return null;
+    return h('div', { class: 'hm-awake' },
+      h('button', { class: 'btn primary block hm-awake-b' + cfCls(true), type: 'button', onclick: function () {
+        var up = G.homeUpAt(Date.now());
+        homeAwake(up.date, up.time);
+      } }, G.HOME_AWAKE_WORD),
+      h('p', { class: 'note' }, 'Tap when you’re up. Your routines move to fit.'));
+  }
+  function homeBarBackRow() {
+    if (!homeBarBack(Date.now())) return null;
+    return h('div', { class: 'hm-barback' },
+      h('button', { class: 'btn primary block hm-barback-b', type: 'button', onclick: function () { homeBarBackTap(); } }, icon('lock', 18), 'Show locked bar'));
+  }
+  function homeAwake(date, time) {
+    homeUpSet(date, time);
+    render(true);
+    dayBarSync(true);
+  }
+  function openHomeUpAt(date, time) {
+    var ref = { v: Math.round((G.homeMins(time) || 0) / 15) * 15 % 1440 };
+    openSheet(function () {
+      return [
+        h('h2', { class: 'sh-title clean' }, 'When did you wake up?'),
+        h('div', { class: 'no-pull' }, homeWheel(ref, 'Wake up time')),
+        h('div', { class: 'stack lf-acts' },
+          h('button', { class: 'btn primary block' + cfCls(true), type: 'button', onclick: function () { closeSheet(); homeAwake(date, G.homeTime(ref.v)); } }, 'Save'),
+          h('button', { class: 'btn ghost block' + cfCls(false), type: 'button', onclick: function () { closeSheet(); } }, 'Cancel'))
+      ];
+    }, { label: 'When did you wake up', cls: 'ht-sheet' });
   }
   function homeMyArtists() {
     var list = ((myActs().list) || []).filter(function (a) { return a && a.id && a.name; });
@@ -6492,24 +6731,12 @@
         h('span', { class: 'hm-next-s' }, [artistOf(nx.t), first ? (one ? '' : 'First show ') + dayMD(first) + ' \u00b7 ' + (n === 1 ? 'tomorrow' : 'in ' + n + ' days') : ''].filter(Boolean).join(' \u00b7 ')),
         icon('chevron', 18)));
     }
-    var evs = acting ? [] : homeEvents(today).concat(homeEvents(G.addDays(today, 1)));
-    var calAddLink = calWriter() ? h('button', { class: 'linkbtn ht-more hm-add', type: 'button', onclick: function () { openHomeAdd(today, undefined, true); } }, 'Add to your calendar') : null;
-    if (evs.length) body.push(h('section', { class: 'tf-block td-block ht-wrap', 'aria-label': 'On your calendar' }, h('h4', { class: 'td-cat' }, 'On your calendar'),
-      h('div', { class: 'ledger hm-events' }, evs.map(function (e) {
-        var open = calEventOpen({ kind: 'event', id: 'event:' + e.id }, e.date);
-        return h('div', open ? calRowAttrs('row ds-row hm-row', e.title, open) : { class: 'row ds-row hm-row' }, h('span', { class: 'td-tick ghost cal', 'aria-hidden': 'true' }, icon('calendar', 14)),
-          h('span', { class: 'row-label hm-label' }, h('span', { class: 'hm-t' }, e.title), h('span', { class: 'hint hm-kind' }, [e.date === today ? 'Today' : 'Tomorrow', e.place].filter(Boolean).join(' · '))),
-          h('span', { class: 'ds-time num' }, e.allDay ? 'All day' : G.homeSpan(e.time, e.mins)));
-      })), calAddLink));
-    else if (calAddLink) body.push(calAddLink);
-    var calLine = acting ? null : calendarConnectRow(), calBar = acting ? null : calBarRow();
-    if (calLine || calBar) body.push(h('section', { class: 'tf-block td-block ht-wrap', 'aria-label': 'Your calendar' }, calLine ? h('h4', { class: 'td-cat' }, 'On your calendar') : null, calLine, calBar));
     var assigned = acting ? null : homeAssignedBlock(6, today);
     if (assigned) body.push(assigned);
     var create = artistSide();
     if (!create && !acting && !nx && !assigned && !undatedTours().length) body.push(emptyState(NO_TOUR, 'Once you are on a tour that is coming up, it shows up here: its name, its first show and how far off that is.'));
     if (create) body.push(ovMonthCal());
-    var connect = !(acting || calLine || Array.isArray(S.homeEvents));
+    var connect = !acting;
     body.push(undatedRows());
     body.push(createBar(create, connect));
     return offHomePage('Overview', 'details', body, 'hm-page');
@@ -6530,7 +6757,8 @@
     var open = function (last) {
       menu = h('div', { class: 'hm-menu', id: 'hm-create-menu', role: 'menu', 'aria-label': 'Create' },
         h('button', { class: 'hm-menu-row', type: 'button', role: 'menuitem', onclick: pick(createTourFromMenu) }, icon('plus', 18), 'Create a tour'),
-        h('button', { class: 'hm-menu-row', type: 'button', role: 'menuitem', onclick: pick(createShowFromMenu) }, icon('plus', 18), 'Create a show'));
+        h('button', { class: 'hm-menu-row', type: 'button', role: 'menuitem', onclick: pick(createShowFromMenu) }, icon('plus', 18), 'Create a show'),
+        h('button', { class: 'hm-menu-row', type: 'button', role: 'menuitem', onclick: pick(createStudioFromMenu) }, icon('plus', 18), WORDS.addStudio));
       shut = h('div', { class: 'hm-shut', 'aria-hidden': 'true', onclick: function () { close(true); } });
       slot.append(menu);
       slot.parentNode.append(shut);
@@ -6553,7 +6781,7 @@
       rows[at < 0 ? (up ? n - 1 : 0) : (at + (up ? -1 : 1) + n) % n].focus({ preventScroll: true });
     };
     var away = function (e) { if (menu && e.relatedTarget && !slot.contains(e.relatedTarget)) close(false); };
-    pill = create ? h('button', { class: 'btn primary hm-pill' + cfCls(true), type: 'button', 'aria-label': 'Create a tour or a show',
+    pill = create ? h('button', { class: 'btn primary hm-pill' + cfCls(true), type: 'button', 'aria-label': 'Create a tour, a show or studio time',
       'aria-haspopup': 'menu', 'aria-expanded': 'false', onclick: function () { if (menu) close(true); else open(false); } }, icon('plus', 16), h('span', { class: 'hm-pill-t' }, 'Create')) : null;
     slot = pill ? h('div', { class: 'hm-bar-l', onkeydown: keys, onfocusout: away }, pill) : null;
     return [h('div', { class: 'hm-bar-room', 'aria-hidden': 'true' }),
@@ -6561,7 +6789,7 @@
         connect ? h('div', { class: 'hm-bar-r' }, h('button', { class: 'btn primary hm-pill' + cfCls(true), type: 'button', onclick: calendarConnect },
           icon('calendar', 16), h('span', { class: 'hm-pill-t' }, 'Connect Calendar'))) : null)];
   }
-  var OV_CAL = { back: 60, ahead: 120, row: 50, lab: 26, weeks: 6, pad: 400, gap: 16 };
+  var OV_CAL = { back: 60, ahead: 120, row: 50, lab: 26, weeks: 6, pad: 400, gap: 16, stops: 5000 };
   var ovCalLive = null, ovCalSized = false;
   function ovCalRoom(box, min) {
     var page = box.closest('.page');
@@ -6573,10 +6801,17 @@
     var floor = foot && typeof foot.getBoundingClientRect === 'function' ? first - (vh - foot.getBoundingClientRect().top) : first;
     return G.monthBoxFit(y, floor, OV_CAL.gap, min);
   }
+  function ovCalRefit(later) {
+    var go = function () { var b = ovCalLive; if (b && b.isConnected && b._fit) b._fit(); };
+    go();
+    if (!later) return;
+    if (typeof requestAnimationFrame === 'function') requestAnimationFrame(go);
+    if (typeof setTimeout === 'function') { setTimeout(go, 250); setTimeout(go, 900); }
+  }
   function ovMonthCal() {
     var WEEK = ['S', 'M', 'T', 'W', 'T', 'F', 'S'];
-    var SAYS = { show: 'a show', travel: 'a travel day', rehearsal: 'a rehearsal day', off: 'a day off' };
-    var C = OV_CAL, today = G.tourToday(), now = today.slice(0, 7), tours = scopedTours();
+    var SAYS = { show: 'a show', travel: 'a travel day', rehearsal: 'a rehearsal day', off: 'a day off', studio: 'studio time' };
+    var C = OV_CAL, today = G.tourToday(), now = today.slice(0, 7), tours = scopedTours().concat(scopedStudios());
     var st = G.isObj(S.ovCal) ? S.ovCal : (S.ovCal = { day: '' });
     var stack = G.monthStack(G.monthStep(now, -C.back), C.back + C.ahead + 1, C.row, C.lab);
     var end = stack[stack.length - 1], home = stack[C.back].top, tall = C.lab + C.weeks * C.row;
@@ -6587,7 +6822,8 @@
     var was = live && live._tall > tall ? live._tall : tall;
     var title = h('h2', { class: 'mc-month' });
     var wk = h('div', { class: 'mc-grid mc-wk', 'aria-hidden': 'true' }, WEEK.map(function (w) { return h('span', null, w); }));
-    var track = h('div', { class: 'mc-track', style: 'height:' + (end.top + end.height) + 'px' });
+    var stops = h('div', { class: 'mc-stops', 'aria-hidden': 'true' }), laid = {};
+    var track = h('div', { class: 'mc-track', style: 'height:' + (end.top + end.height) + 'px' }, stops);
     var box = h('div', { class: 'mc-scroll', style: was > tall ? 'height:' + was + 'px' : null }, track);
     box._want = top;
     box._tall = was;
@@ -6610,7 +6846,7 @@
         'aria-current': date === today ? 'date' : null, 'aria-pressed': date === st.day ? 'true' : null,
         onclick: function () { pick(b, date); } },
         h('span', { class: 'mc-n' }, String(d)),
-        on.length ? h('i', { class: 'mc-dot' + (on.some(function (x) { return x.kind === 'show'; }) ? ' show' : ''), 'aria-hidden': 'true' }) : null);
+        on.length ? h('i', { class: 'mc-dot' + (on.some(function (x) { return x.kind === 'show'; }) ? ' show' : on.some(function (x) { return x.kind === 'studio'; }) ? ' studio' : ''), 'aria-hidden': 'true' }) : null);
       return b;
     }
     function monthEl(s) {
@@ -6621,21 +6857,30 @@
           h('span', { class: 'mc-lab' + (s.month === now ? ' now' : ''), style: 'grid-column-start:' + (s.lead + 1) }, G.monthShort(s.month))),
         h('div', { class: 'mc-grid mc-days' }, days));
     }
+    function monthStops(s) {
+      var out = [h('i', { class: 'mc-stop', style: 'top:' + s.top + 'px' })];
+      for (var k = 0; k < s.weeks; k += 1) out.push(h('i', { class: 'mc-stop', style: 'top:' + (s.top + C.lab + k * C.row) + 'px' }));
+      out.forEach(function (el) { stops.append(el); });
+      return out;
+    }
     function paint(y) {
       var w = G.monthsInView(stack, y, height(), C.pad);
       Object.keys(drawn).forEach(function (k) { if (+k < w.from || +k > w.to) { drawn[k].remove(); delete drawn[k]; } });
       for (var i = w.from; i <= w.to; i += 1) if (!drawn[i]) track.append(drawn[i] = monthEl(stack[i]));
+      var r = G.monthsInView(stack, y, height(), C.stops);
+      Object.keys(laid).forEach(function (k) { if (+k < r.from || +k > r.to) { laid[k].forEach(function (el) { el.remove(); }); delete laid[k]; } });
+      for (i = r.from; i <= r.to; i += 1) if (!laid[i]) laid[i] = monthStops(stack[i]);
       var at = G.monthAt(stack, y + C.row / 2);
       if (at !== said) { said = at; title.textContent = G.monthTitle(stack[at].month, today); }
       back.hidden = todayTop != null && todayTop + C.row > y && todayTop < y + height();
     }
     function goHome() {
       var from = box.scrollTop || 0, far = 2 * height();
-      if (reduced() || typeof box.scrollTo !== 'function') { box.scrollTop = home; paint(home); return; }
-      if (Math.abs(from - home) > far) { box.scrollTop = home + (from > home ? far : -far); paint(box.scrollTop); }
+      if (reduced() || typeof box.scrollTo !== 'function') { paint(home); box.scrollTop = home; paint(home); return; }
+      if (Math.abs(from - home) > far) { var near = home + (from > home ? far : -far); paint(near); box.scrollTop = near; paint(box.scrollTop); }
       box.scrollTo({ top: home, behavior: 'smooth' });
     }
-    box.addEventListener('scroll', function () { box._placed = true; paint(box.scrollTop); }, { passive: true });
+    box.addEventListener('scroll', function () { if (box._wait) return; box._placed = true; paint(box.scrollTop); }, { passive: true });
     paint(top);
     function fit() {
       var want = ovCalRoom(box, tall);
@@ -6652,13 +6897,24 @@
       var kids = page.children, over = Array.prototype.slice.call(kids, 0, Array.prototype.indexOf.call(kids, sec)).concat([wk]);
       var wo = new ResizeObserver(function () { if (!box.isConnected) wo.disconnect(); else fit(); });
       over.forEach(function (el) { wo.observe(el, { box: 'border-box' }); });
+      if (typeof MutationObserver === 'function') {
+        var mo = new MutationObserver(function () { if (!box.isConnected) mo.disconnect(); else fit(); });
+        mo.observe(page, { childList: true });
+      }
     }
     var place = function () {
       if (box._placed || !box.isConnected || !box.clientHeight) return false;
-      box.scrollTop = top; box._placed = true; return true;
+      box.scrollTop = top; box._placed = true; box._wait = false; return true;
     };
     if (typeof ResizeObserver === 'function') {
-      var ro = new ResizeObserver(function () { fit(); if (place() || box._placed) { ro.disconnect(); requestAnimationFrame(watch); } });
+      box._wait = true;
+      var ro = new ResizeObserver(function () {
+        fit();
+        if (place() || box._placed) {
+          ro.disconnect(); requestAnimationFrame(watch);
+          if (typeof setTimeout === 'function') { setTimeout(fit, 250); setTimeout(fit, 900); }
+        }
+      });
       ro.observe(box);
     } else {
       var settle = function (n) {
@@ -6669,19 +6925,33 @@
     }
     if (!ovCalSized && typeof window.addEventListener === 'function') {
       ovCalSized = true;
-      window.addEventListener('resize', function () { var b = ovCalLive; if (b && b.isConnected && b._fit) b._fit(); });
+      window.addEventListener('resize', function () { ovCalRefit(true); });
+      window.addEventListener('pageshow', function () { ovCalRefit(true); });
+      if (typeof document.addEventListener === 'function') {
+        document.addEventListener('visibilitychange', function () { if (document.visibilityState !== 'hidden') ovCalRefit(true); });
+      }
+      if (document.fonts && document.fonts.ready && typeof document.fonts.ready.then === 'function') {
+        document.fonts.ready.then(function () { ovCalRefit(true); }, function () {   });
+      }
     }
     ovCalLive = box;
     return h('section', { class: 'mc', 'aria-label': 'Calendar', style: '--mc-row:' + C.row + 'px;--mc-lab:' + C.lab + 'px;--mc-box:' + tall + 'px' },
       h('div', { class: 'mc-head' }, title, back), wk, box);
   }
   function openCalDay(date) {
-    var on = G.dayMarks(scopedTours(), date, date)[date] || [];
+    var on = G.dayMarks(scopedTours().concat(scopedStudios()), date, date)[date] || [];
     openSheet(function () {
       return [
         h('h2', { class: 'sh-title' }, dayLong(date)),
         on.length ? h('div', { class: 'ledger mc-on' }, on.map(function (x) {
           var t = getTour(x.id) || {};
+          if (x.kind === 'studio') {
+            var si = G.studioInfo(t), at = si && si.place ? 'Studio \u00b7 ' + si.place : 'Studio';
+            return h('button', { class: 'row rowbtn', type: 'button', 'aria-label': at + ', ' + tourNameOf(t) + ': open its budget',
+              onclick: function () { var from = S.route; closeSheet(true); openTour(x.id, tourBudget(x.id).view, from, 'Back', 'list'); } },
+              h('div', { class: 'row-label' }, at, h('span', { class: 'hint' }, [tourNameOf(t), 'Open its budget'].join(' \u00b7 '))),
+              icon('chevron', 18));
+          }
           var s = x.kind === 'show' ? G.rows(t.shows).filter(function (r) { return r.date === date; })[0] : null;
           var what = s ? ['Show', [String(s.venue || '').trim(), String(s.city || '').trim()].filter(Boolean).join(', ')].filter(Boolean).join(' \u00b7 ')
             : DAY_KIND_WORDS[x.kind];
@@ -6692,7 +6962,8 @@
         })) : h('p', { class: 'sh-sub' }, 'Nothing on this day yet.'),
         h('div', { class: 'stack' },
           h('button', { class: 'btn primary block' + cfCls(true), type: 'button', onclick: function () { closeSheet(true); artistFirst('show', date); } }, icon('plus', 18), 'Add a show'),
-          h('button', { class: 'btn primary block' + cfCls(true), type: 'button', onclick: function () { closeSheet(true); artistFirst('tour', date); } }, icon('plus', 18), 'Start a tour'))
+          h('button', { class: 'btn primary block' + cfCls(true), type: 'button', onclick: function () { closeSheet(true); artistFirst('tour', date); } }, icon('plus', 18), 'Start a tour'),
+          h('button', { class: 'btn primary block' + cfCls(true), type: 'button', onclick: function () { closeSheet(true); artistFirst('studio', date); } }, icon('plus', 18), WORDS.addStudio))
       ];
     }, { label: dayLong(date) });
   }
@@ -6707,12 +6978,15 @@
   function homeSheetRow(hd, it, date) {
     var len = it.end != null ? it.end - it.at : 0;
     var span = it.start != null ? G.timeSpan(G.homeClock(it.start), len > 0 ? G.homeClock(it.start + len) : '') : '';
-    var can = it.kind !== 'event', open = calEventOpen(it, date);
+    var studio = it.kind === 'studio', sid = studio ? it.id.slice(7) : '';
+    var can = it.kind !== 'event' && !studio, open = studio ? (getTour(sid) ? function () { openTour(sid, tourBudget(sid).view, S.route, 'Back', 'list'); } : null)
+      : calEventOpen(it, date), said = homeMovedWords(it) || (studio ? it.sub : '');
     var row = h('div', can ? { class: 'row ds-row', role: 'button', tabindex: '0', 'aria-pressed': it.done ? 'true' : 'false',
       'aria-label': (it.done ? 'Not done yet: ' : 'Done: ') + it.title,
       onclick: function () { homeTap(it, date); },
-      onkeydown: function (e) { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); row.click(); } } } : open ? calRowAttrs('row ds-row', it.title, open) : { class: 'row ds-row' },
-      h('span', { class: 'row-label' }, it.title), span ? h('span', { class: 'ds-time num' }, span) : null);
+      onkeydown: function (e) { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); row.click(); } } } : open ? Object.assign(calRowAttrs('row ds-row', it.title, open),
+        studio ? { 'aria-label': it.title + ': open its budget' } : {}) : { class: 'row ds-row' },
+      h('span', { class: 'row-label' }, it.title, said ? h('span', { class: 'hint' }, said) : null), span ? h('span', { class: 'ds-time num' }, span) : null);
     dsGreyKeep(row, function (now) { return it.done || G.homeRowOver(hd, it, now); });
     var P = it.kind === 'extra' ? calWriter() : null;
     return swipeRow(row, [P ? h('button', { class: 'sw-edit sw-group tray-move', type: 'button', 'aria-label': 'Put ' + it.title + ' on your calendar', onclick: function () { calMove(P, it.id, date); } },
@@ -6738,7 +7012,8 @@
       var sel = rail.querySelector('.ds-chip.on');
       if (sel && sel.scrollIntoView) sel.scrollIntoView({ inline: 'center', block: 'nearest' });
     });
-    var shape = [dayLong(date), prefs.wake ? 'Up ' + G.homeClock(prefs.wake) : '', prefs.bed ? 'Bed ' + G.homeClock(prefs.bed) : ''].filter(Boolean)
+    var up = hd.plan && hd.plan.up ? hd.plan.up : prefs.wake;
+    var shape = [dayLong(date), up ? 'Up ' + G.homeClock(up) : '', prefs.bed ? 'Bed ' + G.homeClock(prefs.bed) : ''].filter(Boolean)
       .map(function (x) { return x.replace(/ /g, '\u00a0'); }).join(' · ');
     var place = h('div', { class: 'ds-venue-row' },
       h('button', { class: 'iconbtn sm ds-pencil', type: 'button', 'aria-label': 'Add to this day', onclick: function () { openHomeAdd(date); } }, icon('edit', 18)),
@@ -6771,11 +7046,10 @@
       filled ? null : h('div', { class: 'btnrow ov-actions', style: 'margin-top:14px' },
         h('button', { class: 'btn quiet glow', type: 'button', onclick: function () { openHomeAdd(date); } }, icon('edit', 18), 'Fill in your day'))], 'ds-page hm-page');
   }
-  function openHomeAdd(date, books, toCal) {
-    if (books === undefined && calWriter()) { calBooks().then(function (list) { openHomeAdd(date, list, toCal); }); return; }
-    if (toCal && !books) { toast('Couldn’t reach your calendar.'); return; }
+  function openHomeAdd(date, books) {
+    if (books === undefined && calWriter()) { calBooks().then(function (list) { openHomeAdd(date, list); }); return; }
     var today = G.tourToday(), was = books ? calPick(books) : 'sheet';
-    var f = { title: '', time: '', mins: 0, book: toCal && was === 'sheet' ? books[0].id : was };
+    var f = { title: '', time: '', mins: 0, book: was };
     var busy = false;
     openSheet(function () {
       var titleIn = h('input', { class: 'input', type: 'text', maxlength: 60, placeholder: 'What are you doing?', 'aria-label': 'What', autocomplete: 'off', autofocus: mouseOnly(),
@@ -8145,6 +8419,36 @@
     },
     trashShow: 'One-off show',
     trashSub: 'A deleted tour or show waits here, kept as it was. Restore puts it back.',
+    trashStudio: 'Studio',
+    deleteStudio: 'Delete studio time',
+    deleteStudioBody: function (db) {
+      return 'Its days come off the calendar and its budget goes out of sight' + (db ? ' for everyone on it' : '') +
+        '. It is kept, not erased: restore it any time from Settings, under Deleted tours.';
+    },
+    kindStudio: 'Studio',
+    kindPnl: 'P&L',
+    trashPnl: 'P&L',
+    createPnl: 'Create P&L',
+    createPnlSub: 'Just the numbers, no tour needed',
+    deletePnl: 'Delete this P&L',
+    deletePnlBody: function (db) {
+      return 'Its numbers go out of sight' + (db ? ' for everyone on it' : '') + '. It is kept, not erased: restore it any time from Settings, under Deleted tours.';
+    },
+    pnlSaved: 'P&L saved',
+    pnlBookNoDates: 'No dates',
+    pnlHidden: 'Only the people who see this P&L\u2019s money see it.',
+    addStudio: 'Add studio time',
+    studioSub: function (artist) { return 'Studio time' + (artist ? ' for ' + artist : '') + '. The days go on your calendar, with a budget of their own.'; },
+    studioAdded: function (when) { return 'Studio time added \u00b7 ' + when; },
+    noStudioIncome: 'No income on this studio time yet',
+    studioPeople: 'Who\u2019s on it',
+    studioPeopleSub: 'A Manager sees and edits everything on it, the money included. Crew see its days, the studio and the times, and their own pay.',
+    studioLogStays: 'Saved. The card log dates stay as they were: only the person who made this studio time can move them.',
+    leaveStudio: 'Leave studio time',
+    thisStudio: 'This studio time',
+    notStudioIncome: 'Not studio time income: clear it',
+    leaveStudioBody: 'You come off its people and the studio time leaves your phone: its days, its budget and your pay on it. Its people can invite you again, and you\u2019d get a Join.',
+    leaveStudioOwner: 'You made this studio time: it\u2019s yours to delete, not to leave.',
     leaveShow: 'Leave show',
     leaveShowBody: 'You come off its crew list and the show leaves your phone: its day sheet, chat, alerts and your pay on it. Its people can invite you again, and you’d get a Join.',
     leaveShowOwner: 'You made this show: it’s yours to delete, not to leave.',
@@ -12516,6 +12820,1862 @@
       ];
     }, { label: 'Connect Square' });
   }
+  function signalKnown() {
+    var B = window.GR_BACKEND;
+    var me = S.mode === 'db' && B && typeof B.uid === 'function' ? (B.uid() || null) : null;
+    var c = S.signal;
+    if (!c || c.uid !== me) { c = S.signal = { uid: me, ok: false, at: 0, asking: false, doubt: false }; S.signalOk = false; }
+    if (!me || !B || typeof B.signalMay !== 'function') return;
+    if (c.asking || (c.at && Date.now() - c.at < (c.ok ? 600e3 : 120e3))) return;
+    c.asking = true;
+    var heard = function (yes) {
+      c.asking = false;
+      if (S.signal !== c) return;
+      if (!yes && c.ok && !c.doubt) { c.doubt = true; c.at = 0; signalKnown(); return; }
+      c.doubt = false; c.ok = yes; c.at = Date.now();
+      var was = S.signalOk === true;
+      S.signalOk = yes;
+      if (was !== yes && S.route && (S.route.name === 'mainmenu' || S.route.name === 'signal')) render(true);
+    };
+    Promise.resolve().then(function () { return B.signalMay(); })
+      .then(function (v) { heard(v === true); }, function () { heard(false); });
+  }
+  function signalRoomInfo(fresh) {
+    var B = window.GR_BACKEND;
+    var me = S.signal ? S.signal.uid : null;
+    var c = S.signalRoom;
+    if (!c || c.uid !== me) c = S.signalRoom = { uid: me, room: null, at: 0, asking: false, failed: false };
+    if (S.signalOk !== true || !me || !B || typeof B.signalRoom !== 'function') return c;
+    if (!c.asking && (fresh || Date.now() - c.at > 60e3)) {
+      c.asking = true;
+      var landed = function () { if (S.signalRoom === c && S.route && S.route.name === 'signal') render(); };
+      Promise.resolve().then(function () { return B.signalRoom(); }).then(function (room) {
+        c.asking = false; c.room = G.isObj(room) ? room : null; c.at = Date.now(); c.failed = false; landed();
+      }, function () { c.asking = false; c.failed = true; c.at = Date.now(); landed(); });
+    }
+    return c;
+  }
+  var SIGNAL_TABS = [['week', 'This Week', 'calendar'], ['releases', 'Releases', 'music'], ['posts', 'Posts', 'share'],
+    ['songs', 'Songs', 'tabcost'], ['audience', 'Audience', 'tabmap'], ['facts', 'Facts', 'check']];
+  var SIGNAL_KEYS = { artist: 'artists', release: 'releases', step: 'steps', fact: 'facts', pitch: 'pitches', confirmation: 'confirmations',
+    asset: 'assets', post: 'posts', result: 'results', campaign: 'campaigns', snapshot: 'snapshots' };
+  function signalRows(room, key) { return room && Array.isArray(room[key]) ? room[key].filter(G.isObj) : []; }
+  function signalById(room, key, id) { return id ? signalRows(room, key).filter(function (x) { return x.id === id; })[0] || null : null; }
+  function signalToday() { return G.ymd(new Date()); }
+  function signalMerge(kind, row) {
+    var c = S.signalRoom, room = c && c.room;
+    if (!room || !G.isObj(row)) return;
+    if (kind === 'settings') { room.settings = row; return; }
+    var key = SIGNAL_KEYS[kind];
+    if (!key) return;
+    var list = Array.isArray(room[key]) ? room[key] : (room[key] = []);
+    var at = -1;
+    list.forEach(function (x, i) { if (x && x.id === row.id) at = i; });
+    if (at >= 0) list[at] = row; else list.push(row);
+  }
+  function signalDrop(kind, id) {
+    var c = S.signalRoom, room = c && c.room, key = SIGNAL_KEYS[kind];
+    if (!room || !key) return;
+    room[key] = signalRows(room, key).filter(function (x) { return x.id !== id; });
+    if (kind === 'release') {
+      ['steps', 'pitches', 'confirmations', 'assets'].forEach(function (k) {
+        room[k] = signalRows(room, k).filter(function (x) { return x.release_id !== id; });
+      });
+    }
+    if (kind === 'post') room.results = signalRows(room, 'results').filter(function (x) { return x.post_id !== id; });
+    if (kind === 'fact') {
+      signalRows(room, 'pitches').forEach(function (p) {
+        if (Array.isArray(p.fact_ids)) p.fact_ids = p.fact_ids.filter(function (f) { return f !== id; });
+      });
+    }
+  }
+  function signalFailed(e) {
+    var code = e && e.code;
+    if (code === 'invalid') {
+      var f = String(e.field || '').replace(/_day$|_on$|_at$/, '').replace(/_/g, ' ').trim();
+      toast(f ? 'SIGNAL didn’t take the ' + f + '. Check it and try again.' : 'SIGNAL didn’t take that. Check it and try again.');
+    } else if (code === 'full') toast('That list is full. Delete an old one first.');
+    else if (code === 'permission') toast('SIGNAL isn’t open to this account.');
+    else if (code === 'unavailable') toast('SIGNAL isn’t switched on yet, so nothing can be saved.');
+    else saveFailed('signal', e);
+  }
+  async function signalPut(kind, row) {
+    var B = window.GR_BACKEND;
+    if (!B || typeof B.signalSave !== 'function') { toast('SIGNAL isn’t switched on yet, so nothing can be saved.'); return null; }
+    try {
+      var saved = await B.signalSave(kind, row);
+      if (!saved) { toast('That isn’t there anymore.'); signalRoomInfo(true); return null; }
+      signalMerge(kind, saved);
+      return saved;
+    } catch (e) { signalFailed(e); return null; }
+  }
+  async function signalGone(kind, id) {
+    var B = window.GR_BACKEND;
+    if (!B || typeof B.signalDelete !== 'function') { toast('SIGNAL isn’t switched on yet.'); return false; }
+    try {
+      await B.signalDelete(kind, id);
+      signalDrop(kind, id);
+      return true;
+    } catch (e) { signalFailed(e); return false; }
+  }
+  function signalDay(d) { var X = window.GSIG; return X && X.isDay(d) ? X.dayWords(d) : ''; }
+  function signalCount(n) { return typeof n === 'number' && isFinite(n) ? Math.round(n).toLocaleString('en-US') : ''; }
+  function signalPct(x, dp) { return typeof x === 'number' && isFinite(x) ? (Math.round(x * 100 * Math.pow(10, dp || 0)) / Math.pow(10, dp || 0)) + '%' : ''; }
+  function signalClock(t) {
+    var m = /^(\d{1,2}):(\d{2})/.exec(String(t || ''));
+    if (!m) return '';
+    var hh = +m[1];
+    return (hh % 12 || 12) + ':' + m[2] + (hh < 12 ? ' AM' : ' PM');
+  }
+  function signalWhen(iso) {
+    var X = window.GSIG, t = Date.parse(String(iso || ''));
+    if (!X || !isFinite(t)) return null;
+    var p = X.pacificParts(t);
+    return { date: p.date, time: p.time };
+  }
+  function signalIso(date, time) {
+    var X = window.GSIG, ms = X ? X.pacificInstant(date, time || '12:00') : null;
+    return typeof ms === 'number' && isFinite(ms) ? new Date(ms).toISOString() : null;
+  }
+  function signalNum(v) {
+    var t = String(v == null ? '' : v).trim().replace(/%$/, '');
+    if (!t) return null;
+    var X = window.GSIG, n = X ? X.csvNumber(t) : parseFloat(t.replace(/,/g, ''));
+    return typeof n === 'number' && isFinite(n) && n >= 0 ? n : null;
+  }
+  var SIGNAL_RELEASE_WORDS = { planning: 'Planning', delivered: 'Delivered', pitched: 'Pitched', out: 'Out now', done: 'Done', shelved: 'On hold' };
+  var SIGNAL_KIND_WORDS = { single: 'Single', ep: 'EP', album: 'Album', video: 'Video', remix: 'Remix', other: 'Other' };
+  var SIGNAL_FORMAT_WORDS = { photo: 'Photo', carousel: 'Carousel', reel: 'Reel', story: 'Story', video: 'Video', short: 'Short', other: 'Post' };
+  var SIGNAL_SOURCE_WORDS = { spotify: 'Spotify', apple: 'Apple Music', shazam: 'Shazam', instagram: 'Instagram', youtube: 'YouTube',
+    amazon: 'Amazon Music', deezer: 'Deezer', tiktok: 'TikTok', soundcloud: 'SoundCloud', other: 'Other' };
+  var SIGNAL_FACT_WORDS = { approved: 'Approved', waiting: 'Waiting on approval', to_collect: 'Still to collect' };
+  var SIGNAL_FACT_KINDS = { fact: 'Fact', stat: 'Number', milestone: 'Milestone', credit: 'Credit', bio: 'Bio line', story: 'Story', other: 'Other' };
+  var SIGNAL_STEP_WORDS = { todo: 'To do', waiting: 'Waiting', done: 'Done', skipped: 'Skipped' };
+  var SIGNAL_PITCH_WORDS = { draft: 'Draft', final: 'Final', sent: 'Sent', superseded: 'Replaced' };
+  var SIGNAL_OUTCOME_WORDS = { waiting: 'Waiting to hear', placed: 'Placed', not_placed: 'Not placed', no_word: 'No word' };
+  var SIGNAL_ASSET_KINDS = { canvas: 'Canvas', art: 'Art', video: 'Video', photo: 'Photo', audio: 'Audio', other: 'Other' };
+  var SIGNAL_ASSET_WORDS = { todo: 'To make', ready: 'Ready', uploaded: 'Uploaded', live: 'Live' };
+  var SIGNAL_CAMPAIGN_WORDS = { boost: 'Boost', ad: 'Ad', discovery_mode: 'Discovery Mode', editorial: 'Editorial add', tiktok_spike: 'TikTok spike',
+    marquee: 'Marquee', showcase: 'Showcase', curator: 'Curator campaign', playlist: 'Playlist add', other: 'Other' };
+  var SIGNAL_CAMPAIGN_KINDS = { discovery_mode: 'discovery', ad: 'ads', tiktok_spike: 'tiktok' };
+  var SIGNAL_METRIC_WORDS = { streams: 'streams', listeners: 'listeners', saves: 'saves', adds: 'playlist adds', followers: 'followers',
+    shazams: 'Shazams', views: 'views' };
+  var SIGNAL_RESULT_FIELDS = [
+    ['reach', 'Reach (people who saw it)', 'all', false], ['non_follower_pct', '% of them not following you', 'all', false],
+    ['views', 'Views', 'all', false], ['likes', 'Likes', 'all', true], ['comments', 'Comments', 'all', true],
+    ['sends', 'Sends and shares', 'all', true], ['saves', 'Saves', 'all', true], ['profile_visits', 'Profile visits', 'all', true],
+    ['follows', 'Follows', 'all', true], ['link_taps', 'Link taps', 'all', true],
+    ['skip_rate', 'Skip rate %', 'reel', false], ['avg_watch_sec', 'Average watch time (seconds)', 'reel', false],
+    ['replies', 'Replies', 'story', true], ['sticker_taps', 'Sticker taps', 'story', true], ['exits', 'Exits', 'story', false]];
+  var SIGNAL_PITCH_BY = { apple: 'distributor', youtube: 'distributor', deezer: 'distributor', tidal: 'distributor' };
+  var SIGNAL_LISTEN_SOURCES = ['Release Radar', 'Discover Weekly', 'Radio', 'Autoplay', 'Daily Mix', 'Editorial playlists',
+    'Your profile and catalog', 'Listeners’ own playlists and library', 'Other listeners’ playlists'];
+  var SIGNAL_PITCH_LISTS = {
+    styles: ['Acoustic', 'Ballad', 'Beats', 'Christmas', 'Experimental', 'Goth', 'Holiday', 'Kids', 'Traditional', 'None of these'],
+    cultures: ['African', 'Appalachian', 'Arabic', 'Asian', 'Buddhist', 'Caribbean', 'Celtic', 'Christian', 'Hindu', 'Indigenous', 'Islamic',
+      'Judaic', 'Latin', 'Mediterranean', 'Sikh', 'South Asian', 'None of these'],
+    moods: ['Chill', 'Energetic', 'Happy', 'Fierce', 'Meditative', 'Psychedelic', 'Romantic', 'Sad', 'Sexy', 'None of these']
+  };
+  var SIGNAL_PITCH_YESNO = [['cover', 'Cover?', [['no', 'No'], ['yes', 'Yes']]], ['remix', 'Remix?', [['no', 'No'], ['yes', 'Yes']]],
+    ['recording', 'Recorded', [['studio', 'Studio'], ['live', 'Live']]], ['instrumental', 'Instrumental?', [['no', 'No'], ['yes', 'Yes']]]];
+  var SIGNAL_PITCH_ASK = [['genresHonest', 'The genres honestly describe the audio'], ['tagsMatch', 'Every tag matches the audio'],
+    ['readsClearly', 'It reads clearly on one pass (read it out loud once)'], ['approved', 'Everyone it describes has OK’d what it says about them']];
+  var SIGNAL_PITCH_PROFILE = [['canvas', 'Canvas uploaded'], ['bio', 'Bio updated with the new release'], ['presave', 'Pre-save link live'],
+    ['pick', 'Artist Pick planned for release day']];
+  var SIGNAL_PROFILE_STEPS = { canvas: 'canvas', bio: 'bio', presave: 'presave', pick: 'artistpick' };
+  function signalRule(key) {
+    var X = window.GSIG;
+    return key && X ? X.RELEASE_STEPS.filter(function (s) { return s.key === key; })[0] || null : null;
+  }
+  function signalStepItem(s) {
+    var rule = signalRule(s.rule);
+    return {
+      id: s.id, key: s.rule || 'id:' + s.id, kind: rule && rule.kind === 'deadline' ? 'deadline' : 'step', ties: rule && rule.ties || null,
+      hard: !!(rule && rule.hard), event: rule && rule.event || null, eventSeen: !!(rule && rule.event && s.opens_day),
+      title: String(s.title || ''), due: s.due_day || null, from: s.opens_day || null, alarm: !!s.alarm, needsOk: !!s.needs_ok,
+      who: s.who === 'distributor' ? 'distributor' : 'artist', platform: s.platform || 'all', status: s.status
+    };
+  }
+  function signalStepsOf(room, relId) {
+    return signalRows(room, 'steps').filter(function (s) { return relId ? s.release_id === relId : !s.release_id; });
+  }
+  function signalStepFor(room, it) {
+    if (!it) return null;
+    if (/^id:/.test(String(it.key || ''))) return signalById(room, 'steps', String(it.key).slice(3));
+    return signalRows(room, 'steps').filter(function (s) { return (s.release_id || '') === (it.release || '') && s.rule === it.key; })[0] || null;
+  }
+  function signalReleaseIn(room, r) {
+    return { id: r.id, title: String(r.title || ''), releaseDate: r.release_day || null, videoDate: r.video_day || null,
+      distributor: r.distributor || '', kind: r.kind, steps: signalStepsOf(room, r.id).map(signalStepItem) };
+  }
+  function signalPostIn(room, p) {
+    return { id: p.id, format: p.format || 'photo', boosted: !!p.boosted, score: typeof p.score === 'number' ? p.score : null,
+      postedAt: p.posted_at || null,
+      results: signalRows(room, 'results').filter(function (x) { return x.post_id === p.id; }).map(function (x) {
+        return { at: x.checkpoint, reach: x.reach, nonFollowers: x.non_follower_pct, likes: x.likes, comments: x.comments, sends: x.sends,
+          saves: x.saves, visits: x.profile_visits, follows: x.follows, linkTaps: x.link_taps, loggedOn: x.logged_at,
+          boosted: typeof x.boosted === 'boolean' ? x.boosted : undefined };
+      }) };
+  }
+  function signalCampaignIn(room, c) {
+    var rel = signalById(room, 'releases', c.release_id);
+    return { id: c.id, kind: SIGNAL_CAMPAIGN_KINDS[c.kind] || c.kind, title: String(c.label || ''), song: rel ? String(rel.title || '') : '',
+      start: c.starts_on || null, end: c.ends_on || c.starts_on || null };
+  }
+  function signalPlaylistAdds(room) {
+    var X = window.GSIG, by = {};
+    signalRows(room, 'snapshots').forEach(function (n) {
+      if (n.scope !== 'playlist') return;
+      (by[n.week_of] = by[n.week_of] || {})[n.subject] = n;
+    });
+    var out = [];
+    Object.keys(by).forEach(function (w) {
+      var before = by[X.addDays(w, -7)];
+      if (!before) return;
+      Object.keys(by[w]).forEach(function (name) {
+        if (before[name]) return;
+        var n = by[w][name], num = G.isObj(n.numbers) ? n.numbers : {};
+        out.push({ id: n.id, playlist: name, date: w, followers: num.followers });
+      });
+    });
+    return out;
+  }
+  function signalWeekInput(room, today) {
+    var releases = signalRows(room, 'releases').map(function (r) { return signalReleaseIn(room, r); });
+    var loose = signalStepsOf(room, null);
+    if (loose.length) releases.push({ id: '', title: '', releaseDate: null, steps: loose.map(signalStepItem) });
+    var snaps = signalRows(room, 'snapshots').filter(function (n) {
+      return n.scope === 'song' || n.scope === 'artist' || n.scope === 'city';
+    }).map(function (n) {
+      var metrics = {}, num = G.isObj(n.numbers) ? n.numbers : {};
+      Object.keys(num).forEach(function (k) { if (k !== 'rank' && !/12m$/.test(k) && typeof num[k] === 'number') metrics[k] = num[k]; });
+      return { kind: n.scope, key: n.subject + ' · ' + (SIGNAL_SOURCE_WORDS[n.source] || n.source), week: n.week_of, metrics: metrics };
+    });
+    return {
+      today: today, snapshots: snaps, releases: releases,
+      posts: signalRows(room, 'posts').map(function (p) { return signalPostIn(room, p); }),
+      campaigns: signalRows(room, 'campaigns').map(function (c) { return signalCampaignIn(room, c); }),
+      playlistAdds: signalPlaylistAdds(room)
+    };
+  }
+  function signalSongParts(n) {
+    if (n.scope !== 'source') return { song: String(n.subject), source: '' };
+    var s = String(n.subject), at = s.lastIndexOf(' · ');
+    return at > 0 ? { song: s.slice(0, at), source: s.slice(at + 3) } : { song: s, source: 'Other' };
+  }
+  function signalReleaseNamed(room, name) {
+    var k = String(name || '').trim().toLowerCase();
+    return k ? signalRows(room, 'releases').filter(function (r) { return String(r.title || '').trim().toLowerCase() === k; })[0] || null : null;
+  }
+  function signalDoctorInput(room, today) {
+    var X = window.GSIG, rows = [], twelve = {}, twelveWeek = {};
+    signalRows(room, 'snapshots').forEach(function (n) {
+      if (n.source !== 'spotify' || (n.scope !== 'song' && n.scope !== 'source')) return;
+      var part = signalSongParts(n), num = G.isObj(n.numbers) ? n.numbers : {};
+      var rel = signalById(room, 'releases', n.release_id) || signalReleaseNamed(room, part.song);
+      if (n.scope === 'song' && typeof num.streams12m === 'number' && (!twelveWeek[part.song] || n.week_of > twelveWeek[part.song])) {
+        twelve[part.song] = num.streams12m; twelveWeek[part.song] = n.week_of;
+      }
+      var R = rel && rel.release_day;
+      if (!R || ['streams', 'listeners', 'saves', 'adds'].every(function (k) { return typeof num[k] !== 'number'; })) return;
+      var first = X.addDays(n.week_of, 6) >= R && n.week_of <= X.addDays(R, 27);
+      rows.push({ song: part.song, releaseDate: R, date: n.week_of, first28: first, source: part.source || 'all',
+        streams: num.streams, listeners: num.listeners, saves: num.saves, adds: num.adds });
+    });
+    rows = rows.filter(function (r) { return r.first28; });
+    return { rows: rows, opts: { today: today, streams12m: twelve,
+      campaigns: signalRows(room, 'campaigns').map(function (c) { return signalCampaignIn(room, c); }) } };
+  }
+  function signalCheckupIn(room, r) {
+    var steps = signalStepsOf(room, r.id), done = {};
+    steps.forEach(function (s) { if (s.status === 'done' && s.rule) done[s.rule] = true; });
+    var profile = {};
+    Object.keys(SIGNAL_PROFILE_STEPS).forEach(function (k) { profile[k] = !!done[SIGNAL_PROFILE_STEPS[k]]; });
+    var pitches = signalRows(room, 'pitches').filter(function (p) { return p.release_id === r.id && (p.status === 'sent' || p.sent_at); })
+      .map(function (p) { var w = signalWhen(p.sent_at); return { platform: p.platform, sentOn: w ? w.date : (r.release_day || null) }; });
+    return {
+      release: { id: r.id, title: String(r.title || ''), releaseDate: r.release_day || null, pitches: pitches, profile: profile, altVersions: !!done.altversions },
+      ctx: { releases: signalRows(room, 'releases').map(function (x) { return { id: x.id, title: String(x.title || ''), releaseDate: x.release_day || null }; }),
+        chances: signalStepsOf(room, null).filter(function (s) { return s.due_day; }).map(function (s) {
+          return { date: s.due_day, words: String(s.title || ''), taken: s.status === 'done' };
+        }) }
+    };
+  }
+  function signalCityLists(room) {
+    var by = {};
+    signalRows(room, 'snapshots').forEach(function (n) {
+      if (n.scope !== 'city' || !n.subject || !n.source) return;
+      var b = by[n.source] || (by[n.source] = { week: '', rows: [] });
+      if (n.week_of > b.week) { b.week = n.week_of; b.rows = []; }
+      if (n.week_of === b.week) b.rows.push(n);
+    });
+    var lists = {}, weeks = {}, rows = {};
+    Object.keys(by).forEach(function (k) {
+      var sorted = by[k].rows.slice().sort(function (a, b) { return (a.rank || 1e9) - (b.rank || 1e9) || (a.subject < b.subject ? -1 : 1); });
+      lists[k] = sorted.map(function (n) { return n.subject; });
+      weeks[k] = by[k].week; rows[k] = sorted;
+    });
+    return { lists: lists, weeks: weeks, rows: rows };
+  }
+  function signalPitchIn(room, rel, tags, text) {
+    var X = window.GSIG, t = G.isObj(tags) ? tags : {};
+    var art = rel && Array.isArray(rel.artist_ids) ? signalById(room, 'artists', rel.artist_ids[0]) : null;
+    var base = { title: rel ? String(rel.title || '') : '', artists: rel ? String(rel.artists || '') : '', release: rel && rel.release_day || '',
+      home: art ? String(art.hometown || '') : '', based: art ? String(art.based || '') : '' };
+    var draft = { text: String(text || ''), submit: t.submit || '', ask: t.ask || {}, profile: t.profile || {} };
+    ['genres', 'styles', 'cultures', 'moods', 'instruments', 'cover', 'remix', 'recording', 'instrumental', 'language'].forEach(function (k) {
+      if (t[k] !== undefined) draft[k] = t[k];
+    });
+    if (t.home) draft.home = t.home;
+    if (t.based) draft.based = t.based;
+    return X.PitchScore.input(base, draft);
+  }
+  function signalFileRows(read, o) {
+    o = o || {};
+    var X = window.GSIG, out = {}, order = [];
+    if (!read || !read.rows || !X || !X.isDay(o.week)) return [];
+    var src = o.source === 'apple' ? 'apple' : 'spotify', year = o.covers === 'year';
+    var num = function (v) { return typeof v === 'number' && isFinite(v) ? v : null; };
+    var cut = function (s) { s = String(s).trim(); return s.length > 200 ? s.slice(0, 200) : s; };
+    var put = function (source, scope, subject, numbers, rank) {
+      var k = source + '\x01' + scope + '\x01' + subject;
+      if (!out[k]) { out[k] = { week_of: o.week, source: source, scope: scope, subject: subject, numbers: {} }; order.push(k); }
+      var row = out[k];
+      Object.keys(numbers).forEach(function (n) { if (numbers[n] !== null) row.numbers[n] = (row.numbers[n] || 0) + numbers[n]; });
+      if (rank && !row.rank) row.rank = rank;
+      return row;
+    };
+    var tie = function (row, name) { var rel = o.room ? signalReleaseNamed(o.room, name) : null; if (rel) row.release_id = rel.id; };
+    if (read.kind === 'songs') {
+      read.rows.forEach(function (r) {
+        if (!r.song) return;
+        var nums = {};
+        ['streams', 'listeners', 'saves', 'adds'].forEach(function (k) { nums[year ? k + '12m' : k] = num(r[k]); });
+        var row = r.source ? put(src, 'source', cut(r.song + ' · ' + r.source), nums) : put(src, 'song', cut(r.song), nums);
+        tie(row, r.song);
+      });
+    } else if (read.kind === 'cities') {
+      var list = read.rows.filter(function (r) { return r.city; });
+      var ranked = list.some(function (r) { return typeof r.rank === 'number'; });
+      if (!ranked) list = list.slice().sort(function (a, b) { return (num(b.listeners) || num(b.streams) || 0) - (num(a.listeners) || num(a.streams) || 0); });
+      list.slice(0, 200).forEach(function (r, i) {
+        put(src, 'city', cut(r.city + (r.country ? ', ' + r.country : '')), { listeners: num(r.listeners), streams: num(r.streams), shazams: num(r.shazams) },
+          ranked && r.rank >= 1 && r.rank <= 1000 ? Math.round(r.rank) : i + 1);
+      });
+      if (src === 'apple' && list.some(function (r) { return num(r.shazams) !== null; })) {
+        list.filter(function (r) { return num(r.shazams) !== null; }).sort(function (a, b) { return b.shazams - a.shazams; }).slice(0, 200)
+          .forEach(function (r, i) { put('shazam', 'city', cut(r.city + (r.country ? ', ' + r.country : '')), { shazams: r.shazams }, i + 1); });
+      }
+    } else if (read.kind === 'playlists') {
+      read.rows.forEach(function (r) {
+        if (!r.playlist) return;
+        put(src, 'playlist', cut(r.playlist), { streams: num(r.streams), listeners: num(r.listeners), followers: num(r.followers) });
+      });
+    } else if (read.kind === 'timeline') {
+      var days = read.rows.filter(function (r) { return r.date; }).sort(function (a, b) { return a.date < b.date ? -1 : 1; });
+      if (days.length) {
+        var last = days[days.length - 1], sum = function (k) {
+          var t = null; days.forEach(function (r) { if (num(r[k]) !== null) t = (t || 0) + r[k]; }); return t;
+        };
+        put(src, 'artist', cut(o.artist || 'All your music'), { listeners: num(last.listeners), followers: num(last.followers), streams: sum('streams'), saves: sum('saves') });
+      }
+    }
+    return order.map(function (k) {
+      var row = out[k], nums = {};
+      Object.keys(row.numbers).slice(0, 60).forEach(function (n) { if (isFinite(row.numbers[n])) nums[n] = row.numbers[n]; });
+      row.numbers = nums;
+      return row;
+    }).filter(function (row) { return Object.keys(row.numbers).length || row.rank; });
+  }
+  function viewSignal() {
+    signalKnown();
+    if (S.signalOk !== true) {
+      return h('div', { class: 'page home profile menu-page has-tabs' }, menuHead('', { menu: true }), dbBanner(), socialBar(''));
+    }
+    var c = signalRoomInfo();
+    var tab = SIGNAL_TABS.some(function (t) { return t[0] === S.signalTab; }) ? S.signalTab : 'week';
+    var room = G.isObj(c.room) ? c.room : null;
+    var body = !window.GSIG ? h('p', { class: 'note' }, 'SIGNAL’s rules didn’t load. Close the app and open it again.')
+      : room ? (tab === 'releases' ? signalReleasesTab(room) : tab === 'posts' ? signalPostsTab(room)
+        : tab === 'songs' ? signalSongsTab(room) : tab === 'audience' ? signalAudienceTab(room)
+        : tab === 'facts' ? signalFactsTab(room) : signalWeekTab(room))
+      : c.failed || c.at ? [
+        h('p', { class: 'note' }, c.failed ? 'Couldn’t open SIGNAL just now.' : 'SIGNAL has nothing to show yet.'),
+        h('div', { class: 'stack' }, h('button', { class: 'btn primary block' + cfCls(true), type: 'button',
+          onclick: function () { signalRoomInfo(true); render(); } }, 'Try again'))]
+      : h('p', { class: 'note' }, 'Loading…');
+    return h('div', { class: 'page home profile menu-page has-tabs sig-room' },
+      menuHead('SIGNAL', { menu: true }),
+      dbBanner(),
+      h('div', { class: 'vp-tabs pt-tabs six', role: 'tablist', 'aria-label': 'SIGNAL' }, SIGNAL_TABS.map(function (t) {
+        var on = t[0] === tab;
+        return h('button', { class: 'vp-tab pt-tab' + (on ? ' on' : ''), type: 'button', role: 'tab', 'aria-selected': on ? 'true' : 'false',
+          onclick: function () { if (S.signalTab !== t[0] || S.signalOpen) { S.signalTab = t[0]; S.signalOpen = null; render(); } } },
+          icon(t[2], 20), h('span', null, t[1]));
+      })),
+      h('div', { class: 'pt-body sig-body', role: 'tabpanel' }, body),
+      socialBar(''));
+  }
+  function signalHead(words, act) {
+    return h('div', { class: 'mn-head sig-h' }, h('h3', { class: 'mn-h mn-over' }, words), act || null);
+  }
+  function signalRow(o) {
+    var cls = 'row sig-row' + (o.dim ? ' dim' : '') + (o.cls ? ' ' + o.cls : '');
+    var tick = o.tick ? h('button', { class: 'sig-tick' + (o.tick.on ? ' on' : '') + (o.tick.skip ? ' skip' : ''), type: 'button',
+      role: 'checkbox', 'aria-checked': o.tick.on ? 'true' : 'false', 'aria-label': o.tick.label,
+      onclick: function () { o.tick.onTap(); } }, o.tick.on ? icon('check', 16) : o.tick.skip ? icon('minus', 16) : null) : null;
+    var label = h('div', { class: 'row-label' }, o.title,
+      o.hint ? h('span', { class: 'hint' }, o.hint) : null,
+      o.tags && o.tags.length ? h('span', { class: 'sig-tags' }, o.tags.map(function (t) { return h('span', { class: 'sig-tag ' + (t[1] || '') }, t[2] ? icon(t[2], 12) : null, t[0]); })) : null);
+    var rest = [label, o.right || null, o.onTap ? h('span', { class: 'sig-chev', 'aria-hidden': 'true' }, icon('chevron', 16)) : null];
+    if (tick) return h('div', { class: cls + ' sig-ticked-row' }, tick, o.onTap ? h('button', { class: 'sig-rowtap', type: 'button', onclick: o.onTap }, rest) : rest);
+    return o.onTap ? h('button', { class: cls + ' rowbtn', type: 'button', onclick: o.onTap }, rest) : h('div', { class: cls }, rest);
+  }
+  function signalSwipe(row, words, onDelete) {
+    if (mouseOnly()) return row;
+    return swipeRow(row, [h('button', { class: 'sw-undo', type: 'button', 'aria-label': 'Delete ' + words, onclick: onDelete },
+      icon('trash', 16), 'Delete')], { noTapOpen: true, tapOnlyCloses: true });
+  }
+  function signalBtn(words, onTap, o) {
+    o = o || {};
+    return h('button', { class: 'btn ' + (o.quiet ? 'ghost' : 'primary') + (o.sm ? ' sm' : '') + (o.block === false ? '' : ' block') + cfCls(!o.quiet) +
+      (o.cls ? ' ' + o.cls : ''), type: o.submit ? 'submit' : 'button', onclick: onTap || null, disabled: o.disabled || null }, o.icon ? icon(o.icon, 18) : null, words);
+  }
+  function signalChips(options, value, onPick, label, o) {
+    var wrap = h('div', { class: 'sig-chips', role: 'radiogroup', 'aria-label': label });
+    options.forEach(function (opt) {
+      wrap.append(h('button', { class: 'sig-chip', type: 'button', role: 'radio', 'aria-checked': String(opt[0] === value),
+        onclick: function (e) {
+          var again = o && o.clear && e.currentTarget.getAttribute('aria-checked') === 'true';
+          Array.prototype.forEach.call(wrap.children, function (b) { b.setAttribute('aria-checked', 'false'); });
+          if (!again) e.currentTarget.setAttribute('aria-checked', 'true');
+          onPick(again ? '' : opt[0]);
+        } }, opt[1], opt[2] != null ? h('span', { class: 'sig-chip-n' }, opt[2]) : null));
+    });
+    return wrap;
+  }
+  function signalMulti(options, on, onChange, label) {
+    var picked = (on || []).slice();
+    var wrap = h('div', { class: 'sig-chips', role: 'group', 'aria-label': label });
+    options.forEach(function (w) {
+      wrap.append(h('button', { class: 'sig-chip', type: 'button', role: 'checkbox', 'aria-checked': String(picked.indexOf(w) >= 0),
+        onclick: function (e) {
+          var at = picked.indexOf(w);
+          if (at >= 0) picked.splice(at, 1); else picked.push(w);
+          e.currentTarget.setAttribute('aria-checked', String(at < 0));
+          onChange(picked.slice());
+        } }, w));
+    });
+    return wrap;
+  }
+  function signalTick(words, on, onChange, sub) {
+    return h('label', { class: 'fa-tick sig-ticked' },
+      h('input', { type: 'checkbox', class: 'rv-check', checked: on ? true : null, onchange: function (e) { onChange(!!e.target.checked); } }),
+      h('span', null, h('b', null, words), sub ? h('span', { class: 'hint' }, sub) : null));
+  }
+  function signalInput(o) {
+    return h('input', { class: 'input' + (o.sm ? ' sm' : ''), type: o.type || 'text', inputmode: o.mode || null, value: o.value == null ? '' : String(o.value),
+      maxlength: o.max || null, placeholder: o.ph || null, autocomplete: 'off', 'aria-label': o.label || null, 'data-k': o.k || null, list: o.list || null,
+      oninput: function (e) { o.on(e.target.value); } });
+  }
+  function signalArea(o) {
+    return h('textarea', { class: 'input sig-text', rows: o.rows || 4, maxlength: o.max || null, placeholder: o.ph || null, 'aria-label': o.label || null,
+      'data-k': o.k || null, value: o.value == null ? '' : String(o.value), oninput: function (e) { o.on(e.target.value); } });
+  }
+  function signalSelect(options, value, onPick, label) {
+    return h('select', { class: 'input', 'aria-label': label, onchange: function (e) { onPick(e.target.value); } },
+      options.map(function (opt) { return h('option', { value: opt[0], selected: opt[0] === value ? true : null }, opt[1]); }));
+  }
+  function signalSheetButtons(saveWords, onDelete, deleteWords) {
+    return h('div', { class: 'stack' },
+      signalBtn(saveWords || 'Save', null, { submit: true }),
+      signalBtn('Cancel', function () { closeSheet(); }, { quiet: true }),
+      onDelete ? h('button', { class: 'btn danger block', type: 'button', onclick: onDelete }, deleteWords || 'Delete') : null);
+  }
+  function signalAskDelete(kind, id, title, body) {
+    confirmSheet({ title: title, body: body, action: 'Delete', danger: true,
+      onConfirm: async function () { return await signalGone(kind, id); } });
+  }
+  function signalItemRow(room, it, o) {
+    var X = window.GSIG, rel = signalById(room, 'releases', it.release);
+    var who = it.who === 'distributor' ? (rel && rel.distributor ? rel.distributor : 'Your distributor') : '';
+    var tags = [];
+    if (it.missed) tags.push(['Missed ' + signalDay(it.missedOn), 'bad']);
+    if (it.alarm && !it.missed) tags.push(['Alarm', 'warn', 'bell']);
+    if (it.needsOk) tags.push(['Needs your OK', 'ok']);
+    if (it.event && !it.eventSeen) tags.push(['Opens ' + (X.EVENTS[it.event] || 'when it happens'), '']);
+    var hint = [it.releaseTitle && !(o && o.noRelease) ? it.releaseTitle : '',
+      it.event && !it.eventSeen ? 'By ' + signalDay(it.due) : signalDay(it.due) + (it.dueWords ? ' (' + it.dueWords + ')' : ''),
+      who, it.closes ? 'Closes ' + signalDay(it.closes) : ''].filter(Boolean).join(' · ');
+    var post = it.kind === 'post' ? signalById(room, 'posts', it.post) : null;
+    return signalRow({
+      title: it.title, hint: hint, tags: tags,
+      tick: post ? null : { on: false, label: 'Mark done: ' + it.title, onTap: function () { signalStepDone(room, it, 'done'); } },
+      onTap: function () { if (post) openSignalResults(room, post, /7d/.test(it.key) ? '7d' : '24h'); else openSignalStep(room, it); },
+      right: post ? h('span', { class: 'sig-tag ok' }, 'Log') : null
+    });
+  }
+  async function signalStepDone(room, it, status) {
+    var step = signalStepFor(room, it);
+    var row = step ? { id: step.id, status: status } : {
+      release_id: it.release || null, rule: /^id:/.test(it.key) ? '' : it.key, platform: it.platform || '', title: it.title,
+      who: it.who === 'distributor' ? 'distributor' : 'me', opens_day: it.from || null, due_day: it.due || null, needs_ok: !!it.needsOk,
+      alarm: !!it.alarm, status: status };
+    var saved = await signalPut('step', row);
+    if (saved) { toast(status === 'done' ? 'Done' : 'Saved'); render(); }
+  }
+  function openSignalStep(room, it) {
+    var X = window.GSIG, step = signalStepFor(room, it) || null;
+    var f = { status: step ? step.status : 'todo', note: step ? String(step.note || '') : '', alarm: step ? !!step.alarm : !!it.alarm,
+      needs: step ? !!step.needs_ok : !!it.needsOk, seen: !!it.eventSeen, due: step ? step.due_day || '' : it.due || '' };
+    var rel = signalById(room, 'releases', it.release);
+    var statuses = [['todo', 'To do'], ['waiting', 'Waiting'], ['done', 'Done'], ['skipped', 'Skip']];
+    openSheet(function () {
+      return [
+        h('p', { class: 'sig-over' }, [rel ? String(rel.title || '') : 'Dated chance', X.PLATFORMS[it.platform] || ''].filter(Boolean).join(' · ')),
+        h('h2', { class: 'sh-title' }, it.title),
+        h('p', { class: 'sh-sub' }, [it.event && !it.eventSeen ? 'Opens ' + (X.EVENTS[it.event] || 'when it happens') + ', by ' + signalDay(it.due)
+          : 'Due ' + signalDay(it.due) + (it.dueWords ? ' (' + it.dueWords + ')' : ''),
+          it.who === 'distributor' ? 'Your distributor does it' : 'You do it', it.hard ? 'The window shuts that day' : ''].filter(Boolean).join('. ') + '.'),
+        h('form', { onsubmit: async function (e) {
+          e.preventDefault();
+          var row = step ? { id: step.id } : { release_id: it.release || null, rule: /^id:/.test(it.key) ? '' : it.key, platform: it.platform || '',
+            title: it.title, who: it.who === 'distributor' ? 'distributor' : 'me', opens_day: it.from || null };
+          row.status = f.status; row.note = f.note; row.alarm = f.alarm; row.needs_ok = f.needs; row.due_day = X.isDay(f.due) ? f.due : null;
+          if (it.event && f.seen && !it.eventSeen) row.opens_day = signalToday();
+          var saved = await signalPut('step', row);
+          if (!saved) return;
+          closeSheet(); render(true);
+        } },
+          field('Where it stands', signalChips(statuses, f.status, function (v) { f.status = v; }, 'Where it stands')),
+          it.event && !it.eventSeen ? signalTick('It happened: ' + (X.EVENTS[it.event] || 'it opened').replace(/^when |^once /, ''), false,
+            function (v) { f.seen = v; }, 'It opens today, and goes on This Week’s list.') : null,
+          field('Due', signalInput({ type: 'date', value: f.due, label: 'Due', on: function (v) { f.due = v; } })),
+          h('div', { class: 'fa-ticks' },
+            signalTick('Alarm', f.alarm, function (v) { f.alarm = v; }, 'It stays at the top of This Week as its day comes. For now it shows on screen only: it doesn’t ring your phone.'),
+            signalTick('Needs my OK before anything is sent', f.needs, function (v) { f.needs = v; })),
+          field('Note', signalArea({ value: f.note, max: 2000, rows: 3, label: 'Note', on: function (v) { f.note = v; } })),
+          signalSheetButtons('Save', step ? function () { closeSheet(); setTimeout(function () {
+            signalAskDelete('step', step.id, 'Delete this step?', 'It comes off the checklist. Update the checklist to bring a planned step back.');
+          }, 260); } : null))
+      ];
+    }, { label: it.title });
+  }
+  function signalWeekTab(room) {
+    var X = window.GSIG, today = signalToday();
+    var w = X.weekly(signalWeekInput(room, today), { next: 5, days: 14 });
+    var callWords = { above: 'More than your usual week', below: 'Less than your usual week', even: 'About your usual week' };
+    var moved = (w.moved || []).filter(function (m) { return m.change !== 0; });
+    var showAll = !!S.signalMovedAll;
+    var movedRows = (showAll ? moved : moved.slice(0, 8)).map(function (m) {
+      var up = m.change > 0;
+      return signalRow({ title: m.key, cls: 'sig-moved',
+        hint: (SIGNAL_METRIC_WORDS[m.metric] || m.metric) + ' ' + signalCount(m.now) + ', ' + (up ? 'up ' : 'down ') + signalCount(Math.abs(m.change)) +
+          (m.pct !== null ? ' (' + signalPct(Math.abs(m.pct)) + ')' : '') + ' · ' + (m.call ? callWords[m.call] : 'Not enough weeks yet to compare'),
+        right: h('span', { class: 'amt sig-delta ' + (up ? 'up' : 'down') }, (up ? '+' : '−') + signalCount(Math.abs(m.change))) });
+    });
+    var rateWords = { sends: 'sends', saves: 'saves', follows: 'follows', likes: 'likes' };
+    var postRows = (w.posts || []).map(function (p) {
+      var post = signalById(room, 'posts', p.post), when = post ? signalWhen(post.posted_at) : null;
+      var bits = ['sends', 'saves', 'follows'].map(function (k) {
+        var r = p.rates[k];
+        if (!r || r.value === null) return '';
+        return rateWords[k] + ' ' + (Math.round(r.value * 1000) / 10) + ' per 100' + (r.call ? ' (' + (r.call === 'above' ? 'above' : r.call === 'below' ? 'below' : 'about') + ' your median)' : '');
+      }).filter(Boolean);
+      return signalRow({ title: (SIGNAL_FORMAT_WORDS[p.format] || 'Post') + (when ? ', ' + signalDay(when.date) : '') + ' · ' + (p.at === '7d' ? '7 days' : '24 hours'),
+        hint: ['Reach ' + signalCount(p.reach) + (p.nonFollowers !== null ? ', ' + p.nonFollowers + '% not following' : '')].concat(bits).join(' · ') +
+          (p.peers ? ' · against your other ' + (p.boosted ? 'boosted ' : 'unboosted ') + (SIGNAL_FORMAT_WORDS[p.format] || 'post').toLowerCase() + 's' : ' · the first of its kind, nothing to compare yet'),
+        onTap: post ? function () { S.signalTab = 'posts'; S.signalOpen = { post: post.id }; render(); } : null });
+    });
+    return [
+      h('div', { class: 'sig-weekhead' },
+        h('div', null, h('p', { class: 'sig-over' }, 'Week of'), h('h2', { class: 'sig-week' }, signalDay(w.week))),
+        signalBtn('Add this week’s files', function () { openSignalFile(room); }, { sm: true, block: false, icon: 'up' })),
+      signalHead('What moved'),
+      movedRows.length ? [h('div', { class: 'ledger' }, movedRows),
+        moved.length > 8 ? h('button', { class: 'mn-change sig-more', type: 'button', onclick: function () { S.signalMovedAll = !showAll; render(); } },
+          showAll ? 'Show the top 8' : 'Show all ' + moved.length) : null,
+        h('p', { class: 'note' }, 'Each change against your own usual week, never an industry average.')]
+        : h('p', { class: 'note' }, 'Add this week’s files from Spotify for Artists and Apple Music for Artists, two weeks in a row, to see what moved.'),
+      postRows.length ? [signalHead('Post results this week'), h('div', { class: 'ledger' }, postRows),
+        h('p', { class: 'note' }, 'Per 100 people reached, against your own median for the same kind of post. Boosted posts are only compared with boosted posts.')] : null,
+      signalHead('Why it probably moved'),
+      (w.why || []).length ? h('div', { class: 'ledger' }, w.why.map(function (y) {
+        return signalRow({ title: y.words, cls: 'sig-why' });
+      })) : h('p', { class: 'note' }, 'Nothing came out, went up or ran that week.'),
+      signalHead('The next five things'),
+      (w.next || []).length ? h('div', { class: 'ledger' }, w.next.map(function (it) { return signalItemRow(room, it); }))
+        : h('p', { class: 'note' }, 'Nothing to do right now.'),
+      signalHead('Every deadline in the next 14 days'),
+      (w.deadlines || []).length ? h('div', { class: 'ledger' }, w.deadlines.map(function (it) { return signalItemRow(room, it); }))
+        : emptyState('Nothing due in the next 14 days', 'Every release’s checklist and every post’s results land here as their days come.'),
+      (w.missed || []).length ? [signalHead('Windows that shut'), h('div', { class: 'ledger' }, w.missed.map(function (it) { return signalItemRow(room, it); }))] : null,
+      (w.waiting || []).length ? [signalHead('Waiting for something to happen'), h('div', { class: 'ledger' }, w.waiting.map(function (it) { return signalItemRow(room, it); })),
+        h('p', { class: 'note' }, 'Tap one when it happens, and it moves up to This Week.')] : null
+    ];
+  }
+  function signalReleasesTab(room) {
+    var X = window.GSIG, open = S.signalOpen && S.signalOpen.release ? signalById(room, 'releases', S.signalOpen.release) : null;
+    if (open) return signalReleasePage(room, open);
+    var list = signalRows(room, 'releases'), today = signalToday();
+    var spaced = X.releaseSpacing(list.map(function (r) { return { id: r.id, title: String(r.title || ''), releaseDate: r.release_day || null }; }));
+    var slot = X.spotifySlot(list.map(function (r) {
+      var sent = signalRows(room, 'pitches').filter(function (p) { return p.release_id === r.id && p.platform === 'spotify' && p.sent_at; })
+        .map(function (p) { var w = signalWhen(p.sent_at); return w ? w.date : null; }).filter(Boolean).sort()[0] || null;
+      return { id: r.id, title: String(r.title || ''), releaseDate: r.release_day || null, spotifyPitchedOn: sent };
+    }), today);
+    var held = slot.heldBy ? signalById(room, 'releases', slot.heldBy) : null;
+    var arts = signalRows(room, 'artists');
+    return [
+      list.length ? [
+        h('p', { class: 'sig-slot' }, icon('lock', 14), slot.free === false
+          ? 'Spotify pitch slot: held by ' + (held ? String(held.title || '') : 'a release') + ' until it comes out ' + signalDay(slot.freeOn) + '.'
+          : 'Spotify pitch slot: free. One song can be pitched at a time.'),
+        slot.clash && slot.clash.length ? h('p', { class: 'sig-warn' }, 'Two Spotify pitches look open at once. Spotify allows one: check the pitches’ sent days.') : null,
+        spaced.map(function (s) { return h('p', { class: 'sig-warn' }, s.words); }),
+        h('div', { class: 'ledger' }, list.map(function (r) {
+          var steps = signalStepsOf(room, r.id), done = steps.filter(function (s) { return s.status === 'done' || s.status === 'skipped'; }).length;
+          var left = r.release_day ? X.daysBetween(today, r.release_day) : null;
+          return signalRow({ title: String(r.title || ''),
+            hint: [r.release_day ? (left !== null && left >= 0 ? 'Out ' : 'Came out ') + signalDay(r.release_day) + (left !== null && left >= 0 ? ' (' + X.dueWords(left) + ')' : '') : 'No release day yet',
+              SIGNAL_KIND_WORDS[r.kind] || '', SIGNAL_RELEASE_WORDS[r.status] || '', steps.length ? done + ' of ' + steps.length + ' steps done' : ''].filter(Boolean).join(' · '),
+            onTap: function () { S.signalOpen = { release: r.id }; render(); } });
+        }))]
+        : emptyState('No releases yet', 'Each release gets its own checklist, from 8 weeks before release day to 6 weeks after, with its pitches and what the distributor confirmed in writing.'),
+      h('div', { class: 'stack' }, signalBtn('Add a release', function () { openSignalRelease(room, null); }, { icon: 'plus' })),
+      signalHead('Your projects', h('button', { class: 'mn-change', type: 'button', onclick: function () { openSignalArtist(room, null); } }, 'Add one')),
+      arts.length ? h('div', { class: 'ledger' }, arts.map(function (a) {
+        return signalRow({ title: String(a.name || ''), hint: [a.hometown ? 'From ' + a.hometown : '', a.based ? 'Based in ' + a.based : '', a.distributor || ''].filter(Boolean).join(' · ') || 'Add the hometown and base the pitch form asks for',
+          onTap: function () { openSignalArtist(room, a); } });
+      })) : h('p', { class: 'note' }, 'The names you release under. Each one’s hometown and base go into every pitch.')
+    ];
+  }
+  function signalPhase(d) {
+    return d === null ? 'No day set' : d <= -42 ? '8 to 6 weeks before' : d <= -28 ? '6 to 4 weeks before' : d < -14 ? '4 to 2 weeks before'
+      : d < 0 ? 'The last 2 weeks' : d === 0 ? 'Release day' : d <= 14 ? 'The 2 weeks after' : 'Up to 6 weeks after';
+  }
+  function signalReleasePage(room, rel) {
+    var X = window.GSIG, today = signalToday(), R = rel.release_day || null;
+    var plan = X.planRelease({ releaseDate: R, videoDate: rel.video_day || null, distributor: rel.distributor || '', kind: rel.kind });
+    var spaced = X.releaseSpacing(signalRows(room, 'releases').map(function (r) { return { id: r.id, title: String(r.title || ''), releaseDate: r.release_day || null }; }))
+      .filter(function (s) { return s.first === rel.id || s.next === rel.id; });
+    var steps = signalStepsOf(room, rel.id).slice().sort(function (a, b) {
+      return (a.due_day || '9') < (b.due_day || '9') ? -1 : (a.due_day || '9') > (b.due_day || '9') ? 1 : (a.sort_order || 0) - (b.sort_order || 0);
+    });
+    var done = steps.filter(function (s) { return s.status === 'done' || s.status === 'skipped'; }).length;
+    var wk = X.weekly({ today: today, releases: [signalReleaseIn(room, rel)] }, { next: 999, days: 14 });
+    var byKey = {};
+    wk.next.concat(wk.missed, wk.waiting, wk.deadlines).forEach(function (it) { if (it.key && !byKey[it.key]) byKey[it.key] = it; });
+    var alarms = wk.deadlines.filter(function (it) { return it.alarm; });
+    var groups = [], at = {};
+    steps.forEach(function (s) {
+      var d = R && s.due_day ? X.daysBetween(R, s.due_day) : null, g = signalPhase(d);
+      if (!at[g]) { at[g] = { name: g, rows: [] }; groups.push(at[g]); }
+      at[g].rows.push(s);
+    });
+    var pitches = signalRows(room, 'pitches').filter(function (p) { return p.release_id === rel.id; });
+    var confs = signalRows(room, 'confirmations').filter(function (c) { return c.release_id === rel.id; });
+    var assets = signalRows(room, 'assets').filter(function (a) { return a.release_id === rel.id; });
+    var left = R ? X.daysBetween(today, R) : null;
+    var stepRow = function (s) {
+      var it = signalStepItem(s), seen = byKey[it.key] || null, isDone = s.status === 'done' || s.status === 'skipped';
+      var tags = [];
+      if (!isDone && seen && seen.missed) tags.push(['Missed', 'bad']);
+      else if (!isDone && s.alarm) tags.push(['Alarm', 'warn', 'bell']);
+      if (s.needs_ok) tags.push(['Needs your OK', 'ok']);
+      if (s.status === 'waiting') tags.push(['Waiting', '']);
+      if (!isDone && it.event && !it.eventSeen) tags.push(['Opens ' + (X.EVENTS[it.event] || 'when it happens'), '']);
+      var who = s.who === 'distributor' ? (rel.distributor || 'Your distributor') : '';
+      var dueLeft = s.due_day ? X.daysBetween(today, s.due_day) : null;
+      return signalRow({
+        title: String(s.title || ''), dim: isDone, tags: isDone ? [] : tags,
+        hint: [s.due_day ? signalDay(s.due_day) + (!isDone && dueLeft !== null ? ' (' + X.dueWords(dueLeft) + ')' : '') : '', X.PLATFORMS[s.platform] || '', who,
+          isDone ? SIGNAL_STEP_WORDS[s.status] : ''].filter(Boolean).join(' · '),
+        tick: { on: s.status === 'done', skip: s.status === 'skipped', label: (s.status === 'done' ? 'Mark not done: ' : 'Mark done: ') + s.title,
+          onTap: async function () {
+            var saved = await signalPut('step', { id: s.id, status: s.status === 'done' ? 'todo' : 'done' });
+            if (saved) render();
+          } },
+        onTap: function () { openSignalStep(room, Object.assign({}, it, seen || {}, { release: rel.id, releaseTitle: String(rel.title || '') })); }
+      });
+    };
+    return [
+      h('button', { class: 'sig-back', type: 'button', onclick: function () { S.signalOpen = null; render(); } }, icon('back', 18), 'Releases'),
+      h('div', { class: 'sig-relhead' },
+        h('p', { class: 'sig-over' }, [SIGNAL_KIND_WORDS[rel.kind] || '', SIGNAL_RELEASE_WORDS[rel.status] || ''].filter(Boolean).join(' · ')),
+        h('h2', { class: 'sig-title' }, String(rel.title || '')),
+        rel.artists ? h('p', { class: 'sig-sub' }, String(rel.artists)) : null,
+        h('p', { class: 'sig-sub' }, [R ? (left >= 0 ? 'Out ' : 'Came out ') + signalDay(R) + (left !== null ? ' (' + X.dueWords(left) + ')' : '') : 'No release day yet',
+          rel.video_day ? 'Video ' + signalDay(rel.video_day) : '', rel.distributor || ''].filter(Boolean).join(' · ')),
+        h('div', { class: 'pt-two sig-two' },
+          h('button', { class: 'pf-btn', type: 'button', onclick: function () { openSignalRelease(room, rel); } }, icon('edit', 16), 'Edit'),
+          h('button', { class: 'pf-btn', type: 'button', onclick: function () { openSignalPitch(room, rel, null); } }, icon('plus', 16), 'Pitch'))),
+      plan.warnings.filter(function (x) { return x.code !== 'no-date'; }).map(function (x) { return h('p', { class: 'sig-warn' }, x.words); }),
+      spaced.map(function (s) { return h('p', { class: 'sig-warn' }, s.words); }),
+      alarms.length ? [signalHead('Alarms in the next 14 days'), h('div', { class: 'ledger' }, alarms.map(function (it) { return signalItemRow(room, it, { noRelease: true }); }))] : null,
+      signalHead('Checklist' + (steps.length ? ': ' + done + ' of ' + steps.length + ' done' : ''),
+        steps.length && R ? h('button', { class: 'mn-change', type: 'button', onclick: function () { signalMakeChecklist(room, rel); } }, 'Update the dates') : null),
+      steps.length ? groups.map(function (g) {
+        return [h('p', { class: 'sig-phase' }, g.name), h('div', { class: 'ledger' }, g.rows.map(stepRow))];
+      }) : [
+        h('p', { class: 'note' }, R ? 'Every step from 8 weeks before release day to 6 weeks after, each date worked out from ' + signalDay(R) +
+          ': Spotify 7 days out, Apple at 10 and 7, Deezer the day before, Amazon and Deezer closing 14 days after, the video pitch, Marquee by 21 days after.'
+          : 'Add the release day first, and the checklist works out every date from it.'),
+        R ? h('div', { class: 'stack' }, signalBtn('Make the checklist', function () { signalMakeChecklist(room, rel); }, { icon: 'check' })) : null],
+      signalHead('Pitches', h('button', { class: 'mn-change', type: 'button', onclick: function () { openSignalPitch(room, rel, null); } }, 'Add one')),
+      pitches.length ? h('div', { class: 'ledger' }, pitches.map(function (p) {
+        var b = typeof p.score === 'number' ? X.PitchScore.band(p.score) : null, sent = signalWhen(p.sent_at);
+        var row = signalRow({ title: (X.PLATFORMS[p.platform] || p.platform) + ' · ' + (p.who === 'distributor' ? (rel.distributor || 'Your distributor') : 'You'),
+          hint: [sent ? 'Sent ' + signalDay(sent.date) : SIGNAL_PITCH_WORDS[p.status] || '', SIGNAL_OUTCOME_WORDS[p.outcome] || ''].filter(Boolean).join(' · '),
+          right: b ? h('span', { class: 'sig-score-sm tone-' + b.tone }, String(Math.round(p.score))) : null,
+          onTap: function () { openSignalPitch(room, rel, p); } });
+        return signalSwipe(row, 'this pitch', function () { signalAskDelete('pitch', p.id, 'Delete this pitch?', 'Its words and score go too.'); });
+      })) : h('p', { class: 'note' }, 'Each platform, who pitches it, the words, the meter’s score and what happened.'),
+      signalHead('What the distributor confirmed', h('button', { class: 'mn-change', type: 'button', onclick: function () { openSignalConfirm(room, rel, null); } }, 'Add one')),
+      confs.length ? h('div', { class: 'ledger' }, confs.map(function (c) {
+        var row = signalRow({ title: '“' + String(c.said || '') + '”', hint: [c.who || '', c.said_on ? signalDay(c.said_on) : '', c.source || ''].filter(Boolean).join(' · '),
+          onTap: function () { openSignalConfirm(room, rel, c); } });
+        return signalSwipe(row, 'this', function () { signalAskDelete('confirmation', c.id, 'Delete this?', 'What they confirmed comes off the release.'); });
+      })) : h('p', { class: 'note' }, 'What ' + (rel.distributor || 'the distributor') + ' said in writing, and when: what they pitched, where and when.'),
+      signalHead('Files', h('button', { class: 'mn-change', type: 'button', onclick: function () { openSignalAsset(room, rel, null); } }, 'Add one')),
+      assets.length ? h('div', { class: 'ledger' }, assets.map(function (a) {
+        var d = G.isObj(a.details) ? a.details : {};
+        return signalRow({ title: (SIGNAL_ASSET_KINDS[a.kind] || 'File') + ': ' + String(a.name || ''),
+          hint: [SIGNAL_ASSET_WORDS[a.status] || '', a.file_name || '', d.width && d.height ? d.width + ' × ' + d.height : '', d.seconds ? d.seconds + ' seconds' : ''].filter(Boolean).join(' · '),
+          onTap: function () { openSignalAsset(room, rel, a); } });
+      })) : h('p', { class: 'note' }, 'The Canvas, the art and the video: their details only. The files stay in your SIGNAL folder.')
+    ];
+  }
+  async function signalMakeChecklist(room, rel) {
+    var X = window.GSIG;
+    var plan = X.planRelease({ releaseDate: rel.release_day || null, videoDate: rel.video_day || null, distributor: rel.distributor || '', kind: rel.kind });
+    if (!plan.ok) { toast(plan.warnings[0] ? plan.warnings[0].words : 'Add the release day first.'); return; }
+    var have = {};
+    signalStepsOf(room, rel.id).forEach(function (s) { if (s.rule) have[s.rule] = s; });
+    var n = 0, failed = false;
+    toast('Making the checklist…');
+    for (var i = 0; i < plan.steps.length; i++) {
+      var p = plan.steps[i], old = have[p.key];
+      var row = old ? { id: old.id, title: p.title, due_day: p.due, sort_order: i } : {
+        release_id: rel.id, rule: p.key, platform: p.platform, title: p.title, who: p.who === 'distributor' ? 'distributor' : 'me',
+        opens_day: p.from, due_day: p.due, needs_ok: p.needsOk, alarm: p.alarm, status: 'todo', sort_order: i };
+      if (old && !p.event) row.opens_day = p.from;
+      var saved = await signalPut('step', row);
+      if (!saved) { failed = true; break; }
+      n += 1;
+    }
+    var inPlan = {}, gone = 0;
+    plan.steps.forEach(function (p) { inPlan[p.key] = true; });
+    var retire = Object.keys(have).filter(function (k) { return !inPlan[k] && have[k].status !== 'done' && have[k].status !== 'skipped'; });
+    for (var j = 0; !failed && j < retire.length; j++) {
+      if (!(await signalPut('step', { id: have[retire[j]].id, status: 'skipped' }))) { failed = true; break; }
+      gone += 1;
+    }
+    if (!failed) {
+      toast(Object.keys(have).length ? 'The checklist’s dates are up to date' + (gone ? '. ' + gone + (gone === 1 ? ' step the plan no longer has is' : ' steps the plan no longer has are') + ' set to Skip' : '')
+        : 'The checklist is made: ' + n + ' steps');
+    }
+    render(true);
+  }
+  function openSignalRelease(room, rel) {
+    var f = rel ? { title: rel.title || '', artists: rel.artists || '', artist_ids: (rel.artist_ids || []).slice(), kind: rel.kind || 'single',
+      release_day: rel.release_day || '', video_day: rel.video_day || '', distributor: rel.distributor || '', status: rel.status || 'planning',
+      isrc: rel.isrc || '', upc: rel.upc || '', note: rel.note || '' }
+      : { title: '', artists: '', artist_ids: [], kind: 'single', release_day: '', video_day: '', distributor: '', status: 'planning', isrc: '', upc: '', note: '' };
+    var arts = signalRows(room, 'artists');
+    if (!rel && arts.length === 1) { f.artist_ids = [arts[0].id]; f.artists = arts[0].name; f.distributor = arts[0].distributor || ''; }
+    openSheet(function () {
+      return [
+        h('h2', { class: 'sh-title' }, rel ? 'Edit the release' : 'Add a release'),
+        h('form', { onsubmit: async function (e) {
+          e.preventDefault();
+          if (!String(f.title).trim()) { toast('Give it a title.'); return; }
+          var row = Object.assign({}, f, { release_day: f.release_day || null, video_day: f.video_day || null });
+          if (rel) row.id = rel.id;
+          var saved = await signalPut('release', row);
+          if (!saved) return;
+          closeSheet();
+          if (!rel) { S.signalOpen = { release: saved.id }; S.signalTab = 'releases'; }
+          render(true);
+        } },
+          field('Title', signalInput({ value: f.title, max: 200, label: 'Title', on: function (v) { f.title = v; } })),
+          field('Artists, spelled as on the release', signalInput({ value: f.artists, max: 300, label: 'Artists', on: function (v) { f.artists = v; } })),
+          arts.length ? field('Your projects on it', signalMulti(arts.map(function (a) { return a.name; }),
+            arts.filter(function (a) { return f.artist_ids.indexOf(a.id) >= 0; }).map(function (a) { return a.name; }),
+            function (names) { f.artist_ids = arts.filter(function (a) { return names.indexOf(a.name) >= 0; }).map(function (a) { return a.id; }); }, 'Your projects')) : null,
+          field('Kind', signalChips(Object.keys(SIGNAL_KIND_WORDS).map(function (k) { return [k, SIGNAL_KIND_WORDS[k]]; }), f.kind, function (v) { f.kind = v || 'single'; }, 'Kind')),
+          h('div', { class: 'field-row' },
+            field('Release day', signalInput({ type: 'date', value: f.release_day, label: 'Release day', on: function (v) { f.release_day = v; } })),
+            field('Video day', signalInput({ type: 'date', value: f.video_day, label: 'Video day', on: function (v) { f.video_day = v; } }))),
+          field('Distributor', signalInput({ value: f.distributor, max: 120, label: 'Distributor', on: function (v) { f.distributor = v; } })),
+          field('Where it stands', signalChips(Object.keys(SIGNAL_RELEASE_WORDS).map(function (k) { return [k, SIGNAL_RELEASE_WORDS[k]]; }), f.status,
+            function (v) { f.status = v || 'planning'; }, 'Where it stands')),
+          h('div', { class: 'field-row' },
+            field('ISRC', signalInput({ value: f.isrc, max: 15, label: 'ISRC', on: function (v) { f.isrc = v; } })),
+            field('UPC', signalInput({ value: f.upc, max: 14, mode: 'numeric', label: 'UPC', on: function (v) { f.upc = v; } }))),
+          field('Note', signalArea({ value: f.note, max: 4000, rows: 3, label: 'Note', on: function (v) { f.note = v; } })),
+          signalSheetButtons(rel ? 'Save' : 'Add the release', rel ? function () {
+            closeSheet();
+            setTimeout(function () {
+              confirmSheet({ title: 'Delete ' + (rel.title || 'this release') + '?', body: 'Its checklist, pitches, confirmations and files go with it. Posts and numbers stay.',
+                action: 'Delete', danger: true, onConfirm: async function () {
+                  var ok = await signalGone('release', rel.id);
+                  if (ok) S.signalOpen = null;
+                  return ok;
+                } });
+            }, 260);
+          } : null, 'Delete this release'))
+      ];
+    }, { label: rel ? 'Edit the release' : 'Add a release' });
+  }
+  function openSignalArtist(room, a) {
+    var f = a ? { name: a.name || '', hometown: a.hometown || '', based: a.based || '', distributor: a.distributor || '', note: a.note || '' }
+      : { name: '', hometown: '', based: '', distributor: '', note: '' };
+    openSheet(function () {
+      return [
+        h('h2', { class: 'sh-title' }, a ? 'Edit the project' : 'Add a project'),
+        h('p', { class: 'sh-sub' }, 'A name you release under. Its hometown and base go into every pitch.'),
+        h('form', { onsubmit: async function (e) {
+          e.preventDefault();
+          if (!String(f.name).trim()) { toast('Give it a name.'); return; }
+          var row = Object.assign({}, f);
+          if (a) row.id = a.id;
+          if (!(await signalPut('artist', row))) return;
+          closeSheet(); render(true);
+        } },
+          field('Name', signalInput({ value: f.name, max: 120, label: 'Name', on: function (v) { f.name = v; } })),
+          field('Hometown', signalInput({ value: f.hometown, max: 120, label: 'Hometown', on: function (v) { f.hometown = v; } })),
+          field('Based in', signalInput({ value: f.based, max: 120, label: 'Based in', on: function (v) { f.based = v; } })),
+          field('Distributor', signalInput({ value: f.distributor, max: 120, label: 'Distributor', on: function (v) { f.distributor = v; } })),
+          field('Note', signalArea({ value: f.note, max: 2000, rows: 2, label: 'Note', on: function (v) { f.note = v; } })),
+          signalSheetButtons(a ? 'Save' : 'Add the project', a ? function () {
+            closeSheet(); setTimeout(function () { signalAskDelete('artist', a.id, 'Delete ' + (a.name || 'this project') + '?', 'It comes off every release that named it. Facts about it keep their words.'); }, 260);
+          } : null))
+      ];
+    }, { label: a ? 'Edit the project' : 'Add a project' });
+  }
+  function signalMeterPanel(res, platform) {
+    var X = window.GSIG;
+    return [
+      h('div', { class: 'sig-scorecard' },
+        h('div', { class: 'sig-scoreline' }, h('span', { class: 'sig-score tone-' + res.band.tone }, String(res.total)), h('span', { class: 'sig-of' }, '/100'),
+          h('span', { class: 'sig-band tone-' + res.band.tone }, res.band.name)),
+        h('p', { class: 'sig-say' }, res.band.say),
+        platform && platform !== 'spotify' ? h('p', { class: 'hint' }, 'The meter is built for Spotify pitches. For ' + (X.PLATFORMS[platform] || 'this platform') + ', read it as a guide.') : null),
+      res.needsApproval ? h('p', { class: 'sig-warn' }, 'It says something personal. It can’t go in until everyone it describes has OK’d it: tick that below once they have.') : null,
+      res.caps.map(function (c) { return h('p', { class: 'sig-warn' }, c); }),
+      res.pen.length ? h('ul', { class: 'sig-moves' }, res.pen.map(function (p) {
+        return h('li', { class: 'neg' }, h('span', { class: 'sig-gain neg' }, String(p.pts)), h('span', null, p.label));
+      })) : null,
+      h('p', { class: 'sig-subh' }, 'What to change'),
+      res.moves.length ? h('ul', { class: 'sig-moves' }, res.moves.slice(0, 6).map(function (m) {
+        return h('li', null, h('span', { class: 'sig-gain' }, '+' + m.pts), h('span', null, m.hint + (m.you ? ' (a tick for you below)' : '') + '.'));
+      })) : h('p', { class: 'note' }, 'Nothing left to fix.'),
+      h('details', { class: 'sig-parts' }, h('summary', null, 'Every part of the score'),
+        h('div', { class: 'sig-bars' }, res.crits.map(function (c) {
+          var pct = c.max ? Math.round(100 * c.pts / c.max) : 0;
+          return h('div', { class: 'sig-bar' }, h('span', { class: 'sig-bar-n' }, c.name),
+            h('span', { class: 'sig-bar-t' }, h('i', { style: 'width:' + pct + '%', class: pct >= 100 ? 'full' : pct >= 50 ? 'half' : 'low' })),
+            h('span', { class: 'sig-bar-p' }, c.pts + '/' + c.max));
+        })),
+        h('p', { class: 'sig-subh' }, 'Not scored yet, so check these by eye'),
+        h('ul', { class: 'sig-plain' }, X.PitchScore.NOT_YET.map(function (n) { return h('li', null, n.words); })))
+    ];
+  }
+  function openSignalPitch(room, rel, pitch) {
+    var X = window.GSIG, tags = G.isObj(pitch && pitch.tags) ? JSON.parse(JSON.stringify(pitch.tags)) : {};
+    var art = Array.isArray(rel.artist_ids) ? signalById(room, 'artists', rel.artist_ids[0]) : null;
+    var done = {};
+    signalStepsOf(room, rel.id).forEach(function (s) { if (s.status === 'done' && s.rule) done[s.rule] = true; });
+    var f = { platform: pitch ? pitch.platform : 'spotify', who: pitch ? pitch.who : 'me', body: pitch ? String(pitch.body || '') : '',
+      status: pitch ? pitch.status : 'draft', sent: signalWhen(pitch && pitch.sent_at) ? signalWhen(pitch.sent_at).date : '',
+      outcome: pitch ? pitch.outcome || '' : '', outcomeNote: pitch ? String(pitch.outcome_note || '') : '',
+      facts: pitch && Array.isArray(pitch.fact_ids) ? pitch.fact_ids.slice() : [] };
+    ['genres', 'styles', 'cultures', 'moods', 'instruments'].forEach(function (k) { if (!Array.isArray(tags[k])) tags[k] = []; });
+    if (!tags.submit) tags.submit = signalToday();
+    if (tags.home === undefined) tags.home = art ? String(art.hometown || '') : '';
+    if (tags.based === undefined) tags.based = art ? String(art.based || '') : '';
+    tags.ask = G.isObj(tags.ask) ? tags.ask : {};
+    if (!G.isObj(tags.profile)) {
+      tags.profile = {};
+      Object.keys(SIGNAL_PROFILE_STEPS).forEach(function (k) { tags.profile[k] = !!done[SIGNAL_PROFILE_STEPS[k]]; });
+    }
+    f.facts = f.facts.filter(function (id) { return !!signalById(room, 'facts', id); });
+    var facts = signalRows(room, 'facts').filter(function (x) { return !x.release_id || x.release_id === rel.id || f.facts.indexOf(x.id) >= 0; });
+    var host = h('div', { class: 'sig-meter' }), count = h('span', { class: 'sig-count' }), text = null;
+    var paint = function () {
+      var res = X.PitchScore.score(signalPitchIn(room, rel, tags, f.body), signalToday());
+      fillEl(host, signalMeterPanel(res, f.platform));
+      count.textContent = f.body.length + ' of 500';
+      count.className = 'sig-count' + (f.body.length > 500 ? ' over' : '');
+      return res;
+    };
+    var whoWrap = h('div', { class: 'sig-chips', role: 'radiogroup', 'aria-label': 'Who pitches it' },
+      [['me', 'You'], ['distributor', rel.distributor || 'Your distributor']].map(function (o) {
+        return h('button', { class: 'sig-chip', type: 'button', role: 'radio', 'data-v': o[0], 'aria-checked': String(f.who === o[0]), onclick: function () {
+          f.who = o[0]; Array.prototype.forEach.call(whoWrap.children, lightWho);
+        } }, o[1]);
+      }));
+    var lightWho = function (b) { b.setAttribute('aria-checked', String(b.getAttribute('data-v') === f.who)); };
+    var list = function (k) { return String((tags[k] || []).join(', ')); };
+    var setList = function (k, v) { tags[k] = String(v).split(',').map(function (s) { return s.trim(); }).filter(Boolean); paint(); };
+    openSheet(function () {
+      paint();
+      return [
+        h('p', { class: 'sig-over' }, String(rel.title || '')),
+        h('h2', { class: 'sh-title' }, pitch ? 'The pitch' : 'Add a pitch'),
+        h('form', { onsubmit: async function (e) {
+          e.preventDefault();
+          var res = paint();
+          var bad = f.facts.filter(function (id) { var x = signalById(room, 'facts', id); return !x || x.status !== 'approved'; });
+          if (bad.length) { toast('A fact in this pitch isn’t approved now. Take it out, or approve it in Facts.'); return; }
+          var row = { release_id: rel.id, platform: f.platform, who: f.who, body: f.body, tags: tags, fact_ids: f.facts, score: res.total,
+            meter_version: X.METER_VERSION, status: f.status, sent_at: f.status === 'sent' && X.isDay(f.sent) ? signalIso(f.sent, '12:00') : (f.status === 'sent' ? new Date().toISOString() : null),
+            outcome: f.outcome, outcome_note: f.outcomeNote };
+          if (pitch) row.id = pitch.id;
+          if (!(await signalPut('pitch', row))) return;
+          closeSheet(); toast('Pitch saved: ' + res.total + ' ' + res.band.name); render(true);
+        } },
+          field('Platform', signalSelect(Object.keys(X.PLATFORMS).map(function (k) { return [k, X.PLATFORMS[k]]; }), f.platform, function (v) {
+            f.platform = v; f.who = SIGNAL_PITCH_BY[v] || 'me'; paint();
+            Array.prototype.forEach.call(whoWrap.children, lightWho);
+          }, 'Platform')),
+          field('Who pitches it', whoWrap),
+          h('div', { class: 'field' }, h('span', { class: 'field-label sig-lab' }, 'The words', count),
+            text = signalArea({ value: f.body, max: 4000, rows: 7, label: 'The words', k: 'sig-pitch-body', ph: 'Open with the sound, then what it is about, who made it, and a dated plan.',
+              on: function (v) { f.body = v; paint(); } })),
+          facts.length ? [h('p', { class: 'field-label' }, 'Your facts'), h('div', { class: 'sig-facts' }, facts.map(function (x) {
+            var ok = x.status === 'approved', on = f.facts.indexOf(x.id) >= 0;
+            if (!ok && on) {
+              return h('div', { class: 'sig-fact wait' },
+                h('span', { class: 'sig-fact-t' }, String(x.body || ''), h('span', { class: 'hint' }, SIGNAL_FACT_WORDS[x.status] + ': in this pitch, but not approved now. Take it out to save the pitch.')),
+                h('button', { class: 'pf-btn sig-use', type: 'button', onclick: function (ev) {
+                  var b = ev.currentTarget, at = f.facts.indexOf(x.id), hint = b.parentNode.querySelector('.hint');
+                  if (at >= 0) f.facts.splice(at, 1);
+                  if (hint) hint.textContent = 'Taken out of this pitch. Its words stay in the text until you take them out.';
+                  b.remove();
+                  paint();
+                } }, 'Take out'));
+            }
+            return h('div', { class: 'sig-fact' + (ok ? '' : ' wait') },
+              h('span', { class: 'sig-fact-t' }, String(x.body || ''), h('span', { class: 'hint' }, ok ? (on ? 'In this pitch' : 'Approved') : SIGNAL_FACT_WORDS[x.status] + ': it can’t go into a pitch yet')),
+              ok ? h('button', { class: 'pf-btn sig-use' + (on ? ' on' : ''), type: 'button', 'aria-pressed': on ? 'true' : 'false', onclick: function (ev) {
+                var b = ev.currentTarget, at = f.facts.indexOf(x.id), hint = b.parentNode.querySelector('.hint');
+                if (at >= 0) {
+                  f.facts.splice(at, 1); b.textContent = 'Use'; b.classList.remove('on'); b.setAttribute('aria-pressed', 'false');
+                  if (hint) hint.textContent = 'Approved. Its words stay in the text until you take them out.';
+                } else {
+                  f.facts.push(x.id);
+                  f.body = (f.body.trim() ? f.body.trim() + ' ' : '') + String(x.body || '').trim();
+                  if (text) text.value = f.body;
+                  b.textContent = 'In'; b.classList.add('on'); b.setAttribute('aria-pressed', 'true');
+                  if (hint) hint.textContent = 'In this pitch';
+                }
+                paint();
+              } }, on ? 'In' : 'Use') : null);
+          }))] : h('p', { class: 'hint' }, 'Approved facts from the Facts tab can be added to the words from here.'),
+          field('Day you submit it', signalInput({ type: 'date', value: tags.submit, label: 'Day you submit it', on: function (v) { tags.submit = v; paint(); } })),
+          field('Genres (1 to 3, as Spotify’s list spells them)', signalInput({ value: list('genres'), label: 'Genres', ph: 'Bass, Bass House', on: function (v) { setList('genres', v); } })),
+          field('Moods (1 or 2)', signalMulti(SIGNAL_PITCH_LISTS.moods, tags.moods, function (v) { tags.moods = v; paint(); }, 'Moods')),
+          field('Song style', signalMulti(SIGNAL_PITCH_LISTS.styles, tags.styles, function (v) { tags.styles = v; paint(); }, 'Song style')),
+          field('Music culture', signalMulti(SIGNAL_PITCH_LISTS.cultures, tags.cultures, function (v) { tags.cultures = v; paint(); }, 'Music culture')),
+          field('Instruments', signalInput({ value: list('instruments'), label: 'Instruments', ph: 'Drum Kit, Samples', on: function (v) { setList('instruments', v); } })),
+          SIGNAL_PITCH_YESNO.map(function (q) {
+            return field(q[1], signalChips(q[2], tags[q[0]] || '', function (v) { tags[q[0]] = v; paint(); }, q[1], { clear: true }));
+          }),
+          field('Lyric language', signalInput({ value: tags.language || '', max: 60, label: 'Lyric language', on: function (v) { tags.language = v; paint(); } })),
+          h('div', { class: 'field-row' },
+            field('Hometown', signalInput({ value: tags.home, max: 120, label: 'Hometown', on: function (v) { tags.home = v; paint(); } })),
+            field('Based in', signalInput({ value: tags.based, max: 120, label: 'Based in', on: function (v) { tags.based = v; paint(); } }))),
+          h('p', { class: 'field-label' }, 'Your ticks'),
+          h('div', { class: 'fa-ticks' }, SIGNAL_PITCH_ASK.map(function (q) {
+            return signalTick(q[1], !!tags.ask[q[0]], function (v) { tags.ask[q[0]] = v; paint(); });
+          })),
+          h('p', { class: 'field-label' }, 'Profile ready'),
+          h('div', { class: 'fa-ticks' }, SIGNAL_PITCH_PROFILE.map(function (q) {
+            return signalTick(q[1], !!tags.profile[q[0]], function (v) { tags.profile[q[0]] = v; paint(); });
+          })),
+          host,
+          field('Where it stands', signalChips(Object.keys(SIGNAL_PITCH_WORDS).map(function (k) { return [k, SIGNAL_PITCH_WORDS[k]]; }), f.status,
+            function (v) { f.status = v || 'draft'; }, 'Where it stands')),
+          field('Day it was sent', signalInput({ type: 'date', value: f.sent, label: 'Day it was sent', on: function (v) { f.sent = v; } })),
+          field('What happened', signalChips(Object.keys(SIGNAL_OUTCOME_WORDS).map(function (k) { return [k, SIGNAL_OUTCOME_WORDS[k]]; }), f.outcome,
+            function (v) { f.outcome = v; }, 'What happened', { clear: true })),
+          field('About what happened', signalArea({ value: f.outcomeNote, max: 2000, rows: 2, label: 'About what happened', on: function (v) { f.outcomeNote = v; } })),
+          signalSheetButtons(pitch ? 'Save the pitch' : 'Add the pitch', pitch ? function () {
+            closeSheet(); setTimeout(function () { signalAskDelete('pitch', pitch.id, 'Delete this pitch?', 'Its words and score go too.'); }, 260);
+          } : null))
+      ];
+    }, { label: pitch ? 'The pitch' : 'Add a pitch', cls: 'sig-sheet' });
+  }
+  function openSignalConfirm(room, rel, c) {
+    var f = c ? { who: c.who || '', said: c.said || '', said_on: c.said_on || '', source: c.source || '', note: c.note || '' }
+      : { who: rel.distributor || '', said: '', said_on: signalToday(), source: '', note: '' };
+    openSheet(function () {
+      return [
+        h('p', { class: 'sig-over' }, String(rel.title || '')),
+        h('h2', { class: 'sh-title' }, c ? 'What they confirmed' : 'Add what they confirmed'),
+        h('form', { onsubmit: async function (e) {
+          e.preventDefault();
+          if (!String(f.said).trim()) { toast('Write what they said.'); return; }
+          var row = Object.assign({ release_id: rel.id }, f, { said_on: f.said_on || null });
+          if (c) row.id = c.id;
+          if (!(await signalPut('confirmation', row))) return;
+          closeSheet(); render(true);
+        } },
+          field('Who', signalInput({ value: f.who, max: 120, label: 'Who', on: function (v) { f.who = v; } })),
+          field('What they said, in writing', signalArea({ value: f.said, max: 2000, rows: 3, label: 'What they said', on: function (v) { f.said = v; } })),
+          h('div', { class: 'field-row' },
+            field('When', signalInput({ type: 'date', value: f.said_on, label: 'When', on: function (v) { f.said_on = v; } })),
+            field('Where', signalInput({ value: f.source, max: 200, label: 'Where', ph: 'Email', on: function (v) { f.source = v; } }))),
+          field('Note', signalArea({ value: f.note, max: 2000, rows: 2, label: 'Note', on: function (v) { f.note = v; } })),
+          signalSheetButtons('Save', c ? function () {
+            closeSheet(); setTimeout(function () { signalAskDelete('confirmation', c.id, 'Delete this?', 'What they confirmed comes off the release.'); }, 260);
+          } : null))
+      ];
+    }, { label: 'What they confirmed' });
+  }
+  function openSignalAsset(room, rel, a) {
+    var d = G.isObj(a && a.details) ? a.details : {};
+    var f = a ? { kind: a.kind || 'other', name: a.name || '', file_name: a.file_name || '', status: a.status || 'todo', note: a.note || '',
+      width: d.width || '', height: d.height || '', seconds: d.seconds || '' }
+      : { kind: 'canvas', name: '', file_name: '', status: 'todo', note: '', width: '', height: '', seconds: '' };
+    openSheet(function () {
+      return [
+        h('p', { class: 'sig-over' }, String(rel.title || '')),
+        h('h2', { class: 'sh-title' }, a ? 'The file' : 'Add a file’s details'),
+        h('p', { class: 'sh-sub' }, 'Only its details are kept here. The file itself stays in your SIGNAL folder.'),
+        h('form', { onsubmit: async function (e) {
+          e.preventDefault();
+          if (!String(f.name).trim()) { toast('Give it a name.'); return; }
+          var det = {};
+          ['width', 'height', 'seconds'].forEach(function (k) { var n = signalNum(f[k]); if (n !== null) det[k] = n; });
+          var row = { release_id: rel.id, kind: f.kind, name: f.name, file_name: f.file_name, status: f.status, note: f.note, details: det };
+          if (a) row.id = a.id;
+          if (!(await signalPut('asset', row))) return;
+          closeSheet(); render(true);
+        } },
+          field('What it is', signalChips(Object.keys(SIGNAL_ASSET_KINDS).map(function (k) { return [k, SIGNAL_ASSET_KINDS[k]]; }), f.kind, function (v) { f.kind = v || 'other'; }, 'What it is')),
+          field('Name', signalInput({ value: f.name, max: 200, label: 'Name', on: function (v) { f.name = v; } })),
+          field('File name in the folder', signalInput({ value: f.file_name, max: 255, label: 'File name', on: function (v) { f.file_name = v; } })),
+          h('div', { class: 'field-row' },
+            field('Width', signalInput({ value: f.width, mode: 'numeric', label: 'Width', on: function (v) { f.width = v; } })),
+            field('Height', signalInput({ value: f.height, mode: 'numeric', label: 'Height', on: function (v) { f.height = v; } })),
+            field('Seconds', signalInput({ value: f.seconds, mode: 'decimal', label: 'Seconds', on: function (v) { f.seconds = v; } }))),
+          field('Where it stands', signalChips(Object.keys(SIGNAL_ASSET_WORDS).map(function (k) { return [k, SIGNAL_ASSET_WORDS[k]]; }), f.status, function (v) { f.status = v || 'todo'; }, 'Where it stands')),
+          field('Note', signalArea({ value: f.note, max: 2000, rows: 2, label: 'Note', on: function (v) { f.note = v; } })),
+          signalSheetButtons('Save', a ? function () {
+            closeSheet(); setTimeout(function () { signalAskDelete('asset', a.id, 'Delete these details?', 'The file in your SIGNAL folder is not touched.'); }, 260);
+          } : null))
+      ];
+    }, { label: 'A file’s details' });
+  }
+  var SIGNAL_SCORE_FORMATS = [['photo', 'Photo or carousel'], ['reel', 'Reel'], ['story', 'Story']];
+  function signalDraftNew(fmt) {
+    var X = window.GSIG, d = { st: { gates: {}, self: {}, caption: '' }, when: { date: X.pacificParts(Date.now()).date, time: '12:00', release: false }, postId: null };
+    (X.PostScore.DEFS[fmt].gates || []).forEach(function (g) { d.st.gates[g.id] = true; });
+    if (fmt === 'reel') d.st.lengthSec = 30;
+    if (fmt === 'story') d.st.frames = 3;
+    return d;
+  }
+  function signalDraft(fmt) {
+    var all = S.signalDrafts || (S.signalDrafts = {});
+    return all[fmt] || (all[fmt] = signalDraftNew(fmt));
+  }
+  function signalPostScore(fmt, d) {
+    var X = window.GSIG;
+    var w = X.postWhen({ date: d.when.date, time: d.when.time, release: !!d.when.release }) ||
+      X.postWhen({ date: X.pacificParts(Date.now()).date, time: '12:00', release: !!d.when.release });
+    return X.PostScore.score(fmt, d.st, w);
+  }
+  function signalPostsTab(room) {
+    var open = S.signalOpen && S.signalOpen.post ? signalById(room, 'posts', S.signalOpen.post) : null;
+    if (open) return signalPostPage(room, open);
+    var view = S.signalPostView === 'log' ? 'log' : 'score', n = signalRows(room, 'posts').length;
+    return [
+      h('div', { class: 'sig-seg' }, segmented(['Score a post', 'Post log' + (n ? ' (' + n + ')' : '')], view === 'log' ? 1 : 0, function (i) {
+        S.signalPostView = i ? 'log' : 'score'; render();
+      }, 'Score a post or the post log')),
+      view === 'log' ? signalPostLog(room) : signalScorer(room)
+    ];
+  }
+  function signalScorer(room) {
+    var X = window.GSIG, P = X.PostScore;
+    var fmt = P.DEFS[S.signalFmt] ? S.signalFmt : 'photo', def = P.DEFS[fmt], d = signalDraft(fmt), st = d.st;
+    var editing = d.postId ? signalById(room, 'posts', d.postId) : null;
+    var pts = {}, mini = h('div', { class: 'sig-mini', 'aria-live': 'polite' }), panel = h('div', { class: 'sig-panel' });
+    var capInfo = h('div', { class: 'sig-capinfo' }), whenLine = h('div', { class: 'sig-when' });
+    var paint = function () {
+      var res = signalPostScore(fmt, d), top = res.moves[0];
+      res.items.forEach(function (it) {
+        if (pts[it.id]) { pts[it.id].textContent = it.earned + ' / ' + it.max; pts[it.id].className = 'sig-pts' + (it.earned === it.max ? ' full' : ''); }
+      });
+      fillEl(mini, [h('span', { class: 'sig-score tone-' + res.band.tone }, String(res.total)), h('span', { class: 'sig-band tone-' + res.band.tone }, res.band.name),
+        h('span', { class: 'sig-mini-t' }, res.gatesFailed.length ? 'A rule check is off: held at 40' : top ? '+' + top.gain + ': ' + top.label : 'Post it')]);
+      var flags = [];
+      if (res.gatesFailed.length) flags.push('Held at 40. Fix first: ' + res.gatesFailed.join('; ') + '. Followers still see it, but Instagram won’t recommend it to anyone else.');
+      if (def.caption && res.cap.chars > 2200) flags.push('Too long to post: Instagram captions stop at 2,200 characters.');
+      if (def.caption && res.cap.hashtags.length > 5) flags.push('Too many hashtags: Instagram allows 5 a post.');
+      fillEl(panel, [
+        h('div', { class: 'sig-scorecard' },
+          h('div', { class: 'sig-scoreline' }, h('span', { class: 'sig-score tone-' + res.band.tone }, String(res.total)), h('span', { class: 'sig-of' }, '/100'),
+            h('span', { class: 'sig-band tone-' + res.band.tone }, res.band.name)),
+          h('p', { class: 'sig-say' }, res.gatesFailed.length ? 'A rule check failed, so the score can’t go above 40.' : res.total >= 85 ? res.band.say : res.band.say + ' Ready is 85 and up.')),
+        flags.map(function (x) { return h('p', { class: 'sig-warn' }, x); }),
+        h('p', { class: 'sig-subh' }, 'What to change'),
+        res.moves.length ? h('ul', { class: 'sig-moves' }, res.moves.slice(0, 4).map(function (m) {
+          return h('li', null, h('span', { class: 'sig-gain' }, '+' + m.gain), h('span', null, h('b', null, m.label + '. '), m.fix));
+        })) : h('p', { class: 'note' }, 'Nothing left to fix. Post it, then answer comments early.'),
+        h('details', { class: 'sig-parts' }, h('summary', null, 'Every part of the score'),
+          h('div', { class: 'sig-bars' }, res.items.map(function (it) {
+            var pct = it.max ? Math.round(100 * it.earned / it.max) : 0;
+            return h('div', { class: 'sig-bar' }, h('span', { class: 'sig-bar-n' }, it.label),
+              h('span', { class: 'sig-bar-t' }, h('i', { style: 'width:' + pct + '%', class: pct >= 100 ? 'full' : pct >= 50 ? 'half' : 'low' })),
+              h('span', { class: 'sig-bar-p' }, it.earned + '/' + it.max));
+          })))
+      ]);
+      if (def.caption) {
+        var cap = res.cap, auto = function (ok, words) { return h('li', { class: ok === true ? 'ok' : ok === false ? 'no' : '' }, h('span', { class: 'sig-mk' }, ok === true ? '✓' : ok === false ? '✕' : '·'), words); };
+        var n = cap.hashtags.length;
+        fillEl(capInfo, [
+          h('p', { class: 'sig-count' + (cap.chars > 2200 ? ' over' : '') }, cap.chars.toLocaleString('en-US') + ' of 2,200 characters'),
+          h('p', { class: 'sig-preview' }, h('span', { class: 'hint' }, 'What people see before “more”'), cap.preview || '(nothing yet)'),
+          h('ul', { class: 'sig-autos' },
+            auto(cap.uniqueMentions.length > 0, cap.uniqueMentions.length ? 'Mentions ' + cap.uniqueMentions.join(', ') : 'No @mentions'),
+            auto(n <= 5, n + (n === 1 ? ' hashtag' : ' hashtags') + (n > 5 ? '. Instagram blocks more than 5' : n ? '' : '. Fine: hashtags don’t add reach')),
+            auto(cap.question || !!st.self.question, cap.question ? 'Asks people something' : st.self.question ? 'Question ticked by you' : 'No question found'),
+            auto(!(cap.bait.length && !st.self.baitOk), cap.bait.length ? 'Flagged as possible bait: “' + cap.bait.join('”, “') + '”' : 'No bait phrases'),
+            fmt === 'reel' ? auto(cap.chars <= 500, cap.chars <= 500 ? 'Under 500 characters' : 'Over 500 characters') : null,
+            auto(cap.linkInBio ? true : null, cap.linkInBio ? 'Says “link in bio”' : 'No “link in bio”. Caption links can’t be tapped, so say where to listen'))]);
+      }
+      var w = X.postWhen({ date: d.when.date, time: d.when.time, release: !!d.when.release });
+      var day = res.items.filter(function (x) { return x.id === 'day'; })[0], tm = res.items.filter(function (x) { return x.id === 'time'; })[0];
+      var clocks = [['Chicago', 'America/Chicago'], ['New York', 'America/New_York'], ['London', 'Europe/London'], ['Berlin', 'Europe/Berlin'], ['Sydney', 'Australia/Sydney']];
+      var max = P.timeMax(fmt), bars = [];
+      for (var hr = 0; hr < 24; hr++) {
+        bars.push(h('i', { class: w && hr === w.hour ? 'on' : null, style: 'height:' + Math.round(100 * P.timePts(fmt, hr) / max) + '%' }));
+      }
+      fillEl(whenLine, [
+        h('p', { class: 'sig-whenline' }, (w ? signalDay(w.date) + ', ' + signalClock(w.time) : 'Pick a day and time') + (d.when.release ? ' (release day)' : '') +
+          ' · day ' + (day ? day.earned + '/' + day.max : '') + ' · time ' + (tm ? tm.earned + '/' + tm.max : '')),
+        w ? h('div', { class: 'sig-clocks' }, clocks.map(function (c) {
+          var t = '';
+          try { t = new Intl.DateTimeFormat('en-US', { timeZone: c[1], weekday: 'short', hour: 'numeric', minute: '2-digit' }).format(new Date(w.instant)); } catch (e) { t = ''; }
+          return t ? h('span', { class: 'sig-clock' }, h('b', null, c[0]), t) : null;
+        })) : null,
+        h('div', { class: 'sig-strip', 'aria-hidden': 'true' }, bars),
+        h('p', { class: 'hint sig-axis' }, h('span', null, '12 AM'), h('span', null, '6 AM'), h('span', null, 'Noon'), h('span', null, '6 PM'))]);
+      return res;
+    };
+    var factor = function (f) {
+      if (f.type === 'caption' || f.type === 'day' || f.type === 'time') return null;
+      pts[f.id] = h('span', { class: 'sig-pts' });
+      var body;
+      if (f.options) {
+        body = signalChips(f.options.map(function (o) { return [o.v, o.label, o.pts]; }), st[f.id] || '', function (v) { st[f.id] = v || undefined; paint(); }, f.label, { clear: true });
+      } else if (f.type === 'check') {
+        body = h('div', { class: 'fa-ticks' }, signalTick(f.check, !!st[f.id], function (v) { st[f.id] = v; paint(); }, '+' + f.max));
+      } else if (f.type === 'frames') {
+        body = h('div', null, signalInput({ value: st.frames || '', mode: 'numeric', label: 'Frames posted that day', k: 'sig-frames',
+          on: function (v) { st.frames = signalNum(v) || 0; paint(); } }), h('span', { class: 'hint' }, '1 to 3 on an ordinary day, 3 to 7 on a release day.'));
+      }
+      return h('div', { class: 'sig-fx' }, h('div', { class: 'sig-fx-h' }, h('span', { class: 'sig-fx-n' }, f.label), pts[f.id]),
+        f.hint ? h('p', { class: 'hint' }, f.hint) : null, body);
+    };
+    var node = [
+      signalChips(SIGNAL_SCORE_FORMATS, fmt, function (v) { if (v && v !== fmt) { S.signalFmt = v; render(); } }, 'Format'),
+      editing ? h('p', { class: 'sig-warn ok' }, 'Scoring again: the ' + (SIGNAL_FORMAT_WORDS[editing.format] || 'post').toLowerCase() + ' in your post log. Save to keep the new score on it.') : null,
+      mini,
+      def.gates.length ? [signalHead('Rule checks'), h('p', { class: 'hint sig-lead' }, 'A miss holds the score at 40.'),
+        h('div', { class: 'fa-ticks' }, def.gates.map(function (g) {
+          return signalTick(g.label, st.gates[g.id] !== false, function (v) { st.gates[g.id] = v; paint(); }, g.hint || '');
+        })),
+        def.length ? field('Length in seconds (3:00 is the limit for being recommended)', signalInput({ value: st.lengthSec || '', mode: 'numeric', label: 'Length in seconds', k: 'sig-len',
+          on: function (v) { st.lengthSec = signalNum(v) || 0; paint(); } })) : null] : null,
+      signalHead(fmt === 'story' ? 'The day’s Story set' : 'The post'),
+      def.factors.map(factor),
+      def.caption ? [signalHead('Caption'),
+        signalArea({ value: st.caption, max: 4000, rows: 6, label: 'Caption', k: 'sig-caption', ph: 'Paste or type the caption', on: function (v) { st.caption = v; paint(); } }),
+        capInfo,
+        h('div', { class: 'fa-ticks' },
+          signalTick('My first line is the hook', !!st.self.hook, function (v) { st.self.hook = v; paint(); }),
+          signalTick(fmt === 'photo' ? 'It names the artist, track, genre and city in plain words' : 'It names the track and genre in plain words', !!st.self.keywords,
+            function (v) { st.self.keywords = v; paint(); }),
+          signalTick('It asks people something', !!st.self.question, function (v) { st.self.question = v; paint(); }, 'Tick this if the check above missed your question'),
+          signalTick('A flagged phrase is fine', !!st.self.baitOk, function (v) { st.self.baitOk = v; paint(); }, 'For example “comment PRESAVE” that sends a real DM'))] : null,
+      signalHead('When it goes up (Los Angeles time)'),
+      h('div', { class: 'field-row' },
+        field('Day', signalInput({ type: 'date', value: d.when.date, label: 'Day', k: 'sig-wdate', on: function (v) { d.when.date = v; paint(); } })),
+        field('Time', signalInput({ type: 'time', value: d.when.time, label: 'Time', k: 'sig-wtime', on: function (v) { d.when.time = String(v).slice(0, 5); paint(); } }))),
+      h('div', { class: 'fa-ticks' }, signalTick('Release day', !!d.when.release, function (v) { d.when.release = v; paint(); }, 'Earns full day points')),
+      whenLine,
+      panel,
+      h('div', { class: 'stack' },
+        signalBtn(editing ? 'Save the new score' : 'Save to the post log', function () { openSignalPostSave(room, fmt, d, paint()); }, { icon: editing ? 'check' : 'plus' }),
+        signalBtn('Start over', function () { S.signalDrafts[fmt] = signalDraftNew(fmt); render(); }, { quiet: true }))
+    ];
+    paint();
+    return node;
+  }
+  function openSignalPostSave(room, fmt, d, res) {
+    var X = window.GSIG, old = d.postId ? signalById(room, 'posts', d.postId) : null;
+    var accounts = [];
+    var addAcct = function (a) { a = String(a || '').replace(/^@/, '').trim(); if (a && accounts.indexOf(a) < 0) accounts.push(a); };
+    var set = room.settings && Array.isArray(room.settings.accounts) ? room.settings.accounts : [];
+    set.forEach(function (a) { if (a && (!a.platform || a.platform === 'instagram')) addAcct(a.handle); });
+    signalRows(room, 'posts').forEach(function (p) { addAcct(p.account); });
+    var posted = old ? signalWhen(old.posted_at) : null;
+    var f = { account: old ? old.account || '' : accounts[0] || '', format: old ? old.format : fmt === 'photo' ? (/^c/.test(d.st.format || '') ? 'carousel' : 'photo') : fmt,
+      release_id: old ? old.release_id || '' : '', boosted: old ? !!old.boosted : false, posted: !!posted,
+      pdate: posted ? posted.date : d.when.date, ptime: posted ? posted.time : d.when.time, note: old ? old.note || '' : '' };
+    var rels = signalRows(room, 'releases');
+    openSheet(function () {
+      return [
+        h('h2', { class: 'sh-title' }, old ? 'Save the new score' : 'Save to the post log'),
+        h('p', { class: 'sh-sub' }, 'Scored ' + res.total + ', ' + res.band.name + '.'),
+        h('form', { onsubmit: async function (e) {
+          e.preventDefault();
+          var row = { platform: 'instagram', account: String(f.account || '').replace(/^@/, '').trim(), format: f.format, caption: String(d.st.caption || ''),
+            score: res.total, band: res.band.name, scorer_version: X.SCORER_VERSION,
+            answers: { fmt: fmt, st: d.st, when: d.when }, planned_at: signalIso(d.when.date, d.when.time),
+            posted_at: f.posted ? signalIso(f.pdate, f.ptime) : null, boosted: f.boosted, release_id: f.release_id || null, note: f.note };
+          if (old) row.id = old.id;
+          var saved = await signalPut('post', row);
+          if (!saved) return;
+          S.signalDrafts[fmt] = signalDraftNew(fmt);
+          S.signalOpen = { post: saved.id }; S.signalPostView = 'log';
+          closeSheet(); toast('Saved to the post log'); render(true);
+        } },
+          field('Account', h('div', null, signalInput({ value: f.account, max: 60, label: 'Account', ph: 'yourhandle', list: 'sig-accounts', on: function (v) { f.account = v; } }),
+            h('datalist', { id: 'sig-accounts' }, accounts.map(function (a) { return h('option', { value: a }); })))),
+          field('Kind of post', signalChips((fmt === 'photo' ? [['photo', 'Single photo'], ['carousel', 'Carousel']] : fmt === 'reel' ? [['reel', 'Reel']] : [['story', 'Story']]),
+            f.format, function (v) { f.format = v || f.format; }, 'Kind of post')),
+          rels.length ? field('The release it’s for', signalSelect([['', 'None']].concat(rels.map(function (r) { return [r.id, String(r.title || '')]; })), f.release_id,
+            function (v) { f.release_id = v; }, 'The release it’s for')) : null,
+          h('div', { class: 'fa-ticks' },
+            signalTick('It’s up', f.posted, function (v) { f.posted = v; }, 'Then its results are due 24 hours and 7 days from when it went up.'),
+            signalTick('Boosted', f.boosted, function (v) { f.boosted = v; }, 'A boosted post is only compared with other boosted posts.')),
+          h('div', { class: 'field-row' },
+            field('Went up (day)', signalInput({ type: 'date', value: f.pdate, label: 'Went up, day', on: function (v) { f.pdate = v; } })),
+            field('Time (LA)', signalInput({ type: 'time', value: f.ptime, label: 'Went up, time', on: function (v) { f.ptime = String(v).slice(0, 5); } }))),
+          field('Note', signalArea({ value: f.note, max: 2000, rows: 2, label: 'Note', on: function (v) { f.note = v; } })),
+          signalSheetButtons(old ? 'Save the new score' : 'Save the post'))
+      ];
+    }, { label: 'Save to the post log' });
+  }
+  function signalResultOf(room, postId, cp) {
+    return signalRows(room, 'results').filter(function (x) { return x.post_id === postId && x.checkpoint === cp; })[0] || null;
+  }
+  function signalResultBoosted(post, r) { return r && typeof r.boosted === 'boolean' ? r.boosted : !!(post && post.boosted); }
+  function signalPostCompare(room, post, cp) {
+    var X = window.GSIG, mine = signalResultOf(room, post.id, cp);
+    if (!mine || !(mine.reach > 0)) return { rows: [], peers: 0 };
+    var boosted = signalResultBoosted(post, mine);
+    var peers = signalRows(room, 'posts').filter(function (q) {
+      if (q.id === post.id || q.format !== post.format) return false;
+      var r = signalResultOf(room, q.id, cp);
+      return r && r.reach > 0 && signalResultBoosted(q, r) === boosted;
+    }).map(function (q) { return signalResultOf(room, q.id, cp); });
+    var rows = [];
+    SIGNAL_RESULT_FIELDS.forEach(function (fd) {
+      if (!fd[3] || typeof mine[fd[0]] !== 'number') return;
+      var v = mine[fd[0]] / mine.reach * 100;
+      var med = X.median(peers.filter(function (r) { return typeof r[fd[0]] === 'number'; }).map(function (r) { return r[fd[0]] / r.reach * 100; }));
+      rows.push({ key: fd[0], words: fd[1], value: v, median: med, call: med === null || !(med > 0) ? null : v >= med * 1.1 ? 'above' : v <= med * 0.9 ? 'below' : 'even' });
+    });
+    return { rows: rows, peers: peers.length, boosted: !!boosted };
+  }
+  function signalPostLog(room) {
+    var X = window.GSIG, list = signalRows(room, 'posts'), today = signalToday();
+    if (!list.length) return emptyState('No posts yet', 'Score a caption before it goes up, then log how it did after 24 hours and after 7 days.');
+    return h('div', { class: 'ledger' }, list.map(function (p) {
+      var up = signalWhen(p.posted_at), plan = signalWhen(p.planned_at);
+      var due = up ? [['24h', 1, '24 hours'], ['7d', 7, '7 days']].map(function (c) {
+        if (signalResultOf(room, p.id, c[0])) return c[2] + ' logged';
+        var on = X.addDays(up.date, c[1]);
+        return c[2] + (on < today ? ' late' : on === today ? ' due today' : ' due ' + signalDay(on));
+      }).join(', ') : '';
+      var b = typeof p.score === 'number' ? X.PostScore.band(p.score) : null;
+      var row = signalRow({ title: (SIGNAL_FORMAT_WORDS[p.format] || 'Post') + (p.account ? ' · @' + p.account : ''),
+        hint: [up ? 'Posted ' + signalDay(up.date) + ', ' + signalClock(up.time) : plan ? 'Planned for ' + signalDay(plan.date) + ', ' + signalClock(plan.time) : 'Not posted yet',
+          p.boosted ? 'Boosted' : '', due].filter(Boolean).join(' · '),
+        right: b ? h('span', { class: 'sig-score-sm tone-' + b.tone }, String(Math.round(p.score))) : null,
+        onTap: function () { S.signalOpen = { post: p.id }; render(); } });
+      return signalSwipe(row, 'this post', function () { signalAskDelete('post', p.id, 'Delete this post?', 'Its score, checklist and results go too.'); });
+    }));
+  }
+  function signalPostPage(room, post) {
+    var X = window.GSIG, up = signalWhen(post.posted_at), plan = signalWhen(post.planned_at), rel = signalById(room, 'releases', post.release_id);
+    var b = typeof post.score === 'number' ? X.PostScore.band(post.score) : null;
+    var checks = G.isObj(post.checklist) ? post.checklist : {};
+    var nDone = X.POST_CHECKLIST.filter(function (c) { return checks[c.key]; }).length;
+    var callWords = { above: 'above', below: 'below', even: 'about' };
+    var result = function (cp, days, words) {
+      var r = signalResultOf(room, post.id, cp), cmp = signalPostCompare(room, post, cp);
+      if (!r) {
+        var on = up ? X.addDays(up.date, days) : null;
+        return h('div', { class: 'sig-result' }, h('div', { class: 'sig-result-h' }, h('b', null, words), h('span', { class: 'hint' }, on ? 'Due ' + signalDay(on) : 'Due once it’s up')),
+          signalBtn('Log the ' + (cp === '7d' ? '7-day' : '24-hour') + ' results', function () { openSignalResults(room, post, cp); }, { sm: true, quiet: !up }));
+      }
+      var fields = SIGNAL_RESULT_FIELDS.filter(function (fd) { return typeof r[fd[0]] === 'number'; });
+      return h('div', { class: 'sig-result' },
+        h('div', { class: 'sig-result-h' }, h('b', null, words), h('button', { class: 'mn-change', type: 'button', onclick: function () { openSignalResults(room, post, cp); } }, 'Change')),
+        h('div', { class: 'sig-nums' }, fields.map(function (fd) {
+          return h('span', { class: 'sig-num' }, h('b', null, fd[0] === 'non_follower_pct' || fd[0] === 'skip_rate' ? r[fd[0]] + '%' : signalCount(r[fd[0]])), fd[1]);
+        })),
+        cmp.rows.length ? [h('p', { class: 'sig-subh' }, 'Per 100 people reached'),
+          h('div', { class: 'ledger' }, cmp.rows.map(function (x) {
+            return signalRow({ title: x.words, cls: 'sig-cmp', hint: x.median === null ? 'Nothing to compare yet' : 'Your median ' + (Math.round(x.median * 10) / 10),
+              right: h('span', { class: 'amt' + (x.call === 'above' ? ' sig-up' : x.call === 'below' ? ' sig-down' : '') }, String(Math.round(x.value * 10) / 10)) });
+          })),
+          h('p', { class: 'note' }, cmp.peers ? 'Against your other ' + cmp.peers + ' ' + (cmp.boosted ? 'boosted ' : 'unboosted ') + (SIGNAL_FORMAT_WORDS[post.format] || 'post').toLowerCase() +
+            (cmp.peers === 1 ? '' : 's') + ' at ' + words.toLowerCase() + '.' : 'The first ' + (cmp.boosted ? 'boosted ' : '') + (SIGNAL_FORMAT_WORDS[post.format] || 'post').toLowerCase() + ' with ' + words.toLowerCase() + ' logged: the next ones are compared with it.')]
+          : r.reach > 0 ? null : h('p', { class: 'note' }, 'Add the reach to see each number per 100 people reached.'));
+    };
+    return [
+      h('button', { class: 'sig-back', type: 'button', onclick: function () { S.signalOpen = null; S.signalPostView = 'log'; render(); } }, icon('back', 18), 'Post log'),
+      h('div', { class: 'sig-relhead' },
+        h('p', { class: 'sig-over' }, ['Instagram', post.account ? '@' + post.account : '', rel ? String(rel.title || '') : ''].filter(Boolean).join(' · ')),
+        h('h2', { class: 'sig-title' }, SIGNAL_FORMAT_WORDS[post.format] || 'Post'),
+        h('p', { class: 'sig-sub' }, [up ? 'Posted ' + signalDay(up.date) + ', ' + signalClock(up.time) + ' (LA)' : plan ? 'Planned for ' + signalDay(plan.date) + ', ' + signalClock(plan.time) + ' (LA)' : 'Not posted yet',
+          post.boosted ? 'Boosted' : ''].filter(Boolean).join(' · ')),
+        b ? h('div', { class: 'sig-scoreline sm' }, h('span', { class: 'sig-score tone-' + b.tone }, String(Math.round(post.score))), h('span', { class: 'sig-band tone-' + b.tone }, post.band || b.name),
+          h('span', { class: 'hint' }, 'scorer ' + (post.scorer_version || 'unknown'))) : null,
+        h('div', { class: 'pt-two sig-two' },
+          h('button', { class: 'pf-btn', type: 'button', onclick: function () { openSignalPost(room, post); } }, icon('edit', 16), 'Edit'),
+          G.isObj(post.answers) && post.answers.st ? h('button', { class: 'pf-btn', type: 'button', onclick: function () {
+            var a = post.answers, fm = X.PostScore.DEFS[a.fmt] ? a.fmt : 'photo';
+            var dd = signalDraftNew(fm);
+            dd.st = JSON.parse(JSON.stringify(a.st)); dd.st.gates = dd.st.gates || {}; dd.st.self = dd.st.self || {};
+            if (G.isObj(a.when)) dd.when = { date: a.when.date || dd.when.date, time: a.when.time || dd.when.time, release: !!a.when.release };
+            dd.postId = post.id;
+            (S.signalDrafts || (S.signalDrafts = {}))[fm] = dd;
+            S.signalFmt = fm; S.signalOpen = null; S.signalPostView = 'score'; render();
+          } }, icon('refresh', 16), 'Score it again') : null)),
+      post.caption ? h('p', { class: 'sig-caption' }, String(post.caption)) : null,
+      signalHead('After every post: ' + nDone + ' of ' + X.POST_CHECKLIST.length),
+      h('div', { class: 'fa-ticks sig-after' }, X.POST_CHECKLIST.map(function (c, i) {
+        return signalTick((i + 1) + '. ' + c.words, !!checks[c.key], async function (v) {
+          var next = Object.assign({}, G.isObj(post.checklist) ? post.checklist : {});
+          if (v) next[c.key] = true; else delete next[c.key];
+          var saved = await signalPut('post', { id: post.id, checklist: next });
+          if (saved) render();
+        });
+      })),
+      signalHead('Results'),
+      result('24h', 1, '24 hours'),
+      result('7d', 7, '7 days')
+    ];
+  }
+  function openSignalPost(room, post) {
+    var up = signalWhen(post.posted_at), plan = signalWhen(post.planned_at);
+    var f = { account: post.account || '', format: post.format || 'photo', release_id: post.release_id || '', boosted: !!post.boosted,
+      posted: !!up, pdate: up ? up.date : plan ? plan.date : signalToday(), ptime: up ? up.time : plan ? plan.time : '12:00',
+      qdate: plan ? plan.date : '', qtime: plan ? plan.time : '', caption: String(post.caption || ''), note: String(post.note || '') };
+    var rels = signalRows(room, 'releases');
+    openSheet(function () {
+      return [
+        h('h2', { class: 'sh-title' }, 'The post'),
+        h('form', { onsubmit: async function (e) {
+          e.preventDefault();
+          var row = { id: post.id, account: String(f.account || '').replace(/^@/, '').trim(), format: f.format, release_id: f.release_id || null, boosted: f.boosted,
+            posted_at: f.posted ? signalIso(f.pdate, f.ptime) : null, planned_at: f.qdate ? signalIso(f.qdate, f.qtime || '12:00') : null, caption: f.caption, note: f.note };
+          if (!(await signalPut('post', row))) return;
+          closeSheet(); render(true);
+        } },
+          field('Account', signalInput({ value: f.account, max: 60, label: 'Account', on: function (v) { f.account = v; } })),
+          field('Kind of post', signalChips(['photo', 'carousel', 'reel', 'story', 'video', 'short', 'other'].map(function (k) { return [k, SIGNAL_FORMAT_WORDS[k]]; }), f.format,
+            function (v) { f.format = v || f.format; }, 'Kind of post')),
+          rels.length ? field('The release it’s for', signalSelect([['', 'None']].concat(rels.map(function (r) { return [r.id, String(r.title || '')]; })), f.release_id,
+            function (v) { f.release_id = v; }, 'The release it’s for')) : null,
+          h('div', { class: 'field-row' },
+            field('Planned (day)', signalInput({ type: 'date', value: f.qdate, label: 'Planned, day', on: function (v) { f.qdate = v; } })),
+            field('Time (LA)', signalInput({ type: 'time', value: f.qtime, label: 'Planned, time', on: function (v) { f.qtime = String(v).slice(0, 5); } }))),
+          h('div', { class: 'fa-ticks' },
+            signalTick('It’s up', f.posted, function (v) { f.posted = v; }),
+            signalTick('Boosted', f.boosted, function (v) { f.boosted = v; }, 'A boosted post is only compared with other boosted posts.')),
+          h('div', { class: 'field-row' },
+            field('Went up (day)', signalInput({ type: 'date', value: f.pdate, label: 'Went up, day', on: function (v) { f.pdate = v; } })),
+            field('Time (LA)', signalInput({ type: 'time', value: f.ptime, label: 'Went up, time', on: function (v) { f.ptime = String(v).slice(0, 5); } }))),
+          field('Caption', signalArea({ value: f.caption, max: 4000, rows: 4, label: 'Caption', on: function (v) { f.caption = v; } })),
+          field('Note', signalArea({ value: f.note, max: 2000, rows: 2, label: 'Note', on: function (v) { f.note = v; } })),
+          signalSheetButtons('Save', function () {
+            closeSheet(); setTimeout(function () {
+              confirmSheet({ title: 'Delete this post?', body: 'Its score, checklist and results go too.', action: 'Delete', danger: true,
+                onConfirm: async function () { var ok = await signalGone('post', post.id); if (ok) S.signalOpen = null; return ok; } });
+            }, 260);
+          }, 'Delete this post'))
+      ];
+    }, { label: 'The post' });
+  }
+  function openSignalResults(room, post, cp) {
+    var r = signalResultOf(room, post.id, cp), f = { boosted: r ? !!r.boosted : !!post.boosted, note: r ? String(r.note || '') : '' };
+    var kind = post.format === 'reel' ? 'reel' : post.format === 'story' ? 'story' : 'all';
+    var fields = SIGNAL_RESULT_FIELDS.filter(function (fd) { return fd[2] === 'all' || fd[2] === kind; });
+    fields.forEach(function (fd) { f[fd[0]] = r && typeof r[fd[0]] === 'number' ? String(r[fd[0]]) : ''; });
+    var words = cp === '7d' ? '7-day' : '24-hour';
+    openSheet(function () {
+      return [
+        h('p', { class: 'sig-over' }, (SIGNAL_FORMAT_WORDS[post.format] || 'Post') + (post.account ? ' · @' + post.account : '')),
+        h('h2', { class: 'sh-title' }, 'The ' + words + ' results'),
+        h('p', { class: 'sh-sub' }, 'From Instagram’s insights. Leave out any you don’t have.'),
+        h('form', { onsubmit: async function (e) {
+          e.preventDefault();
+          var row = { post_id: post.id, checkpoint: cp, boosted: f.boosted, note: f.note };
+          if (r) row.id = r.id;
+          var bad = '';
+          fields.forEach(function (fd) {
+            var n = signalNum(f[fd[0]]);
+            if (String(f[fd[0]]).trim() && n === null) bad = fd[1];
+            if ((fd[0] === 'non_follower_pct' || fd[0] === 'skip_rate') && n !== null && n > 100) bad = fd[1];
+            row[fd[0]] = n;
+          });
+          if (bad) { toast('Check the ' + bad.toLowerCase() + '.'); return; }
+          if (!(await signalPut('result', row))) return;
+          closeSheet(); toast('Results saved'); render(true);
+        } },
+          h('div', { class: 'sig-grid' }, fields.map(function (fd) {
+            return field(fd[1], signalInput({ value: f[fd[0]], mode: 'decimal', label: fd[1], on: function (v) { f[fd[0]] = v; } }));
+          })),
+          h('div', { class: 'fa-ticks' }, signalTick('Boosted', f.boosted, function (v) { f.boosted = v; }, 'Boosted results are only compared with other boosted posts.')),
+          field('Note', signalArea({ value: f.note, max: 1000, rows: 2, label: 'Note', on: function (v) { f.note = v; } })),
+          signalSheetButtons('Save the results', r ? function () {
+            closeSheet(); setTimeout(function () { signalAskDelete('result', r.id, 'Delete these results?', 'The ' + words + ' numbers come off the post.'); }, 260);
+          } : null))
+      ];
+    }, { label: 'The ' + words + ' results' });
+  }
+  var SIGNAL_DOCTOR_MEASURES = [['saveRate', 'Save rate', 'pct'], ['streamsPerListener', 'Streams per listener', 'x'],
+    ['addsPerListener', 'Playlist adds per 100 listeners', 'per100'], ['activeShare', 'Listening people chose', 'pct']];
+  function signalMeasure(v, how) {
+    if (typeof v !== 'number' || !isFinite(v)) return '';
+    return how === 'pct' ? signalPct(v, 1) : how === 'per100' ? String(Math.round(v * 1000) / 10) : String(Math.round(v * 100) / 100);
+  }
+  function signalSongsTab(room) {
+    var X = window.GSIG, today = signalToday(), din = signalDoctorInput(room, today);
+    var doc = X.songDoctor(din.rows, din.opts);
+    var full = doc.songs.filter(function (s) { return !s.partial; }).length;
+    var callWords = { above: 'Above your median', below: 'Below your median', even: 'About your median' };
+    var open = S.signalSongOpen || {};
+    var rels = signalRows(room, 'releases').filter(function (r) { return r.release_day; });
+    var camps = signalRows(room, 'campaigns'), chances = signalStepsOf(room, null);
+    var t12 = din.opts.streams12m, low = X.under1000(Object.keys(t12).map(function (k) { return { song: k, streams: t12[k] }; }));
+    var songCard = function (s) {
+      var day = s.releaseDate ? X.daysBetween(s.releaseDate, today) + 1 : null;
+      var rows = SIGNAL_DOCTOR_MEASURES.map(function (m) {
+        var vs = s.vs.all[m[0]] || {}, v = m[0] === 'activeShare' ? s.activeShare : s.total[m[0]];
+        if (v === null || v === undefined) return null;
+        return signalRow({ title: m[1], cls: 'sig-cmp',
+          hint: vs.median !== null && vs.median !== undefined ? 'Your median ' + signalMeasure(vs.median, m[2]) + (vs.call ? ' · ' + callWords[vs.call] : '') : 'No median yet',
+          right: h('span', { class: 'amt' + (vs.call === 'above' ? ' sig-up' : vs.call === 'below' ? ' sig-down' : '') }, signalMeasure(v, m[2])) });
+      }).filter(Boolean);
+      var srcs = Object.keys(s.bySource);
+      var isOpen = !!open[s.song];
+      return h('div', { class: 'sig-song' },
+        h('div', { class: 'sig-song-h' }, h('b', null, s.song),
+          h('span', { class: 'hint' }, [s.releaseDate ? 'Out ' + signalDay(s.releaseDate) : '', s.partial ? 'day ' + day + ' of 28: still counting, so not in your median' : 'its first 28 days',
+            signalCount(s.total.streams) + ' streams'].filter(Boolean).join(' · '))),
+        s.confounders.map(function (c) { return h('p', { class: 'sig-warn' }, c.words + ' Read its numbers with that in mind.'); }),
+        s.under1000 ? h('p', { class: 'sig-warn bad' }, 'Under 1,000 streams in 12 months (' + signalCount(s.streams12m) + '): Spotify pays no royalties on it.') : null,
+        h('div', { class: 'ledger' }, rows),
+        s.total.listenersAdded ? h('p', { class: 'hint sig-lead' }, 'Listeners are added up week by week, so someone who came back counts again.') : null,
+        srcs.length ? [h('button', { class: 'mn-change sig-more', type: 'button', onclick: function () {
+          var o = S.signalSongOpen || (S.signalSongOpen = {}); o[s.song] = !isOpen; render();
+        } }, isOpen ? 'Hide where the listening came from' : 'By where the listening came from (' + srcs.length + ')'),
+        isOpen ? h('div', { class: 'ledger' }, srcs.map(function (src) {
+          var b = s.bySource[src], vs = s.vs[src] || {}, c = vs.saveRate || {};
+          var others = doc.songs.filter(function (o) { return o !== s && !o.partial && o.bySource[src]; }).length;
+          var bits = [signalCount(b.streams) + ' streams',
+            b.streamsPerListener !== null ? signalMeasure(b.streamsPerListener, 'x') + ' per listener' : '',
+            b.addsPerListener !== null ? signalMeasure(b.addsPerListener, 'per100') + ' playlist adds per 100' : '',
+            !others ? 'no other song from it to compare yet' : c.median !== null && c.median !== undefined ? 'its median save rate ' + signalMeasure(c.median, 'pct') : ''].filter(Boolean);
+          return signalRow({ title: src, cls: 'sig-cmp',
+            tags: [[b.kind === 'active' ? 'People chose it' : b.kind === 'programmed' ? 'Playlists and algorithm' : 'Other', b.kind === 'active' ? 'ok' : '']],
+            hint: bits.join(' · '),
+            right: b.saveRate !== null ? h('span', { class: 'amt' + (others && c.call === 'above' ? ' sig-up' : others && c.call === 'below' ? ' sig-down' : '') }, signalMeasure(b.saveRate, 'pct')) : null });
+        })) : null,
+        isOpen ? h('p', { class: 'hint sig-lead' }, 'The number on the right is the save rate from that source.') : null] : null);
+    };
+    return [
+      h('div', { class: 'sig-weekhead' },
+        h('div', null, h('p', { class: 'sig-over' }, 'Song Doctor'), h('h2', { class: 'sig-week' }, doc.songs.length ? doc.songs.length + (doc.songs.length === 1 ? ' song' : ' songs') : 'Your songs')),
+        h('div', { class: 'sig-acts' },
+          signalBtn('Type numbers', function () { openSignalNumbers(room); }, { sm: true, block: false, quiet: true }),
+          signalBtn('Add files', function () { openSignalFile(room); }, { sm: true, block: false, icon: 'up' }))),
+      doc.songs.length ? [
+        h('p', { class: 'note sig-lead' }, 'Each song’s first 28 days against your own median' + (full ? ' (' + full + (full === 1 ? ' song has' : ' songs have') + ' all 28 days)' : '') +
+          ', from your Spotify numbers. Never an industry average.'),
+        doc.songs.map(songCard)]
+        : emptyState('No songs yet', 'After your Monday file drop, or numbers you type in, each song’s first 28 days are measured here against your own median.'),
+      low.length ? [signalHead('Under 1,000 streams in 12 months'), h('div', { class: 'ledger' }, low.map(function (x) {
+        return signalRow({ title: x.song, hint: signalCount(x.streams) + ' streams, ' + signalCount(x.short) + ' short. Spotify pays no royalties under 1,000.' });
+      }))] : null,
+      signalHead('Why are my streams low: a checkup on each release'),
+      rels.length ? rels.map(function (r) {
+        var ci = signalCheckupIn(room, r), res = X.streamCheckup(ci.release, ci.ctx);
+        return h('div', { class: 'sig-song' },
+          h('div', { class: 'sig-song-h' }, h('b', null, String(r.title || '')), h('span', { class: 'hint' }, res.passed + ' of ' + res.of + ' checks · out ' + signalDay(r.release_day))),
+          h('ul', { class: 'sig-autos' }, res.checks.map(function (c) {
+            return h('li', { class: c.ok ? 'ok' : 'no' }, h('span', { class: 'sig-mk' }, c.ok ? '✓' : '✕'), c.words);
+          })));
+      }) : h('p', { class: 'note' }, 'Each release with a release day gets a checkup: pitch lead time, every platform pitched, profile ready, spacing, alternate versions and the dated chances.'),
+      signalHead('What else ran', h('button', { class: 'mn-change', type: 'button', onclick: function () { openSignalCampaign(room, null); } }, 'Add one')),
+      h('p', { class: 'hint sig-lead' }, 'Boosts, ads, Discovery Mode, editorial adds and TikTok spikes.'),
+      camps.length ? h('div', { class: 'ledger' }, camps.map(function (c) {
+        var rel = signalById(room, 'releases', c.release_id);
+        var row = signalRow({ title: String(c.label || ''), hint: [SIGNAL_CAMPAIGN_WORDS[c.kind] || '', rel ? String(rel.title || '') : '',
+          c.starts_on ? signalDay(c.starts_on) + (c.ends_on && c.ends_on !== c.starts_on ? ' to ' + signalDay(c.ends_on) : '') : '',
+          typeof c.cost === 'number' ? G.money(c.cost) + (c.currency && c.currency !== 'USD' ? ' ' + c.currency : '') : ''].filter(Boolean).join(' · '),
+          onTap: function () { openSignalCampaign(room, c); } });
+        return signalSwipe(row, String(c.label || 'this'), function () { signalAskDelete('campaign', c.id, 'Delete ' + (c.label || 'this') + '?', 'It stops counting as something that ran.'); });
+      })) : h('p', { class: 'note' }, 'Log every boost, ad, Discovery Mode, editorial add and TikTok spike. Song Doctor flags them, or song-to-song comparisons mean nothing.'),
+      signalHead('Dated chances', h('button', { class: 'mn-change', type: 'button', onclick: function () { openSignalChance(room, null); } }, 'Add one')),
+      chances.length ? h('div', { class: 'ledger' }, chances.slice().sort(function (a, b) { return (a.due_day || '') < (b.due_day || '') ? -1 : 1; }).map(function (s) {
+        return signalRow({ title: String(s.title || ''), dim: s.status === 'done' || s.status === 'skipped',
+          hint: [s.due_day ? signalDay(s.due_day) : '', s.status === 'done' ? 'Taken' : s.status === 'skipped' ? 'Skipped' : ''].filter(Boolean).join(' · '),
+          tick: { on: s.status === 'done', label: (s.status === 'done' ? 'Not taken: ' : 'Taken: ') + s.title, onTap: async function () {
+            if (await signalPut('step', { id: s.id, status: s.status === 'done' ? 'todo' : 'done' })) render();
+          } },
+          onTap: function () { openSignalChance(room, s); } });
+      })) : h('p', { class: 'note' }, 'A day worth putting a song in front of people, like a Bandcamp Friday. Each one shows on This Week and in the checkup of the releases around it.')
+    ];
+  }
+  function openSignalNumbers(room) {
+    var X = window.GSIG, rels = signalRows(room, 'releases');
+    var f = { song: rels[0] ? String(rels[0].title || '') : '', from: '', source: 'spotify', week: X.addDays(X.mondayOf(signalToday()), -7),
+      streams: '', listeners: '', saves: '', adds: '', streams12m: '', clear: false };
+    openSheet(function () {
+      return [
+        h('h2', { class: 'sh-title' }, 'Type a week’s numbers'),
+        h('p', { class: 'sh-sub' }, 'One song’s week, from Spotify for Artists or Apple Music for Artists.'),
+        h('form', { onsubmit: async function (e) {
+          e.preventDefault();
+          var song = String(f.song).trim();
+          if (!song) { toast('Name the song.'); return; }
+          var nums = {}, bad = '';
+          ['streams', 'listeners', 'saves', 'adds', 'streams12m'].forEach(function (k) {
+            var n = signalNum(f[k]);
+            if (String(f[k]).trim() && n === null) bad = k;
+            if (n !== null) nums[k] = n;
+            else if (f.clear && !String(f[k]).trim()) nums[k] = null;
+          });
+          if (bad) { toast('Check the numbers: only digits.'); return; }
+          if (!Object.keys(nums).length) { toast('Type at least one number.'); return; }
+          var from = String(f.from).trim(), rel = signalReleaseNamed(room, song);
+          var row = { week_of: X.mondayOf(f.week) || f.week, source: f.source, scope: from ? 'source' : 'song',
+            subject: (from ? song + ' · ' + from : song).slice(0, 200), numbers: nums, release_id: rel ? rel.id : null };
+          try {
+            await window.GR_BACKEND.signalSaveSnapshots([row]);
+            closeSheet(); toast('Saved'); signalRoomInfo(true); render(true);
+          } catch (err) { signalFailed(err); }
+        } },
+          field('Song', h('div', null, signalInput({ value: f.song, max: 180, label: 'Song', list: 'sig-songs', on: function (v) { f.song = v; } }),
+            h('datalist', { id: 'sig-songs' }, rels.map(function (r) { return h('option', { value: String(r.title || '') }); })))),
+          field('From', signalChips([['spotify', 'Spotify'], ['apple', 'Apple Music']], f.source, function (v) { f.source = v || 'spotify'; }, 'From')),
+          field('Where the listening came from', h('div', null, signalInput({ value: f.from, max: 80, label: 'Where the listening came from', list: 'sig-from',
+            ph: 'Leave empty for all of it', on: function (v) { f.from = v; } }),
+            h('datalist', { id: 'sig-from' }, SIGNAL_LISTEN_SOURCES.map(function (w) { return h('option', { value: w }); })))),
+          field('The week starting', signalInput({ type: 'date', value: f.week, label: 'The week starting', on: function (v) { f.week = v; } }), 'Saved as that week’s Monday.'),
+          h('div', { class: 'sig-grid' },
+            field('Streams', signalInput({ value: f.streams, mode: 'decimal', label: 'Streams', on: function (v) { f.streams = v; } })),
+            field('Listeners', signalInput({ value: f.listeners, mode: 'decimal', label: 'Listeners', on: function (v) { f.listeners = v; } })),
+            field('Saves', signalInput({ value: f.saves, mode: 'decimal', label: 'Saves', on: function (v) { f.saves = v; } })),
+            field('Playlist adds', signalInput({ value: f.adds, mode: 'decimal', label: 'Playlist adds', on: function (v) { f.adds = v; } }))),
+          field('Streams in the last 12 months', signalInput({ value: f.streams12m, mode: 'decimal', label: 'Streams in the last 12 months', on: function (v) { f.streams12m = v; } }),
+            'For the under 1,000 flag. Leave it empty if you don’t have it.'),
+          h('div', { class: 'fa-ticks' }, signalTick('Clear the boxes I leave empty', f.clear, function (v) { f.clear = v; },
+            'For a week already saved. Ticked, an empty box takes that number off. Not ticked, an empty box keeps what’s there.')),
+          signalSheetButtons('Save the numbers'))
+      ];
+    }, { label: 'Type a week’s numbers' });
+  }
+  function openSignalCampaign(room, c) {
+    var rels = signalRows(room, 'releases');
+    var f = c ? { kind: c.kind || 'other', platform: c.platform || '', label: c.label || '', release_id: c.release_id || '', starts_on: c.starts_on || '',
+      ends_on: c.ends_on || '', cost: typeof c.cost === 'number' ? String(c.cost) : '', note: c.note || '' }
+      : { kind: 'boost', platform: 'instagram', label: '', release_id: '', starts_on: signalToday(), ends_on: '', cost: '', note: '' };
+    openSheet(function () {
+      return [
+        h('h2', { class: 'sh-title' }, c ? 'What ran' : 'Add what ran'),
+        h('p', { class: 'sh-sub' }, 'Anything that pushed a song: Song Doctor flags it, and This Week counts it among why things moved.'),
+        h('form', { onsubmit: async function (e) {
+          e.preventDefault();
+          if (!String(f.label).trim()) { toast('Say what it was.'); return; }
+          var cost = signalNum(f.cost);
+          if (String(f.cost).trim() && cost === null) { toast('Check the cost.'); return; }
+          if (f.starts_on && f.ends_on && f.ends_on < f.starts_on) { toast('It ends before it starts.'); return; }
+          var row = { kind: f.kind, platform: String(f.platform || '').toLowerCase().replace(/[^a-z0-9_.-]/g, ''), label: f.label, release_id: f.release_id || null,
+            starts_on: f.starts_on || null, ends_on: f.ends_on || null, cost: cost, note: f.note };
+          if (c) row.id = c.id;
+          if (!(await signalPut('campaign', row))) return;
+          closeSheet(); render(true);
+        } },
+          field('What it was', signalChips(Object.keys(SIGNAL_CAMPAIGN_WORDS).map(function (k) { return [k, SIGNAL_CAMPAIGN_WORDS[k]]; }), f.kind, function (v) { f.kind = v || 'other'; }, 'What it was')),
+          field('In your words', signalInput({ value: f.label, max: 200, label: 'In your words', ph: 'Boost on the release Reel', on: function (v) { f.label = v; } })),
+          rels.length ? field('The release', signalSelect([['', 'None']].concat(rels.map(function (r) { return [r.id, String(r.title || '')]; })), f.release_id,
+            function (v) { f.release_id = v; }, 'The release')) : null,
+          field('Where', signalSelect([['', 'Anywhere']].concat(Object.keys(SIGNAL_SOURCE_WORDS).filter(function (k) { return k !== 'shazam'; }).map(function (k) { return [k, SIGNAL_SOURCE_WORDS[k]]; })),
+            f.platform, function (v) { f.platform = v; }, 'Where')),
+          h('div', { class: 'field-row' },
+            field('Started', signalInput({ type: 'date', value: f.starts_on, label: 'Started', on: function (v) { f.starts_on = v; } })),
+            field('Ended', signalInput({ type: 'date', value: f.ends_on, label: 'Ended', on: function (v) { f.ends_on = v; } }))),
+          field('What it cost (US dollars)', signalInput({ value: f.cost, mode: 'decimal', label: 'What it cost', on: function (v) { f.cost = v; } })),
+          field('Note', signalArea({ value: f.note, max: 2000, rows: 2, label: 'Note', on: function (v) { f.note = v; } })),
+          signalSheetButtons('Save', c ? function () {
+            closeSheet(); setTimeout(function () { signalAskDelete('campaign', c.id, 'Delete ' + (c.label || 'this') + '?', 'It stops counting as something that ran.'); }, 260);
+          } : null))
+      ];
+    }, { label: 'What ran' });
+  }
+  function openSignalChance(room, s) {
+    var f = s ? { title: s.title || '', due_day: s.due_day || '', alarm: !!s.alarm, note: s.note || '' } : { title: '', due_day: '', alarm: true, note: '' };
+    openSheet(function () {
+      return [
+        h('h2', { class: 'sh-title' }, s ? 'The dated chance' : 'Add a dated chance'),
+        h('p', { class: 'sh-sub' }, 'A day worth putting a song in front of people, like a Bandcamp Friday.'),
+        h('form', { onsubmit: async function (e) {
+          e.preventDefault();
+          if (!String(f.title).trim()) { toast('Say what it is.'); return; }
+          if (!window.GSIG.isDay(f.due_day)) { toast('Pick its day.'); return; }
+          var row = { title: f.title, due_day: f.due_day, alarm: f.alarm, note: f.note };
+          if (s) row.id = s.id; else { row.release_id = null; row.platform = 'chance'; row.who = 'me'; row.opens_day = f.due_day; }
+          if (!(await signalPut('step', row))) return;
+          closeSheet(); render(true);
+        } },
+          field('What it is', signalInput({ value: f.title, max: 200, label: 'What it is', on: function (v) { f.title = v; } })),
+          field('Day', signalInput({ type: 'date', value: f.due_day, label: 'Day', on: function (v) { f.due_day = v; } })),
+          h('div', { class: 'fa-ticks' }, signalTick('Alarm', f.alarm, function (v) { f.alarm = v; }, 'For now it shows on screen only: it doesn’t ring your phone.')),
+          field('Note', signalArea({ value: f.note, max: 2000, rows: 2, label: 'Note', on: function (v) { f.note = v; } })),
+          signalSheetButtons('Save', s ? function () {
+            closeSheet(); setTimeout(function () { signalAskDelete('step', s.id, 'Delete this dated chance?', 'It comes off This Week and the checkups.'); }, 260);
+          } : null))
+      ];
+    }, { label: 'A dated chance' });
+  }
+  var SIGNAL_CITY_SOURCES = [['spotify', 'Spotify', 'SP'], ['apple', 'Apple Music', 'AM'], ['shazam', 'Shazam', 'SZ'], ['instagram', 'Instagram', 'IG'], ['youtube', 'YouTube', 'YT']];
+  var SIGNAL_CITY_GROUPS = [['core', 'Core markets', 'On 3 or more lists.'], ['test', 'Test markets', 'Shazam ranks them well ahead of Spotify: people hear the song out in the world and go looking for it.'],
+    ['socialOnly', 'Fans who don’t stream yet', 'Only on your social lists.'], ['spotifyOnly', 'Possible playlist noise', 'Only on Spotify’s list. VPNs and travellers show up here too.'],
+    ['other', 'The rest', 'On one or two lists.']];
+  function signalAudienceTab(room) {
+    var X = window.GSIG, cl = signalCityLists(room), lists = {};
+    SIGNAL_CITY_SOURCES.forEach(function (s) { if (cl.lists[s[0]] && cl.lists[s[0]].length) lists[s[0]] = cl.lists[s[0]]; });
+    var table = X.cityTable(lists, {});
+    var used = SIGNAL_CITY_SOURCES.filter(function (s) { return lists[s[0]]; });
+    var groups = SIGNAL_CITY_GROUPS.map(function (g) { return { g: g, rows: table.rows.filter(function (r) { return r.group === g[0]; }) }; })
+      .filter(function (x) { return x.rows.length; });
+    return [
+      h('div', { class: 'sig-weekhead' },
+        h('div', null, h('p', { class: 'sig-over' }, 'Where your audience is'), h('h2', { class: 'sig-week' }, table.rows.length ? table.rows.length + ' cities' : 'Your cities')),
+        signalBtn('Add files', function () { openSignalFile(room); }, { sm: true, block: false, icon: 'up' })),
+      signalHead('The lists'),
+      h('div', { class: 'ledger' }, SIGNAL_CITY_SOURCES.map(function (s) {
+        var have = cl.lists[s[0]] || [];
+        var typed = s[0] === 'instagram' || s[0] === 'youtube';
+        return signalRow({ title: s[1], hint: have.length ? Math.min(have.length, 10) + ' cities · week of ' + signalDay(cl.weeks[s[0]]) + (have.length ? ' · ' + have.slice(0, 3).join(', ') : '')
+          : typed ? 'Type its top 10 until the account is connected' : s[0] === 'shazam' ? 'From an Apple Music cities file with Shazams' : 'From your Monday file',
+          right: h('span', { class: 'sig-tag' }, have.length ? 'Change' : 'Type'), onTap: function () { openSignalCities(room, s[0]); } });
+      })),
+      used.length < 2 ? emptyState(used.length ? 'One list so far' : 'No cities yet', 'A city is believed when several platforms agree. Add the top 10 cities from at least two of Spotify, Apple Music, Shazam, Instagram and YouTube.')
+        : [h('div', { class: 'sig-key' }, used.map(function (s) { return h('span', null, h('b', null, s[2]), s[1]); })),
+          groups.map(function (x) {
+            return [signalHead(x.g[1] + ' (' + x.rows.length + ')'), h('p', { class: 'hint sig-lead' }, x.g[2]),
+              h('div', { class: 'ledger sig-cities' }, h('div', { class: 'row head sig-city-head' }, h('span', { class: 'row-label' }, 'City'),
+                h('div', { class: 'sig-ranks' }, used.map(function (s) { return h('span', { class: 'sig-rank head', title: s[1] }, s[2]); }))), x.rows.map(function (r) {
+                return h('div', { class: 'row sig-city' }, h('div', { class: 'row-label' }, r.name, h('span', { class: 'hint' }, r.count + (r.count === 1 ? ' list' : ' lists'))),
+                  h('div', { class: 'sig-ranks' }, used.map(function (s) {
+                    var n = r.ranks[s[0]];
+                    return h('span', { class: 'sig-rank' + (n ? ' on' : ''), 'aria-label': s[1] + (n ? ' number ' + n : ' not on its list') }, n ? String(n) : '·');
+                  })));
+              }))];
+          }),
+          h('p', { class: 'note' }, 'Each list’s top 10 from its latest week. A test market: Shazam ranks it at least ' + table.rules.testGap + ' places above Spotify (off Spotify’s top 10 counts as 11th).')]
+    ];
+  }
+  function openSignalCities(room, source) {
+    var X = window.GSIG, cl = signalCityLists(room), f = { week: X.addDays(X.mondayOf(signalToday()), -7) };
+    var start = (cl.lists[source] || []).slice(0, 10), names = [];
+    var weekW = h('span', { class: 'sig-weekw' }, 'Week of ' + signalDay(f.week));
+    var weekBy = function (n) { f.week = X.addDays(f.week, n); weekW.textContent = 'Week of ' + signalDay(f.week); };
+    for (var i = 0; i < 10; i++) names.push(start[i] || '');
+    var word = (SIGNAL_CITY_SOURCES.filter(function (s) { return s[0] === source; })[0] || [source, source])[1];
+    openSheet(function () {
+      return [
+        h('h2', { class: 'sh-title' }, word + ': top 10 cities'),
+        h('p', { class: 'sh-sub' }, source === 'instagram' ? 'From Instagram’s insights: the top cities of the accounts that engaged.' : source === 'youtube' ? 'From YouTube Studio’s audience cities.'
+          : 'From ' + word + '’s own list, the biggest first.'),
+        h('form', { onsubmit: async function (e) {
+          e.preventDefault();
+          var seen = {}, rows = [], week = f.week;
+          var mine = signalRows(room, 'snapshots').filter(function (n) { return n.scope === 'city' && n.source === source && n.week_of === week; });
+          names.forEach(function (n) {
+            n = String(n || '').trim();
+            var k = X.cityKey(n);
+            if (!n || seen[k]) return;
+            seen[k] = true;
+            rows.push({ week_of: week, source: source, scope: 'city', subject: n.slice(0, 200), rank: rows.length + 1, numbers: {} });
+          });
+          if (!rows.length) { toast('Type at least one city.'); return; }
+          try {
+            await window.GR_BACKEND.signalSaveSnapshots(rows);
+            var keep = {};
+            rows.forEach(function (r) { keep[r.subject] = true; });
+            for (var j = 0; j < mine.length; j++) { if (!keep[mine[j].subject]) await signalGone('snapshot', mine[j].id); }
+            closeSheet(); toast(word + '’s cities saved'); signalRoomInfo(true); render(true);
+          } catch (err) { signalFailed(err); }
+        } },
+          h('div', { class: 'field sig-weekpick' }, h('span', { class: 'field-label' }, 'The week it covers'),
+            h('div', { class: 'sig-weekrow' },
+              h('button', { class: 'pf-btn', type: 'button', 'aria-label': 'A week earlier', onclick: function () { weekBy(-7); } }, '‹'),
+              weekW,
+              h('button', { class: 'pf-btn', type: 'button', 'aria-label': 'A week later', onclick: function () { weekBy(7); } }, '›')),
+            h('span', { class: 'hint' }, 'Last week, like your Monday files.')),
+          h('div', { class: 'sig-cityin' }, names.map(function (n, idx) {
+            return h('label', { class: 'sig-cityrow' }, h('span', { class: 'sig-rank on' }, String(idx + 1)),
+              signalInput({ value: n, max: 120, label: 'City ' + (idx + 1), sm: true, on: function (v) { names[idx] = v; } }));
+          })),
+          signalSheetButtons('Save the list'))
+      ];
+    }, { label: word + ': top 10 cities' });
+  }
+  function signalFactsTab(room) {
+    var list = signalRows(room, 'facts');
+    var groups = ['approved', 'waiting', 'to_collect'].map(function (k) { return { k: k, rows: list.filter(function (f) { return f.status === k; }) }; });
+    return [
+      h('p', { class: 'note sig-lead' }, 'Only a fact marked approved goes into a pitch or a bio. A claim about someone needs their OK first.'),
+      h('div', { class: 'stack' }, signalBtn('Add a fact', function () { openSignalFact(room, null); }, { icon: 'plus' })),
+      list.length ? groups.filter(function (g) { return g.rows.length; }).map(function (g) {
+        return [signalHead(SIGNAL_FACT_WORDS[g.k] + ' (' + g.rows.length + ')'), h('div', { class: 'ledger' }, g.rows.map(function (f) {
+          var art = signalById(room, 'artists', f.artist_id), rel = signalById(room, 'releases', f.release_id);
+          var row = signalRow({ title: String(f.body || ''),
+            hint: [f.subject || (art ? art.name : rel ? rel.title : ''), SIGNAL_FACT_KINDS[f.kind] || '',
+              f.status === 'approved' ? 'OK’d' + (f.approved_by ? ' by ' + f.approved_by : '') + (f.approved_on ? ' on ' + signalDay(f.approved_on) : '') : '',
+              f.as_of ? 'true as of ' + signalDay(f.as_of) : ''].filter(Boolean).join(' · '),
+            tags: f.status === 'approved' ? [['Approved', 'ok', 'check']] : f.status === 'waiting' ? [['Waiting on approval', 'warn']] : [['Still to collect', '']],
+            onTap: function () { openSignalFact(room, f); } });
+          return signalSwipe(row, 'this fact', function () { signalAskDelete('fact', f.id, 'Delete this fact?', 'It comes off every pitch that used it.'); });
+        }))];
+      }) : emptyState('No facts yet', 'Only a fact marked approved goes into a pitch or a bio.')
+    ];
+  }
+  function openSignalFact(room, fact) {
+    var arts = signalRows(room, 'artists'), rels = signalRows(room, 'releases');
+    var f = fact ? { body: fact.body || '', subject: fact.subject || '', kind: fact.kind || 'fact', status: fact.status || 'waiting',
+      approved_by: fact.approved_by || '', approved_on: fact.approved_on || '', as_of: fact.as_of || '', source_note: fact.source_note || '',
+      artist_id: fact.artist_id || '', release_id: fact.release_id || '' }
+      : { body: '', subject: '', kind: 'fact', status: 'waiting', approved_by: '', approved_on: '', as_of: '', source_note: '', artist_id: '', release_id: '' };
+    var used = fact ? signalRows(room, 'pitches').filter(function (p) { return Array.isArray(p.fact_ids) && p.fact_ids.indexOf(fact.id) >= 0; }).length : 0;
+    openSheet(function () {
+      return [
+        h('h2', { class: 'sh-title' }, fact ? 'The fact' : 'Add a fact'),
+        used ? h('p', { class: 'sh-sub' }, 'Used in ' + used + (used === 1 ? ' pitch.' : ' pitches.')) : null,
+        h('form', { onsubmit: async function (e) {
+          e.preventDefault();
+          if (!String(f.body).trim()) { toast('Write the fact.'); return; }
+          if (fact && used && fact.status === 'approved' && f.status !== 'approved') {
+            toast('It’s in ' + used + (used === 1 ? ' pitch' : ' pitches') + '. Take it out of them first, then it can go back to waiting.'); return;
+          }
+          var row = Object.assign({}, f, { approved_on: f.status === 'approved' ? (f.approved_on || signalToday()) : (f.approved_on || null), as_of: f.as_of || null,
+            artist_id: f.artist_id || null, release_id: f.release_id || null });
+          if (fact) row.id = fact.id;
+          if (!(await signalPut('fact', row))) return;
+          closeSheet(); render(true);
+        } },
+          field('The fact', signalArea({ value: f.body, max: 1000, rows: 3, label: 'The fact', on: function (v) { f.body = v; } })),
+          field('What it’s about', signalInput({ value: f.subject, max: 120, label: 'What it’s about', ph: 'A project, a release, a person', on: function (v) { f.subject = v; } })),
+          field('Where it stands', signalChips([['approved', 'Approved'], ['waiting', 'Waiting'], ['to_collect', 'To collect']], f.status, function (v) { f.status = v || 'waiting'; }, 'Where it stands')),
+          h('div', { class: 'field-row' },
+            field('OK’d by', signalInput({ value: f.approved_by, max: 120, label: 'OK’d by', on: function (v) { f.approved_by = v; } })),
+            field('On', signalInput({ type: 'date', value: f.approved_on, label: 'OK’d on', on: function (v) { f.approved_on = v; } }))),
+          field('Kind', signalChips(Object.keys(SIGNAL_FACT_KINDS).map(function (k) { return [k, SIGNAL_FACT_KINDS[k]]; }), f.kind, function (v) { f.kind = v || 'fact'; }, 'Kind')),
+          field('A number true as of', signalInput({ type: 'date', value: f.as_of, label: 'True as of', on: function (v) { f.as_of = v; } }), 'For a number that changes, like listeners.'),
+          arts.length ? field('Project', signalSelect([['', 'None']].concat(arts.map(function (a) { return [a.id, String(a.name || '')]; })), f.artist_id, function (v) { f.artist_id = v; }, 'Project')) : null,
+          rels.length ? field('Release', signalSelect([['', 'None']].concat(rels.map(function (r) { return [r.id, String(r.title || '')]; })), f.release_id, function (v) { f.release_id = v; }, 'Release')) : null,
+          field('Where it came from', signalArea({ value: f.source_note, max: 1000, rows: 2, label: 'Where it came from', on: function (v) { f.source_note = v; } })),
+          signalSheetButtons(fact ? 'Save' : 'Add the fact', fact ? function () {
+            closeSheet(); setTimeout(function () { signalAskDelete('fact', fact.id, 'Delete this fact?', 'It comes off every pitch that used it.'); }, 260);
+          } : null))
+      ];
+    }, { label: fact ? 'The fact' : 'Add a fact' });
+  }
+  var SIGNAL_CSV_WORDS = { song: 'Song', artist: 'Artist', releaseDate: 'Release date', date: 'Date', source: 'Where the listening came from', streams: 'Streams',
+    listeners: 'Listeners', saves: 'Saves', adds: 'Playlist adds', followers: 'Followers', playlist: 'Playlist', curator: 'Curator', city: 'City',
+    country: 'Country', shazams: 'Shazams', rank: 'Rank' };
+  var SIGNAL_FILE_KINDS = { songs: 'Songs', cities: 'Cities', playlists: 'Playlists', timeline: 'Audience over time', unknown: 'Not sure yet' };
+  function openSignalFile(room) {
+    var X = window.GSIG, st = { text: null, name: '', read: null, map: {}, kind: '', source: 'spotify', covers: 'week',
+      week: X.addDays(X.mondayOf(signalToday()), -7), busy: false };
+    var host = h('div', { class: 'sig-file' });
+    var arts = signalRows(room, 'artists');
+    var again = function () {
+      if (st.text !== null) st.read = X.readCsv(st.text, { map: st.map, kind: st.kind || undefined });
+      paint();
+    };
+    var paint = function () {
+      var r = st.read;
+      var rows = r && r.ok ? signalFileRows(r, { source: st.source, week: st.week, covers: st.covers, room: room, artist: arts[0] ? arts[0].name : '' }) : [];
+      fillEl(host, [
+        h('label', { class: 'btn ghost block sig-pick' + cfCls(false) }, icon('up', 18), st.name ? 'Pick another file' : 'Pick the file',
+          h('input', { type: 'file', class: 'sr', accept: '.csv,.tsv,.txt,text/csv,text/tab-separated-values,text/plain', onchange: async function (e) {
+            var file = e.target.files && e.target.files[0];
+            if (!file) return;
+            try {
+              st.text = typeof file.text === 'function' ? await file.text() : await new Promise(function (ok, no) {
+                var fr = new FileReader(); fr.onload = function () { ok(String(fr.result || '')); }; fr.onerror = no; fr.readAsText(file);
+              });
+            } catch (err) { toast('Couldn’t read that file.'); return; }
+            st.name = String(file.name || 'the file'); st.map = {}; st.kind = '';
+            st.source = /apple|shazam/i.test(st.name) ? 'apple' : st.source;
+            again();
+          } })),
+        r ? [
+          h('p', { class: 'sig-over' }, st.name),
+          h('p', { class: r.ok ? 'note' : 'sig-warn' }, (r.kind !== 'unknown' ? 'A ' + SIGNAL_FILE_KINDS[r.kind] + ' file. ' : '') + r.words),
+          field('What the file is', signalChips(['songs', 'cities', 'playlists', 'timeline'].map(function (k) { return [k, SIGNAL_FILE_KINDS[k]]; }), r.kind === 'unknown' ? '' : r.kind,
+            function (v) { st.kind = v; again(); }, 'What the file is')),
+          r.header && r.header.length ? h('div', { class: 'sig-cols' }, r.header.map(function (head, i) {
+            var field0 = Object.keys(r.columns).filter(function (k) { return r.columns[k] === i; })[0] || '';
+            return h('label', { class: 'sig-col' }, h('span', { class: 'sig-col-h' }, String(head || 'Column ' + (i + 1))),
+              signalSelect([['', 'Not used']].concat(Object.keys(SIGNAL_CSV_WORDS).map(function (k) { return [k, SIGNAL_CSV_WORDS[k]]; })), field0, function (v) {
+                Object.keys(st.map).forEach(function (k) { if (st.map[k] === i) delete st.map[k]; });
+                if (v) st.map[v] = i;
+                again();
+              }, 'What column ' + (i + 1) + ' holds'));
+          })) : null,
+          field('From', signalChips([['spotify', 'Spotify for Artists'], ['apple', 'Apple Music for Artists']], st.source, function (v) { st.source = v || 'spotify'; paint(); }, 'From')),
+          h('div', { class: 'field sig-weekpick' }, h('span', { class: 'field-label' }, 'The week it covers'),
+            h('div', { class: 'sig-weekrow' },
+              h('button', { class: 'pf-btn', type: 'button', 'aria-label': 'A week earlier', onclick: function () { st.week = X.addDays(st.week, -7); paint(); } }, '‹'),
+              h('span', { class: 'sig-weekw' }, 'Week of ' + signalDay(st.week)),
+              h('button', { class: 'pf-btn', type: 'button', 'aria-label': 'A week later', onclick: function () { st.week = X.addDays(st.week, 7); paint(); } }, '›'))),
+          r.kind === 'songs' ? field('How long it covers', signalChips([['week', 'That week'], ['year', 'The last 12 months']], st.covers, function (v) { st.covers = v || 'week'; paint(); }, 'How long it covers')) : null,
+          rows.length ? [h('p', { class: 'sig-subh' }, rows.length + (rows.length === 1 ? ' row' : ' rows') + ' to save'),
+            h('ul', { class: 'sig-plain sig-preview-rows' }, rows.slice(0, 5).map(function (x) {
+              var nums = Object.keys(x.numbers).map(function (k) { return (SIGNAL_METRIC_WORDS[k.replace(/12m$/, '')] || k) + (/12m$/.test(k) ? ' (12 months)' : '') + ' ' + signalCount(x.numbers[k]); });
+              return h('li', null, h('b', null, (x.rank ? x.rank + '. ' : '') + x.subject), ' ', (SIGNAL_SOURCE_WORDS[x.source] || '') + (nums.length ? ': ' + nums.join(', ') : ''));
+            })),
+            rows.length > 5 ? h('p', { class: 'hint' }, 'And ' + (rows.length - 5) + ' more.') : null] : null,
+          h('div', { class: 'stack' },
+            signalBtn(st.busy ? 'Saving…' : 'Save the numbers', async function () {
+              if (!rows.length || st.busy) return;
+              st.busy = true; paint();
+              var saved = 0;
+              try {
+                for (var i = 0; i < rows.length; i += 500) {
+                  var got = await window.GR_BACKEND.signalSaveSnapshots(rows.slice(i, i + 500));
+                  saved += got && typeof got.saved === 'number' ? got.saved : 0;
+                }
+                st.text = null;
+                closeSheet(); toast('Saved ' + saved + (saved === 1 ? ' row' : ' rows') + '. The file itself wasn’t kept.'); signalRoomInfo(true); render(true);
+              } catch (err) { st.busy = false; paint(); signalFailed(err); }
+            }, { disabled: !rows.length || st.busy }),
+            signalBtn('Cancel', function () { st.text = null; closeSheet(); }, { quiet: true }))]
+        : [h('p', { class: 'note' }, 'From Spotify for Artists (Songs, Audience, Playlists) or Apple Music for Artists, as a CSV. It’s read here on your phone, and only the numbers are saved. The file itself is never kept.'),
+          h('div', { class: 'stack' }, signalBtn('Cancel', function () { closeSheet(); }, { quiet: true }))]
+      ]);
+    };
+    openSheet(function () { paint(); return [h('h2', { class: 'sh-title' }, 'Add this week’s files'), host]; },
+      { label: 'Add this week’s files', onClose: function () { st.text = null; st.read = null; } });
+  }
   function homeFace(current) {
     var me = myCard(), who = profileName(), on = current === 'me';
     var act = actingCard();
@@ -12859,7 +15019,7 @@
         Promise.all([safe(B.findPeople(q)), safe(B.findArtists(q)), safe(B.findTours(q))]).then(function (out) {
           if (n !== st.seq) return;
           st.busy = false;
-          st.res = { q: q, people: out[0] || [], artists: out[1] || [], tours: out[2] || [], failed: !out[0] && !out[1] && !out[2] };
+          st.res = { q: q, people: out[0] || [], artists: out[1] || [], tours: (out[2] || []).filter(notStudioRow), failed: !out[0] && !out[1] && !out[2] };
           if (results.isConnected) paint();
         });
         if (B.findPlaces && q.charAt(0) !== '@' && !(st.places && st.places.q === q)) {
@@ -13266,8 +15426,20 @@
   }
   function createTourFromMenu() { artistFirst('tour', ''); }
   function createShowFromMenu() { artistFirst('show', ''); }
+  function createStudioFromMenu() { artistFirst('studio', ''); }
+  function createPnlFromMenu(here) { openPnlBookSheet(null, here || S.route); }
+  function createPnlFromBudget() { openPnlBookSheet(null, S.route); }
+  function mayCreatePnl() {
+    if (!artistSide()) return false;
+    var B = window.GR_BACKEND;
+    return S.mode !== 'db' || !B || typeof B.pnlBookOn !== 'function' || !!B.pnlBookOn();
+  }
   function artistFirst(what, date, days) {
-    var start = function (name, page) { if (what === 'show') startShow(name, date, days, page); else startTour(name, date, days, page); };
+    var start = function (name, page) {
+      if (what === 'show') startShow(name, date, days, page);
+      else if (what === 'studio') startStudio(name, date, page);
+      else startTour(name, date, days, page);
+    };
     var acting = actingAs() ? actingCard() : null;
     if (acting && acting.name) { start(acting.name, acting); return; }
     var names = myArtistNames();
@@ -13276,7 +15448,7 @@
     openArtistPick(what, names, start);
   }
   function openArtistPick(what, names, start) {
-    var title = what === 'show' ? 'Create a show' : 'Create a tour';
+    var title = what === 'show' ? 'Create a show' : what === 'studio' ? WORDS.addStudio : 'Create a tour';
     var list = h('ul', { class: 'tour-list rows hm-arts' }), mine = null;
     function draw() {
       if (sheet !== mine || !list.isConnected) { if (homeSheetLive === draw) homeSheetLive = null; return; }
@@ -13328,12 +15500,14 @@
   }
   function menuGates() {
     var B = window.GR_BACKEND;
-    return { mine: artistSide(), signedIn: !!(S.mode === 'db' && B && B.signOut), music: inMusic() || myPastRows().length > 0 };
+    return { mine: artistSide(), signedIn: !!(S.mode === 'db' && B && B.signOut), music: inMusic() || myPastRows().length > 0,
+      signal: S.signalOk === true };
   }
   var MENU_TITLE = 'Settings';
   function viewMenu() {
     var backTo = S.route.back || { name: 'home' };
     var here = { name: 'mainmenu', back: backTo };
+    signalKnown();
     var g = menuGates();
     var tg = menuTourGroup(backTo);
     var cards = settingsDoors().cards;
@@ -13349,7 +15523,9 @@
         tg ? Array.prototype.slice.call(tg.childNodes) : null]),
       menuSection('Money', [
         g.mine && !IN_SHELL ? menuRow('tag', 'Merchroom', function () { go({ name: 'merchroom', back: here }); }) : null,
-        g.music ? menuHistoryGroup(here) : null]));
+        g.music ? menuHistoryGroup(here) : null]),
+      menuSection('Social and streaming', [
+        g.signal ? menuRow('tabcost', 'SIGNAL', function () { go({ name: 'signal', back: here }); }) : null]));
     var find = menuFind(here, backTo, body);
     return h('div', { class: 'page home menu-page mn-page mn-look has-tabs' },
       menuNav(MENU_TITLE, menuBack),
@@ -13423,6 +15599,8 @@
     createshow: ['new show', 'add a show', 'make a show', 'one off show', 'one-off show', 'single show'],
     contact: ['profile', 'my info', 'me', 'username', 'photo', 'picture', 'phone', 'email'],
     merchroom: ['merch', 'square', 'sales', 'store', 'token'],
+    signal: ['social', 'social media', 'streaming', 'streams', 'spotify', 'apple music', 'instagram', 'youtube', 'tiktok', 'dsp',
+      'releases', 'pitch', 'pitches', 'posts', 'songs', 'audience', 'facts'],
     history: ['history', 'past tours', 'old tours', 'summary', 'closeout', 'pdf', 'spreadsheet', 'budget'],
     cpa: ['cpa', 'accountant', 'tax', 'taxes', 'year end', 'year-end', '1099', '1065', 'workbook', 'ledger'],
     business: ['business', 'business name', 'tax type', 'llc', 'partnership', 'cpa', 'tax'],
@@ -13441,6 +15619,7 @@
     deleteme: ['close account', 'remove account', 'delete account'],
     blocked: ['block', 'unblock'],
     contactus: ['help', 'support', 'feedback', 'email greenroom'],
+    apptour: ['walkthrough', 'walk through', 'how to', 'tutorial', 'guide', 'help', 'learn', 'intro'],
     invite: ['invite', 'code', 'sign up code'],
     agreed: ['agreed', 'agreements', 'accepted'],
     reports: ['report', 'flagged', 'moderation'],
@@ -13496,9 +15675,11 @@
     if (g.mine && !IN_SHELL) add('merchroom', 'tag', 'Merchroom', 'Money', function () { go({ name: 'merchroom', back: here }); });
     var bh = function () { return G.isObj(S.menuBh) ? S.menuBh : (S.menuBh = { open: false, year: '', artist: '' }); };
     if (g.music) add('history', 'tabmoney', 'Budget History', 'Money', menuReveal(function () { bh().open = true; }, 'Budget History'));
+    if (g.signal) add('signal', 'tabcost', 'SIGNAL', 'Social and streaming', function () { go({ name: 'signal', back: here }); });
     if (g.music && historyTree().length && historyArtists().length) add('cpa', 'tabsheet', 'CPA Package', 'Budget History', function () {
       go({ name: 'history', back: here, cpa: { year: '', artist: '' }, ls: { to: here, label: 'the menu', short: 'Back' } });
     });
+    if (g.music && mayCreatePnl()) add('createpnl', 'plus', WORDS.createPnl, 'Budget History', function () { createPnlFromMenu(here); });
     if (t) menuTourRows(tid).forEach(function (r) { add(r[3], r[0], r[1], tname, r[2], { danger: r[3] === 'deltour' }); });
     settingsIndex(add);
     var push = IN_SHELL || !!(B && typeof B.pushSupported === 'function' && B.pushSupported());
@@ -13508,6 +15689,7 @@
       var money = IN_SHELL ? appPushSeesMoney(null) : notifSeesMoney(null);
       if (IN_SHELL) add('', 'bell', 'Lock screen day bar', 'Notifications', bell('Lock screen day bar'), { words: [HOME_BAR ? DAYBAR_HINT_HOME : DAYBAR_HINT] });
       if (IN_SHELL && HOME_BAR) add('', 'bell', 'Show names on the Lock Screen', 'Notifications', bell('Show names on the Lock Screen'), { words: [BAR_NAMES_HINT] });
+      if (IN_SHELL && HOME_BAR && calOn()) add('', 'bell', 'Show calendar on Lock Screen', 'Notifications', bell('Show calendar on Lock Screen'));
       if (AL) {
         add('', 'clock', 'Stage alarm', 'Notifications', bell('Stage alarm'), { words: ['30 minutes before your band’s set, the phone rings like an alarm'] });
         add('', 'clock', 'Bus call alarm', 'Notifications', bell('Bus call alarm'), { words: ['At bus call, with an I’m on the bus button on the alarm, and a 20 minute warning before it'] });
@@ -13539,6 +15721,7 @@
           add('', 'music', a.name, at, menuReveal(function () { var s = bh(); s.open = true; s.year = y.year; s.artist = ak; }, a.name));
           a.tours.forEach(function (e) { add('', 'tabmoney', tourNameOf(e[1]), at + ' › ' + a.name, menuHistoryLeaf(here, { kind: 'tour', id: e[0] })); });
           a.past.forEach(function (x) { add('', 'tabmoney', pastName(x), at + ' › ' + a.name, menuHistoryLeaf(here, { kind: 'past', id: x.tourId })); });
+          a.pnls.forEach(function (e) { add('', 'tabmoney', tourNameOf(e[1]), at + ' › ' + a.name, menuHistoryLeaf(here, { kind: 'pnl', id: e[0] })); });
           if (a.off) add('', 'tabcost', 'Off Tour', at + ' › ' + a.name, menuHistoryLeaf(here, { kind: 'off', artist: a.name, year: y.year }));
         });
       });
@@ -13576,6 +15759,7 @@
   function menuAsk(again) {
     var B = window.GR_BACKEND;
     if (!(S.mode === 'db' && B && B.signOut)) return;
+    signalKnown();
     var adminSaid = false;
     if (B.inviteCodes) inviteCodesKnown(function (list) {
       if (Array.isArray(list) && !adminSaid) {
@@ -13637,7 +15821,7 @@
   function menuTourId(backTo) {
     var id = backTo && backTo.name === 'tour' && getTour(backTo.id) ? backTo.id : profileTourId();
     var t = id ? getTour(id) : null;
-    return !t || isOffTour(t) || !canEditRole(id) ? null : id;
+    return !t || isOffTour(t) || G.isStudioDoc(t) || !canEditRole(id) ? null : id;
   }
   function menuTourGroup(backTo) {
     var id = menuTourId(backTo);
@@ -13697,7 +15881,7 @@
     return true;
   }
   function firstRunDue() {
-    if (S.firstRun && S.firstRun.again) return true;
+    if (S.firstRun && (S.firstRun.again || S.firstRun.routines)) return true;
     if (S.firstRunDone && S.firstRunDone === frUid()) return false;
     if (frGateUp()) return false;
     var a = frFacts(), B = window.GR_BACKEND;
@@ -13776,6 +15960,7 @@
   }
   async function frFinish() {
     var B = window.GR_BACKEND, fr = S.firstRun;
+    if (!fr.again && rtDue(fr)) { rtStart(fr); return; }
     if (fr.finishing && Date.now() - fr.finishing < 15000) return;
     fr.finishing = Date.now();
     var op = frBegin(), ok = false;
@@ -13804,7 +15989,8 @@
     if (!fr.again) S.firstRunDone = frUid();
     S.searchSug = null; staleCards(); myActs(true);
     if (fr.back) { window.scrollTo(0, 0); render(true); fr.back(); } else go({ name: 'home' });
-    toast(fr.again ? 'Saved' : 'You’re in.');
+    var inNow = function () { toast(fr.again ? 'Saved' : 'You’re in.'); };
+    if (fr.again || fr.back || !appTourAfterSignup(inNow)) inNow();
     frReadyAfter(fr);
   }
   function frKindsOut(fr) {
@@ -13832,7 +16018,7 @@
         h('p', { class: 'fr-err', role: 'alert', hidden: fr.err ? null : true }, fr.err || ''),
         pill,
         o.alt ? h('button', { class: 'btn quiet block fr-alt', type: 'button', onclick: function () { o.alt.onTap(); } }, o.alt.label) : null,
-        o.skip ? h('button', { class: 'fr-skip', type: 'button', onclick: function () { o.skip(); } }, 'Skip for now') : null));
+        o.skip ? h('button', { class: 'fr-skip', type: 'button', onclick: function () { o.skip(); } }, o.skipLabel || 'Skip for now') : null));
   }
   function frField(label, control, mark) {
     return h('label', { class: 'fr-field' },
@@ -13849,7 +16035,7 @@
   function viewFirstRun() {
     frLive = null;
     var fr = S.firstRun, B = window.GR_BACKEND;
-    var a = fr && fr.again ? null : frFacts();
+    var a = fr && (fr.again || fr.routines) ? null : frFacts();
     if (!fr) {
       a = a || {};
       var kinds = frKindList(a.kinds);
@@ -13882,6 +16068,7 @@
       : s === 'f-find' ? frFans(fr)
       : s === 'f-shows' ? frShows(fr)
       : s === 'p-find' ? frPlaces(fr)
+      : /^r-/.test(s) ? rtScreen(fr)
       : frKinds(fr);
   }
   function frHandle(fr) {
@@ -14159,6 +16346,538 @@
     S.pushOn = true;
     f.notifDone = true;
     if (frStill(fr, op)) { fr.fails = 0; frFinish(); }
+  }
+  var RT_PICKS = [['Workout', 'heart'], ['Studio', 'music'], ['Work', 'edit'], ['Stretch', 'sun'], ['Warm Up Vocals', 'music'], ['Rehearsal', 'people']];
+  function rtKey(title) {
+    return String(title == null ? '' : title).replace(/\s+/g, ' ').trim().toLowerCase();
+  }
+  function rtNew() {
+    var w = G.homeMins(homePrefs().wake);
+    return { wake: w != null ? w : 480, wakeSet: false, adding: false, text: '', done: false,
+      items: RT_PICKS.map(function (p) { return { title: p[0], icon: p[1], on: false, time: null, mins: 15, days: [0, 1, 2, 3, 4, 5, 6] }; }) };
+  }
+  function rtHave() {
+    var have = {};
+    homeRoutines().forEach(function (r) { have[rtKey(r.title)] = true; });
+    return have;
+  }
+  function rtPicks(rt) {
+    var have = rtHave();
+    return rt.items.filter(function (it) { return it.on && !have[rtKey(it.title)]; });
+  }
+  function rtDue(fr) {
+    if (fr.again || fr.routines || (fr.rt && fr.rt.done)) return false;
+    var k = frKindsOut(fr);
+    if (!k.length || (k.length === 1 && k[0] === 'fan')) return false;
+    return !homePrefs().routinesIntro;
+  }
+  function rtCalDue() {
+    return !!calPlugin() && !calWanted();
+  }
+  function rtStart(fr) {
+    if (!fr.rt) fr.rt = rtNew();
+    frGo(rtCalDue() ? 'r-cal' : 'r-build');
+  }
+  function rtEnd(fr, finished) {
+    var rt = fr.rt || (fr.rt = rtNew()), today = G.tourToday();
+    rt.done = true;
+    S.rtIntroAsked = frUid();
+    var patch = { routinesIntro: IN_SHELL ? true : 'web', routinesIntroV: RT_INTRO_V };
+    if (rt.wakeSet) patch.wake = G.homeTime(rt.wake);
+    var made = (finished ? rtPicks(rt) : []).map(function (it, i) {
+      var time = it.time != null ? G.homeTime(it.time) : '';
+      return ['routine:' + homeId(), { kind: 'routine', title: it.title, icon: it.icon || '', time: time, mins: time ? it.mins : 0, days: it.days.slice(),
+        from: today, createdAt: Date.now() + i }];
+    });
+    rtSave(patch, made, 0);
+    if (!fr.routines) { frFinish(); return; }
+    S.firstRun = null; frLive = null;
+    window.scrollTo(0, 0);
+    if (made.length) { S.pfTab = 'routines'; go(PF_HOME); } else render(true);
+  }
+  function rtSave(patch, made, tries) {
+    if (homeUnread()) {
+      if (tries < 60) setTimeout(function () { rtSave(patch, made, tries + 1); }, 500);
+      return;
+    }
+    if (made.length) homePutMany(made);
+    homeSavePrefs(patch);
+  }
+  function rtCard(it, long) {
+    var span = it.time != null ? G.homeSpan(G.homeTime(it.time), long ? it.mins : 0) : 'Any time';
+    return h('div', { class: 'hf-card' }, h('span', { class: 'hf-cic', 'aria-hidden': 'true' }, icon(ICONS[it.icon] ? it.icon : 'clock', 22)),
+      h('span', { class: 'hf-ctext' }, h('span', { class: 'hf-ck' }, span + (long && it.time != null && it.mins > 0 ? ' (' + G.homeMinsWords(it.mins) + ')' : '')),
+        h('span', { class: 'hf-cv' }, it.title)));
+  }
+  function rtSuggest(rt, picks, n) {
+    var prev = n > 0 ? picks[n - 1] : null;
+    var from = prev && prev.time != null ? prev.time : rt.wake;
+    return Math.min(1425, Math.round((from + 60) / 15) * 15);
+  }
+  function rtAdd(rt) {
+    var title = String(rt.text || '').replace(/\s+/g, ' ').trim().slice(0, 60), key = rtKey(title);
+    if (!key) return false;
+    if (rtHave()[key]) { frSay('You have that routine already.'); return false; }
+    var same = rt.items.filter(function (it) { return rtKey(it.title) === key; })[0];
+    if (same) same.on = true;
+    else rt.items.push({ title: title, icon: '', on: true, time: null, mins: 15, days: [0, 1, 2, 3, 4, 5, 6] });
+    rt.text = '';
+    return true;
+  }
+  function rtScreen(fr) {
+    var rt = fr.rt || (fr.rt = rtNew()), s = fr.step;
+    var back = fr.trail.length ? frBack : null;
+    if (s === 'r-hello') {
+      var now = Date.now();
+      if (!fr.rtAt) fr.rtAt = now;
+      var past = Math.max(0, now - fr.rtAt);
+      var drops = [
+        ['', '--dx:-150px;--dy:-58px;--s:12px;--d:120ms'], [' rt-streak', '--dx:-122px;--dy:-104px;--s:5px;--r:40deg;--d:140ms'],
+        ['', '--dx:-62px;--dy:-118px;--s:8px;--d:110ms'], ['', '--dx:-8px;--dy:-132px;--s:5px;--o:.8;--d:150ms'],
+        ['', '--dx:48px;--dy:-112px;--s:10px;--d:120ms'], [' rt-streak', '--dx:118px;--dy:-96px;--s:5px;--r:-38deg;--d:160ms'],
+        ['', '--dx:162px;--dy:-44px;--s:9px;--d:130ms'], ['', '--dx:178px;--dy:18px;--s:5px;--o:.75;--d:170ms'],
+        ['', '--dx:150px;--dy:66px;--s:11px;--d:120ms'], [' rt-streak', '--dx:96px;--dy:112px;--s:5px;--r:52deg;--d:150ms'],
+        ['', '--dx:30px;--dy:126px;--s:7px;--d:140ms'], ['', '--dx:-36px;--dy:122px;--s:9px;--d:120ms'],
+        [' rt-streak', '--dx:-104px;--dy:104px;--s:5px;--r:-50deg;--d:160ms'], ['', '--dx:-164px;--dy:46px;--s:7px;--d:130ms'],
+        ['', '--dx:-184px;--dy:-6px;--s:4px;--o:.7;--d:180ms'], ['', '--dx:-92px;--dy:-30px;--s:4px;--o:.6;--d:200ms'],
+        ['', '--dx:96px;--dy:34px;--s:4px;--o:.6;--d:200ms'], ['', '--dx:70px;--dy:-58px;--s:3px;--o:.55;--d:210ms'],
+        ['', '--dx:-70px;--dy:62px;--s:3px;--o:.55;--d:210ms']];
+      return h('div', { class: 'page rt-hello', style: '--rt-past:' + past + 'ms' },
+        back ? h('div', { class: 'fr-top' }, h('button', { class: 'iconbtn fr-back', type: 'button', 'aria-label': 'Back', onclick: function () { back(); } }, icon('back', 26))) : null,
+        h('div', { class: 'rt-splash', 'aria-hidden': 'true' },
+          h('span', { class: 'rt-glow' }), h('span', { class: 'rt-burst' }),
+          h('span', { class: 'rt-ring' }), h('span', { class: 'rt-ring rt-ring2' }),
+          drops.map(function (d) { return h('span', { class: 'rt-drop' + d[0], style: d[1] }); }),
+          h('span', { class: 'rt-word', role: 'img', 'aria-label': 'Greenroom' })),
+        h('div', { class: 'rt-copy' },
+          h('div', { class: 'rt-eyebrow' }, 'Introducing'),
+          h('h1', { class: 'rt-title' }, 'Greenroom Routines'),
+          h('p', { class: 'rt-sub' }, 'Your own day sheet for days off tour, built from your routines and your calendar.')),
+        h('div', { class: 'rt-acts' },
+          h('button', { class: 'rt-go', type: 'button', onclick: function () { frGo(rtCalDue() ? 'r-cal' : 'r-build'); } }, 'Set it up'),
+          h('button', { class: 'rt-not', type: 'button', onclick: function () { rtEnd(fr, false); } }, 'Not now')));
+    }
+    if (s === 'r-cal') {
+      var then = function () { if (fr.calOnly) rtEnd(fr, false); else frGo('r-build'); };
+      return frShell({ title: 'Link your calendar?',
+        sub: 'Greenroom reads your iPhone calendar on your phone, so your day fits around what’s already planned. Places, people and notes never leave your phone.',
+        onBack: back,
+        next: { label: 'Link calendar', ready: true, onTap: function () { then(); calendarConnect(); } },
+        alt: { label: 'Not now', onTap: then } });
+    }
+    if (s === 'r-build') {
+      return frShell({ title: 'Build your daily routine?',
+        sub: 'Tell Greenroom what you’d ideally do each day. It builds your schedule and moves your routines to fit your calendar. Your calendar never moves.',
+        onBack: back,
+        next: { label: 'Yes, let’s do it', ready: true, onTap: function () { frGo('r-wake'); } },
+        skip: function () { rtEnd(fr, false); } });
+    }
+    if (s === 'r-wake') {
+      var ref = { v: rt.wake };
+      return frShell({ title: 'What time do you like to wake up?',
+        sub: 'Your ideal time. If you wake up later, Greenroom moves your routines to fit around it and your calendar.', onBack: back,
+        body: homeWheel(ref, 'Wake up time', function (v) { rt.wake = v; }),
+        next: { label: 'Next', ready: true, onTap: function () { rt.wake = ref.v; rt.wakeSet = true; frGo('r-pick'); } },
+        skip: function () { rt.wakeSet = false; frGo('r-pick'); } });
+    }
+    var m = /^r-(time|long|days):(\d+)$/.exec(s), picks = rtPicks(rt);
+    if (!m || !picks[+m[2]]) { fr.step = 'r-pick'; return rtPickScreen(fr, rt, back); }
+    return rtOneScreen(fr, rt, m[1], +m[2], back);
+  }
+  function rtPickScreen(fr, rt, back) {
+    var have = rtHave();
+    var ready = function () { return rtPicks(rt).length > 0 || !!rtKey(rt.text); };
+    var nx = { label: 'Next', ready: ready(), onTap: function () {
+      if (rtKey(rt.text) && !rtAdd(rt)) return;
+      if (rtPicks(rt).length) frGo('r-time:0');
+    } };
+    var cards = rt.items.map(function (it) {
+      var had = !!have[rtKey(it.title)];
+      var b = h('button', { class: 'fr-kind', type: 'button', role: 'checkbox', 'aria-checked': String(had || it.on), 'aria-disabled': had ? 'true' : null,
+        onclick: function () {
+          if (had) return;
+          it.on = !it.on;
+          b.setAttribute('aria-checked', String(it.on));
+          frSay('');
+          nx.set(ready());
+        } },
+        h('span', { class: 'fr-kind-text' }, h('span', { class: 'fr-kind-t' }, it.title), had ? h('span', { class: 'fr-kind-s' }, 'Already added') : null),
+        h('span', { class: 'fr-tick', 'aria-hidden': 'true' }, icon('check', 15)));
+      return b;
+    });
+    var added = function () { if (rtAdd(rt)) render(true); };
+    var add = rt.adding
+      ? frField('Something else', h('input', { class: 'fr-in', type: 'text', 'data-k': 'rt-add', value: rt.text, maxlength: 60, autocomplete: 'off',
+          enterkeyhint: 'done', 'aria-label': 'Something else',
+          oninput: function (e) { rt.text = e.target.value; frSay(''); nx.set(ready()); },
+          onkeydown: function (e) { if (e.key === 'Enter') { e.preventDefault(); added(); } } }),
+        h('button', { class: 'iconbtn', type: 'button', 'aria-label': 'Add it', onclick: function (e) { e.preventDefault(); added(); } }, icon('plus', 20)))
+      : h('button', { class: 'fr-kind fr-add', type: 'button', onclick: function () { rt.adding = true; render(true); } },
+          h('span', { class: 'fr-kind-text' }, h('span', { class: 'fr-kind-t' }, '+ Add something else')));
+    return frShell({ title: 'Pick your daily routines', sub: 'Tap any that fit or create something new. You’ll set a time for each.', onBack: back,
+      body: [h('div', { class: 'fr-kinds fr-rts', role: 'group', 'aria-label': 'Your daily routines' }, cards), add],
+      next: nx, skip: function () { rtEnd(fr, false); } });
+  }
+  function rtOneScreen(fr, rt, kind, n, back) {
+    var picks = rtPicks(rt), it = picks[n], last = n === picks.length - 1, long = kind !== 'time';
+    var card = rtCard(it, long);
+    var swap = function () { var c = rtCard(it, long); if (card.parentNode) card.replaceWith(c); card = c; };
+    if (kind === 'time') {
+      var ref = { v: it.time != null ? it.time : rtSuggest(rt, picks, n) };
+      return frShell({ title: 'At what time?', sub: 'Choose a start time for it.', onBack: back,
+        body: [card, homeWheel(ref, 'Start time', function (v) { it.time = v; swap(); })],
+        next: { label: 'Next', ready: true, onTap: function () { it.time = ref.v; if (!(it.mins > 0)) it.mins = 15; frGo('r-long:' + n); } },
+        skip: function () { it.time = null; it.mins = 0; frGo('r-days:' + n); } });
+    }
+    if (kind === 'long') {
+      var pillBox = h('div', { class: 'hf-pills', role: 'group', 'aria-label': 'How long' });
+      var paint = function () {
+        fillTo(pillBox, HOME_PILLS.map(function (p) {
+          return h('button', { class: 'hf-pill' + (it.mins === p[0] ? ' on' : ''), type: 'button', 'aria-pressed': String(it.mins === p[0]),
+            onclick: function () { it.mins = p[0]; paint(); swap(); } }, p[1]);
+        }));
+      };
+      paint();
+      return frShell({ title: 'How long?', sub: 'Set how long it takes.', onBack: back, body: [card, pillBox],
+        next: { label: 'Next', ready: true, onTap: function () { frGo('r-days:' + n); } },
+        skip: function () { it.mins = 0; frGo('r-days:' + n); } });
+    }
+    var daysBox = h('div', { class: 'hf-daysbox' });
+    var paintDays = function () { fillTo(daysBox, homeDayPicker(it.days, function (next) { it.days = next; paintDays(); })); };
+    paintDays();
+    return frShell({ title: 'Which days?', sub: 'Pick the days it happens.', onBack: back, body: [card, daysBox],
+      next: { label: last ? 'Finish' : 'Next', ready: true, onTap: function () { if (last) rtEnd(fr, true); else frGo('r-time:' + (n + 1)); } } });
+  }
+  var RT_INTRO_V = 2;
+  function rtIntroSeen(p) {
+    return Number(p && p.routinesIntroV) >= RT_INTRO_V;
+  }
+  var rtIntroUp = false;
+  function rtIntroDue() {
+    var p = homePrefs(), seen = p.routinesIntro, now = rtIntroSeen(p);
+    if (!IN_SHELL || S.firstRun || S.rtIntroAsked === frUid() || !modeKnown() || homeUnread() || (now && seen !== 'web')) return false;
+    if (typeof appTourDue === 'function' && (appTour || appTourWaiting || appTourDue())) return false;
+    if (now && !rtCalDue()) return false;
+    return notFan() && homeOff() && modeNow() === 'off' && !firstRunDue();
+  }
+  function rtIntroWatch() {
+    if (rtIntroUp || !rtIntroDue()) return;
+    rtIntroUp = true;
+    var tries = 0, clear = 0;
+    var look = function () {
+      if (!rtIntroDue() || tries++ > 100) { rtIntroUp = false; return; }
+      if (modeUp || modeBusy()) { clear = 0; setTimeout(look, 600); return; }
+      if (clear++ < 1) { setTimeout(look, 600); return; }
+      rtIntroUp = false;
+      S.rtIntroAsked = frUid();
+      var p = homePrefs();
+      if (rtIntroSeen(p)) S.firstRun = frNew({ routines: true, calOnly: true, step: 'r-cal', rt: rtNew() });
+      else {
+        S.firstRun = frNew({ routines: true, step: 'r-hello', rt: rtNew() });
+        homeSavePrefs({ routinesIntroV: RT_INTRO_V });
+      }
+      window.scrollTo(0, 0);
+      render(true);
+    };
+    setTimeout(look, 900);
+  }
+  var APP_TOUR_V = 1;
+  var APP_TOUR_MET = { studio: true };
+  var APP_TOUR_AR = 1179 / 2556;
+  var appTour = null, appTourCards = null, appTourMarking = '';
+  function appTourParse(data) {
+    var list = Array.isArray(data) ? data : G.isObj(data) && Array.isArray(data.cards) ? data.cards : [];
+    var seen = {}, out = [];
+    var pct = function (v) { return Math.max(0, Math.min(100, v)); };
+    list.forEach(function (c) {
+      if (!G.isObj(c)) return;
+      var id = String(c.id == null ? '' : c.id).trim(), title = String(c.title == null ? '' : c.title).trim();
+      if (!id || !title || seen[id]) return;
+      seen[id] = true;
+      var needs = (Array.isArray(c.needs) ? c.needs : c.needs ? [c.needs] : []).map(function (n) { return String(n).trim(); }).filter(Boolean);
+      var img = String(c.img || '').trim();
+      var box = function (r) {
+        if (!(G.isObj(r) && [r.x, r.y, r.w, r.h].every(function (v) { return typeof v === 'number' && isFinite(v); }) && r.w > 0 && r.h > 0)) return null;
+        var x = pct(r.x), y = pct(r.y), w = pct(r.w) > 100 - x + 1e-9 ? 100 - x : pct(r.w), hh = pct(r.h) > 100 - y + 1e-9 ? 100 - y : pct(r.h);
+        return w > 0 && hh > 0 ? { x: x, y: y, w: w, h: hh } : null;
+      };
+      out.push({ id: id, chapter: String(c.chapter || '').trim(), title: title, body: String(c.body || '').trim(),
+        who: c.who === 'fan' || c.who === 'crew' ? c.who : 'all', tm: c.tm === true, iphone: c.iphone === true, web: c.web === true, needs: needs,
+        img: /^[\w-][\w.-]*$/.test(img) && img.indexOf('..') < 0 ? img : '', ring: box(c.ring),
+        lit: (Array.isArray(c.lit) ? c.lit : []).map(box).filter(Boolean).slice(0, 4), wordmark: c.wordmark === true });
+    });
+    return out;
+  }
+  function appTourFor(cards, o) {
+    var met = o.met || APP_TOUR_MET;
+    return (cards || []).filter(function (c) {
+      if (o.fan ? c.who === 'crew' : c.who === 'fan') return false;
+      if (c.iphone && !o.iphone) return false;
+      if (c.web && o.iphone) return false;
+      return c.needs.every(function (n) { return met[n] === true; });
+    });
+  }
+  function appTourChapters(cards) {
+    var out = [];
+    (cards || []).forEach(function (c, i) {
+      var last = out[out.length - 1];
+      if (last && last.name === c.chapter) last.to = i + 1;
+      else out.push({ name: c.chapter, from: i, to: i + 1 });
+    });
+    return out;
+  }
+  function appTourNextChapter(cards, i) {
+    var ch = appTourChapters(cards).filter(function (x) { return i >= x.from && i < x.to; })[0];
+    return ch ? ch.to : (cards || []).length;
+  }
+  function appTourSeen() { return !!homePrefs().tourSeen; }
+  function appTourMark(tries) {
+    var p = homePrefs(), me = frUid();
+    if (p.tourSeen && Number(p.tourSeenV) >= APP_TOUR_V) return;
+    if (!tries && appTourMarking === me) return;
+    appTourMarking = me;
+    if (homeUnread()) {
+      if (tries < 60) setTimeout(function () { appTourMark(tries + 1); }, 500);
+      return;
+    }
+    homeSavePrefs({ tourSeen: true, tourSeenV: APP_TOUR_V });
+  }
+  function appTourAfterSignup(after) {
+    if (S.mode !== 'db' || appTour || appTourSeen()) return false;
+    return appTourOpen({ first: true, after: after });
+  }
+  var appTourWaiting = false;
+  function appTourDue() {
+    if (S.mode !== 'db' || appTour || !S.loaded || !S.labelsIn || homeUnread() || appTourSeen()) return false;
+    if (window.__harness && !window.__harness.autoTour) return false;
+    if (S.appTourAsked && S.appTourAsked === frUid()) return false;
+    if (!(S.route.name === 'home' || (S.route.name === 'act' && actingAs()))) return false;
+    return !S.firstRun && !frGateUp() && !document.getElementById('gr-gate') && !firstRunDue();
+  }
+  function appTourWatch() {
+    if (appTourWaiting || !appTourDue()) return;
+    appTourWaiting = true;
+    var tries = 0, clear = 0;
+    var look = function () {
+      if (!appTourDue() || tries++ > 100) { appTourWaiting = false; return; }
+      if (modeUp || modeBusy()) { clear = 0; setTimeout(look, 600); return; }
+      if (clear++ < 1) { setTimeout(look, 600); return; }
+      appTourWaiting = false;
+      S.appTourAsked = frUid();
+      appTourOpen({ first: true });
+    };
+    setTimeout(look, 900);
+  }
+  function appTourReplay() {
+    if (sheet) closeSheet(true);
+    appTourOpen({ replay: true });
+  }
+  function appTourLoad() {
+    if (appTourCards) return Promise.resolve(appTourCards);
+    var got = Promise.resolve().then(function () { return fetch('tour/cards.json'); }).then(function (r) {
+      if (!r || !r.ok) throw new Error('tour cards: ' + (r ? r.status : 'no answer'));
+      return r.json();
+    }).then(function (data) {
+      var list = appTourParse(data);
+      if (list.length) appTourCards = list;
+      return list;
+    });
+    return Promise.race([got, sleep(10000).then(function () { throw new Error('tour cards: no answer in 10 s'); })]);
+  }
+  function appTourOpen(o) {
+    o = o || {};
+    if (appTour) return false;
+    var fan = o.who === 'fan' || (o.who !== 'crew' && !notFan());
+    var t = appTour = { o: o, fan: fan, iphone: IN_SHELL || o.iphone === true, cards: [], i: 0, ar: 0, x0: null, dx: 0 };
+    appTourBuild(t);
+    appTourLoad().then(function (all) {
+      if (appTour !== t) return;
+      t.cards = appTourFor(all, { fan: t.fan, iphone: t.iphone });
+      if (!t.cards.length) throw new Error('tour cards: none for this account');
+      if (o.first) appTourMark(0);
+      appTourShow(t, 0, 0);
+    }).catch(function (e) {
+      var B = window.GR_BACKEND;
+      if (B && B.noteError) { try { B.noteError('apptour:open', e); } catch (x) {   } }
+      if (appTour !== t) return;
+      appTourEnd('failed');
+      if (!o.first) toast('Couldn’t open the tour. Try again.');
+    });
+    return true;
+  }
+  function appTourBuild(t) {
+    t.fill = h('span', { class: 'at-fill' });
+    t.prog = h('div', { class: 'at-prog', role: 'progressbar', 'aria-label': 'How far along the tour is', 'aria-valuemin': '1' }, t.fill);
+    t.skipCh = h('button', { class: 'at-link', type: 'button', onclick: function () { appTourGo(t, appTourNextChapter(t.cards, t.i), 1); } }, 'Skip chapter');
+    t.skip = h('button', { class: 'at-link at-skip', type: 'button', onclick: function () { appTourEnd('skip'); } }, 'Skip tour');
+    t.img = null;
+    t.dim = h('span', { class: 'at-dim', hidden: true });
+    t.clip = h('div', { class: 'at-clip' }, t.dim);
+    t.ring = h('span', { class: 'at-ring', hidden: true });
+    t.frame = h('div', { class: 'at-frame', 'aria-hidden': 'true' }, t.clip, t.ring);
+    t.stage = h('div', { class: 'at-stage' }, t.frame);
+    t.eye = h('p', { class: 'at-eye' });
+    t.title = h('h2', { class: 'at-title' });
+    t.body = h('div', { class: 'at-body' });
+    t.card = h('div', { class: 'at-card' }, t.stage, h('div', { class: 'at-text' }, t.eye, t.title, t.body));
+    t.back = h('button', { class: 'btn ghost cf-alt at-back', type: 'button', onclick: function () { appTourGo(t, t.i - 1, -1); } }, 'Back');
+    t.next = h('button', { class: 'btn primary cf-main at-next', type: 'button', onclick: function () { appTourGo(t, t.i + 1, 1); } }, 'Next');
+    t.said = h('p', { class: 'sr', 'aria-live': 'polite' });
+    t.root = h('div', { id: 'gr-apptour', class: 'at-layer at-wait', role: 'dialog', 'aria-modal': 'true', 'aria-label': 'Greenroom tour',
+      tabindex: '-1' }, t.prog, h('div', { class: 'at-top' }, t.skipCh, t.skip), t.card, h('div', { class: 'at-foot' }, t.back, t.next), t.said);
+    appTourSwipe(t);
+    t.onKey = function (e) {
+      if (appTour !== t || e.altKey || e.ctrlKey || e.metaKey) return;
+      if (e.key === 'Escape') { e.preventDefault(); appTourEnd('closed'); }
+      else if (e.key === 'ArrowRight' && t.cards.length) { e.preventDefault(); appTourGo(t, t.i + 1, 1); }
+      else if (e.key === 'ArrowLeft' && t.cards.length) { e.preventDefault(); appTourGo(t, t.i - 1, -1); }
+    };
+    t.onFit = function () { appTourFit(t); };
+    document.body.appendChild(t.root);
+    document.body.classList.add('locked');
+    var page = document.getElementById('gr-frame');
+    if (page) { page.setAttribute('inert', ''); page.setAttribute('aria-hidden', 'true'); }
+    document.addEventListener('keydown', t.onKey);
+    window.addEventListener('resize', t.onFit);
+    if (typeof ResizeObserver === 'function') { t.ro = new ResizeObserver(t.onFit); t.ro.observe(t.stage); }
+    requestAnimationFrame(function () {
+      t.root.classList.add('on');
+      try { t.root.focus({ preventScroll: true }); } catch (e) {   }
+    });
+  }
+  function appTourGo(t, to, dir) {
+    if (appTour !== t || !t.cards.length) return;
+    if (to >= t.cards.length) { appTourEnd('done'); return; }
+    if (to < 0 || to === t.i) return;
+    appTourShow(t, to, dir);
+  }
+  function appTourShow(t, i, dir) {
+    var c = t.cards[i], n = t.cards.length;
+    t.i = i;
+    t.root.classList.remove('at-wait');
+    t.fill.style.width = Math.round((i + 1) / n * 100) + '%';
+    t.prog.setAttribute('aria-valuemax', String(n));
+    t.prog.setAttribute('aria-valuenow', String(i + 1));
+    t.prog.setAttribute('aria-valuetext', 'Card ' + (i + 1) + ' of ' + n);
+    t.skipCh.hidden = appTourNextChapter(t.cards, i) >= n;
+    t.back.classList.toggle('at-off', i === 0);
+    t.back.disabled = i === 0;
+    t.next.textContent = i === n - 1 ? 'Done' : 'Next';
+    t.eye.replaceChildren.apply(t.eye, [h('span', { class: 'at-ch' }, c.chapter), c.tm ? h('span', { class: 'at-tm' }, 'Tour managers') : null].filter(Boolean));
+    var word = c.wordmark && /(^|\s)Greenroom$/.test(c.title);
+    if (word) {
+      var before = c.title.replace(/\s*Greenroom$/, '');
+      t.title.replaceChildren.apply(t.title, [before ? h('span', { class: 'at-pre' }, before) : null,
+        h('span', { class: 'at-word', role: 'img', 'aria-label': 'Greenroom' })].filter(Boolean));
+    } else t.title.textContent = c.title;
+    t.body.replaceChildren.apply(t.body, c.body.split(/\n+/).filter(Boolean).map(function (p) { return h('p', null, p); }));
+    appTourPicture(t, c);
+    t.card.classList.remove('at-in-r');
+    t.card.classList.remove('at-in-l');
+    if (dir && !reduced()) {
+      void t.card.offsetWidth;
+      t.card.classList.add(dir > 0 ? 'at-in-r' : 'at-in-l');
+    }
+    t.said.textContent = 'Card ' + (i + 1) + ' of ' + n + '. ' + (c.chapter ? c.chapter + '. ' : '') + (c.tm ? 'Tour managers. ' : '') +
+      c.title + '. ' + c.body;
+    appTourFit(t);
+    var nx = t.cards[i + 1];
+    if (nx && nx.img && typeof Image === 'function') { try { new Image().src = 'tour/' + nx.img; } catch (e) {   } }
+  }
+  function appTourPicture(t, c) {
+    if (t.img) t.img.remove();
+    t.img = null; t.ar = 0;
+    t.ring.hidden = true;
+    t.dim.hidden = true;
+    (t.lits || []).forEach(function (el) { el.remove(); });
+    t.lits = [];
+    t.frame.classList.remove('at-in');
+    if (!c.img) return;
+    var img = h('img', { class: 'at-img', alt: '', draggable: 'false', decoding: 'async', src: 'tour/' + c.img });
+    t.img = img;
+    var done = false;
+    var loaded = function () {
+      if (t.img !== img || done) return;
+      done = true;
+      if (img.naturalWidth && img.naturalHeight) t.ar = img.naturalWidth / img.naturalHeight;
+      t.frame.classList.add('at-in');
+      var r = c.ring;
+      var place = function (el, b) { el.style.left = b.x + '%'; el.style.top = b.y + '%'; el.style.width = b.w + '%'; el.style.height = b.h + '%'; };
+      t.ring.hidden = !r;
+      t.dim.hidden = !r;
+      if (r) [t.ring, t.dim].forEach(function (el) { place(el, r); });
+      var n3 = function (v) { return Math.round(v * 1000) / 1000; };
+      (t.lits || []).forEach(function (el) { el.remove(); });
+      t.lits = [];
+      if (r) t.lits = (c.lit || []).map(function (b) {
+        var el = h('span', { class: 'at-lit' });
+        place(el, b);
+        el.style.backgroundImage = 'url("tour/' + c.img + '")';
+        el.style.backgroundSize = n3(10000 / b.w) + '% ' + n3(10000 / b.h) + '%';
+        el.style.backgroundPosition = n3(b.w < 100 ? b.x / (100 - b.w) * 100 : 0) + '% ' + n3(b.h < 100 ? b.y / (100 - b.h) * 100 : 0) + '%';
+        t.clip.append(el);
+        return el;
+      });
+      appTourFit(t);
+    };
+    img.addEventListener('load', loaded);
+    img.addEventListener('error', function () { if (t.img === img) { img.remove(); t.img = null; } });
+    t.clip.append(img);
+    if (img.complete && img.naturalWidth) loaded();
+  }
+  function appTourFit(t) {
+    var W = t.stage.clientWidth, H = t.stage.clientHeight;
+    if (!W || !H) return;
+    var ar = t.ar || APP_TOUR_AR, w = Math.min(W, H * ar);
+    t.frame.style.width = Math.floor(w) + 'px';
+    t.frame.style.height = Math.floor(w / ar) + 'px';
+  }
+  function appTourSwipe(t) {
+    var el = t.card;
+    el.addEventListener('pointerdown', function (e) {
+      if (!t.cards.length || (e.pointerType === 'mouse' && e.button !== 0)) return;
+      t.x0 = e.clientX; t.dx = 0;
+      try { el.setPointerCapture(e.pointerId); } catch (x) {   }
+      el.style.transition = 'none';
+    });
+    el.addEventListener('pointermove', function (e) {
+      if (t.x0 == null) return;
+      t.dx = e.clientX - t.x0;
+      if (!reduced()) el.style.transform = 'translateX(' + Math.round(t.dx * 0.6) + 'px)';
+    });
+    var up = function () {
+      if (t.x0 == null) return;
+      var dx = t.dx;
+      t.x0 = null; t.dx = 0;
+      el.style.transition = ''; el.style.transform = '';
+      if (dx < -50) appTourGo(t, t.i + 1, 1);
+      else if (dx > 50) appTourGo(t, t.i - 1, -1);
+    };
+    el.addEventListener('pointerup', up);
+    el.addEventListener('pointercancel', up);
+  }
+  function appTourEnd(how) {
+    var t = appTour;
+    if (!t) return;
+    appTour = null;
+    var root = t.root;
+    root.removeAttribute('id');
+    document.removeEventListener('keydown', t.onKey);
+    window.removeEventListener('resize', t.onFit);
+    if (t.ro) t.ro.disconnect();
+    var page = document.getElementById('gr-frame');
+    if (page) { page.removeAttribute('inert'); page.removeAttribute('aria-hidden'); }
+    if (!sheet) document.body.classList.remove('locked');
+    root.classList.remove('on');
+    if (reduced()) root.remove(); else setTimeout(function () { root.remove(); }, 260);
+    if (how !== 'failed') go({ name: 'home' });
+    if (typeof t.o.after === 'function') t.o.after(how);
+  }
+  if (window.__harness) {
+    window.__harness.appTour = function (who) { return appTourOpen({ who: who === 'fan' || who === 'crew' ? who : '', iphone: who === 'iphone' }); };
+    window.__harness.appTourNow = function () {
+      return appTour ? { i: appTour.i, n: appTour.cards.length, ids: appTour.cards.map(function (c) { return c.id; }), fan: appTour.fan } : null;
+    };
   }
   var cardLine = Promise.resolve();
   function cardPatch(change) {
@@ -14869,6 +17588,7 @@
     var words = pageReadyWords(hit, name);
     pageReadyUp = true;
     var show = function () {
+      if (document.getElementById('gr-apptour')) { setTimeout(show, 600); return; }
       if (tries++ > 100) { pageReadyUp = false; pageReadyAt = 0; return; }
       if (sheet || S.firstRun || firstRunDue() || document.getElementById('gr-splash') || document.querySelector('.splash-note')) {
         setTimeout(show, 600); return;
@@ -15095,8 +17815,10 @@
     var dates = G.rows(t.shows).map(function (x) { return x.date; }).filter(G.parseDay).sort();
     var live = tourIsLive(t);
     var span = dates.length ? dayMD(dates[0]) + (dates.length > 1 ? ' \u2013 ' + dayMD(dates[dates.length - 1]) : '') + ', ' + String(dates[dates.length - 1]).slice(0, 4) : (opts.none || 'No shows yet');
-    span = showDocLine(t) || span;
-    var kind = opts.kind ? h('span', { class: 'mini-tag' }, G.isShowDoc(t) ? WORDS.kindShow : WORDS.kindTour) : null;
+    var studio = G.isStudioDoc(t), pnl = G.isPnlDoc(t);
+    span = (studio ? studioWhen(t) : '') || showDocLine(t) || span;
+    if (pnl) span = pnlBookWhen(t) || WORDS.pnlBookNoDates;
+    var kind = opts.kind || pnl ? h('span', { class: 'mini-tag' }, pnl ? WORDS.kindPnl : studio ? WORDS.kindStudio : G.isShowDoc(t) ? WORDS.kindShow : WORDS.kindTour) : null;
     return h('button', { class: 'list-row tour-row', type: 'button', onclick: onTap },
       h('span', { class: 'avatar' + (logo ? ' has' + (pic.page ? ' photo' : '') : artist && ncAt('tourRows') ? ' nc' : ' letter'), 'aria-hidden': 'true' },
         logo ? h('img', { class: 'brand-logo', src: logo, alt: '' }) : artist && ncAt('tourRows') ? nameCard(artist) : String(artist || t.name || '?').trim().charAt(0).toUpperCase()),
@@ -15179,9 +17901,10 @@
     var by = {};
     var art = function (y, name) {
       var s = by[y] || (by[y] = {}), k = name.toLowerCase();
-      return s[k] || (s[k] = { name: name, tours: [], past: [], off: false });
+      return s[k] || (s[k] = { name: name, tours: [], past: [], off: false, pnls: [] });
     };
     scopedTours().forEach(function (e) { var y = tourYear(e[1]); if (y) art(y, artistOf(e[1]) || NO_ARTIST).tours.push(e); });
+    pnlMoneyRows().forEach(function (e) { var y = G.pnlBookYear(e[1]); if (y) art(y, artistOf(e[1]) || NO_ARTIST).pnls.push(e); });
     myPastRows().forEach(function (x) { var y = pastYear(x); if (y) art(y, String(x.tour.artist || '').trim() || NO_ARTIST).past.push(x); });
     historyArtists().forEach(function (name) {
       var id = offTourOf(name), t = id ? getTour(id) : null;
@@ -15252,14 +17975,16 @@
     var cpaRow = tree.length && historyArtists().length ? menuRow('tabsheet', 'CPA Package', function () {
       go({ name: 'history', back: here, cpa: { year: st.year || '', artist: st.artist || '' }, ls: { to: here, label: 'the menu', short: 'Back' } });
     }, 'Your year, ready for your CPA') : null;
-    return [row, h('div', { class: 'mn-drop', 'data-bh': 'top' }, !tree.length ? h('p', { class: 'mn-none' }, 'No budget history yet.') : [cpaRow].concat(tree.map(function (y) {
+    var createRow = mayCreatePnl() ? menuRow('plus', WORDS.createPnl, function () { createPnlFromMenu(here); }, WORDS.createPnlSub) : null;
+    return [row, h('div', { class: 'mn-drop', 'data-bh': 'top' }, createRow, !tree.length ? h('p', { class: 'mn-none' }, 'No budget history yet.') : [cpaRow].concat(tree.map(function (y) {
       var yOpen = st.year === y.year, yk = 'y' + y.year;
       return [
         menuRow('calendar', y.year, function () { st.year = yOpen ? '' : y.year; st.artist = ''; render(true); if (!yOpen) menuDropIn(yk); },
           plural(y.artists.length, 'artist'), { open: yOpen, cls: 'bh-year' }),
         !yOpen ? null : h('div', { class: 'mn-drop', 'data-bh': yk }, y.artists.map(function (a) {
           var ak = a.name.toLowerCase(), aOpen = st.artist === ak;
-          var bits = [a.tours.length + a.past.length ? plural(a.tours.length + a.past.length, 'tour') : '', a.off ? 'Off Tour' : ''].filter(Boolean).join(' · ');
+          var bits = [a.tours.length + a.past.length ? plural(a.tours.length + a.past.length, 'tour') : '', a.pnls.length ? a.pnls.length + ' P&L' + (a.pnls.length === 1 ? '' : 's') : '',
+            a.off ? 'Off Tour' : ''].filter(Boolean).join(' · ');
           return [
             menuRow('music', a.name, function () { st.artist = aOpen ? '' : ak; render(true); if (!aOpen) menuDropIn(yk + '|' + ak); }, bits, { open: aOpen }),
             !aOpen ? null : h('div', { class: 'mn-drop', 'data-bh': yk + '|' + ak },
@@ -15267,6 +17992,7 @@
                 return menuRow('tabmoney', tourNameOf(e[1]), open({ kind: 'tour', id: e[0] }), tourSpanLine(e[1]));
               }),
               a.past.map(function (x) { return menuRow('tabmoney', pastName(x), open({ kind: 'past', id: x.tourId }), pastLine(x)); }),
+              a.pnls.map(function (e) { return menuRow('tabmoney', tourNameOf(e[1]), open({ kind: 'pnl', id: e[0] }), pnlHistLine(e[1])); }),
               a.off ? menuRow('tabcost', 'Off Tour', open({ kind: 'off', artist: a.name, year: y.year }),
                 y.year === thisYear ? 'So far this year' : 'The whole year') : null)
           ];
@@ -15274,6 +18000,7 @@
       ];
     })))];
   }
+  function pnlHistLine(t) { return WORDS.kindPnl + ' \u00b7 ' + (pnlBookWhen(t) || WORDS.pnlBookNoDates); }
   function menuHistoryLeaf(here, s) {
     return function () { go({ name: 'history', back: here, sum: Object.assign(s, { ls: { to: here, label: 'the menu', short: 'Back' } }) }); };
   }
@@ -15293,7 +18020,7 @@
     return h('div', { class: 'page home menu-page has-tabs bh-page' },
       menuHead(null, { menu: true, back: ls }),
       dbBanner(),
-      got.model ? summaryBody(got.model, got.stem, got.door)
+      got.model ? summaryBody(got.model, got.stem, got.door, got.after)
         : got.wait ? h('p', { class: 'note pay-note' }, 'Loading…')
         : got.retry ? h('div', { class: 'stack' }, h('p', { class: 'note' }, got.retry.text),
             h('button', { class: 'btn ghost block', type: 'button', onclick: got.retry.go }, 'Try again'))
@@ -15325,6 +18052,15 @@
       }
       return { model: pastSummary(x), stem: fileStem(pastName(x) + ' my pay') };
     }
+    if (sum.kind === 'pnl') {
+      var pid = sum.id, pt = pid ? getTour(pid) : null;
+      if (!G.isPnlDoc(pt) || pt.deletedAt) return { title: 'That P&L isn’t here', text: 'It may have been deleted. Its maker can restore it from Settings.' };
+      if (!roleKnown(pid)) { tourRole(pid); return later(); }
+      if (!canSeeMoney(pid)) return { title: WORDS.pnlHidden };
+      var pBack = (G.isObj(sum.ls) && sum.ls.to) || (here && here.back) || null;
+      return { model: G.pnlBookSummary(pt), stem: fileStem((pt.name || 'p and l') + ' p and l'), after: pnlFinishBlock(pid, pt, null),
+        door: canEditTour(pid) ? { label: 'Change P&L', go: function () { openPnlBookSheet(pid, pBack); } } : null };
+    }
     if (sum.kind === 'book') {
       var Bk = window.GR_BACKEND, bk = pnlOn() && sum.artistId ? Bk.bookRows(sum.artistId, S.bookReadOn !== here) : { rows: [], gone: true };
       S.bookReadOn = here;
@@ -15333,6 +18069,7 @@
       if (!bk.rows) return later();
       var er = bk.rows.filter(function (r) { return r.id === sum.id; })[0];
       if (!er) return { title: 'That tour isn’t here', text: 'It may have been deleted.' };
+      if (G.isPnlDoc(er.doc)) return { model: G.pnlBookSummary(er.doc), stem: fileStem((er.doc.name || 'p and l') + ' p and l') };
       var bm = G.tourSummary(er.doc);
       if (tourOver(er.doc)) {
         try { bm.cmp = Object.assign(pnlCompareFor(sum.id, er.doc, { artistId: sum.artistId, rows: bk.rows }), { id: sum.id, tour: er.doc }); } catch (e) { bm.cmp = null; }
@@ -15341,6 +18078,7 @@
       return { model: bm, stem: fileStem((er.doc.name || 'tour') + ' summary') };
     }
     var id = sum.id, t = id ? getTour(id) : null;
+    if (G.isPnlDoc(t)) return summaryFor(Object.assign({}, sum, { kind: 'pnl' }));
     if (!t || t.deletedAt || isOffTour(t)) return { title: 'That tour isn’t here', text: 'It may have been deleted. Its creator can restore it from Settings.' };
     if (!roleKnown(id)) { tourRole(id); return later(); }
     if (canSeeMoney(id)) {
@@ -15361,7 +18099,7 @@
       stem: fileStem((t.name || 'tour') + ' my pay'),
       door: { label: 'Open MY PAY', go: function () { openTour(id, 'mypay', here, 'Summary', 'list'); } } };
   }
-  function summaryBody(m, stem, door) {
+  function summaryBody(m, stem, door, after) {
     var over = null;
     if (m.cmp) { try { over = pnlPage(m, stem); } catch (e) { over = null; } }
     var shown = m.stats.map(function (s) { return Math.round(G.num(s.v)); });
@@ -15382,6 +18120,7 @@
         h('p', { class: 'bh-dl-note' }, 'For your accountant: the PDF reads like a report, and the spreadsheet has every table on its own tab.'),
         m.sections.map(summarySection),
         (m.notes || []).map(function (n) { return h('p', { class: 'note bh-foot' }, n); })],
+      after || null,
       door ? h('div', { class: 'stack bh-door' }, h('button', { class: 'btn ghost block', type: 'button', onclick: door.go }, door.label)) : null
     ];
   }
@@ -15458,7 +18197,8 @@
     }));
   }
   function openPnlSheet(o, keep) {
-    var B = window.GR_BACKEND, row = o.row || null, d = G.isObj(row && row.doc) ? row.doc : {};
+    var book = G.isObj(o.book) ? o.book : null;
+    var B = window.GR_BACKEND, row = book ? null : o.row || null, d = book ? G.pnlClean(book.pnl) : G.isObj(row && row.doc) ? row.doc : {};
     var span = G.parseDay(o.first) && G.parseDay(o.last) ? G.daysBetween(o.first, o.last) + 1 : null;
     var has = function (k) { return G.isObj(d.lines) && d.lines[k] != null; };
     var st = keep || { shows: d.shows != null ? d.shows : (G.num(o.n) || null), days: d.days != null ? d.days : span, people: d.people != null ? d.people : null,
@@ -15466,11 +18206,13 @@
       other: (Array.isArray(d.other) ? d.other : []).map(function (x) { return { label: x.label, amount: x.amount }; }),
       nights: (Array.isArray(d.nights) ? d.nights : []).map(function (n) { return Object.assign({}, n); }),
       from: d.from === 'read' ? 'read' : 'typed', more: G.PNL_EXTRA.concat(G.PNL_MORE).some(function (l) { return has(l[0]); }), file: '', warn: [], gap: 0, was: row ? row.updated_at : null };
-    var saved = !!row, title = saved ? 'Change P&L' : 'Add P&L', sheetId = 0;
+    if (book && !st.book) st.book = { name: String(book.name || ''), artist: String(book.artist || ''), from: G.parseDay(book.from) ? book.from : '', to: G.parseDay(book.to) ? book.to : '' };
+    var saved = !!row, title = book ? (book.id ? 'Change P&L' : WORDS.createPnl) : saved ? 'Change P&L' : 'Add P&L', sheetId = 0;
     var docNow = function () {
       return G.pnlClean({ shows: st.shows, days: st.days, people: st.people, slot: st.slot, vehicle: st.vehicle, income: st.income, lines: st.lines, other: st.other, nights: st.nights, from: st.from });
     };
-    if (!st.start) st.start = JSON.stringify(docNow());
+    var snap = function () { return JSON.stringify(st.book ? [docNow(), st.book] : docNow()); };
+    if (!st.start) st.start = snap();
     var numbers = function (doc) { return Object.keys(doc.income).length + Object.keys(doc.lines).length + doc.other.length + (doc.nights ? doc.nights.length : 0); };
     var done = function () { if (sheet) sheet.leaving = null; closeSheet(); };
     var totals = {}, subs = {}, paint = function () {
@@ -15503,7 +18245,7 @@
     };
     var nightRow = function (l) {
       var kind = l[0], x = subs[kind] = { rate: h('span', { class: 'pnl-rate' }), link: pnlLinkEl('', function () { openPnlNights(o, st, kind); }), gap: h('p', { class: 'note pnl-gapline', hidden: true }) };
-      return [moneyRow(l[1], st.income, kind), h('div', { class: 'pnl-sub' }, x.rate, x.link), x.gap];
+      return [moneyRow(l[1], st.income, kind), h('div', { class: 'pnl-sub' }, x.rate, book ? null : x.link), x.gap];
     };
     var otherHost = h('div', { class: 'pnl-others' });
     var drawOthers = function () {
@@ -15534,15 +18276,34 @@
         accept: 'application/pdf,.pdf,.csv,text/csv,.xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,' + imageAccept(),
         onFiles: function (files) { pnlReadFile(files, o, st); } }) : null;
       var boxed = function (k) { return G.PNL_OUT.concat(G.PNL_EXTRA).some(function (l) { return l[0] === k; }); };
-      var added = addedCats({ artist: o.artist || '' }).filter(function (a) { return !boxed(a.key); });
-      Object.keys(st.lines).forEach(function (k) {
-        if (k.indexOf('x-') === 0 && !boxed(k) && !added.some(function (a) { return a.key === k; })) added.push({ key: k, label: G.extraCatLabel(k) });
-      });
+      var addedFor = function (artist) {
+        var list = artist || !book ? addedCats({ artist: artist }).filter(function (a) { return !boxed(a.key); }) : [];
+        Object.keys(st.lines).forEach(function (k) {
+          if (k.indexOf('x-') === 0 && !boxed(k) && !list.some(function (a) { return a.key === k; })) list.push({ key: k, label: G.extraCatLabel(k) });
+        });
+        return list;
+      };
+      var added = addedFor(book ? st.book.artist : o.artist || '');
+      var addedRows = added.map(function (l) { return moneyRow(l.label, st.lines, l.key); });
+      var addedHost = book ? h('div', { class: 'pnl-added' }, addedRows) : addedRows;
+      var bookCard = book ? pnlBookCard(book, st.book, function (artist) {
+        addedHost.replaceChildren();
+        addedFor(artist).forEach(function (l) { addedHost.append(moneyRow(l.label, st.lines, l.key)); });
+      }) : null;
       var more = h('details', { class: 'tf-more pnl-more', open: st.more || null, ontoggle: function (e) { st.more = e.currentTarget.open; } },
         h('summary', null, 'More lines'),
         h('div', { class: 'ledger lf-card' }, G.PNL_EXTRA.concat(G.PNL_MORE).map(function (l) { return moneyRow(l[1], st.lines, l[0]); })));
       var saveBtn = h('button', { class: 'btn primary block', type: 'button', onclick: async function (e) {
         var b = e.currentTarget;
+        if (book) {
+          var bad = G.pnlBookCheck(st.book);
+          if (bad) { toast(bad); return; }
+          b.disabled = true;
+          var went = await pnlBookSave(book, st, docNow());
+          if (went) { done(); return; }
+          b.disabled = false;
+          return;
+        }
         if (!numbers(docNow())) { toast(saved ? 'No numbers left. Use Remove this P&L.' : 'Nothing to save yet. Type a number first.'); return; }
         b.disabled = true;
         try {
@@ -15554,7 +18315,9 @@
       } }, 'Save P&L');
       var out = [
         h('h2', { class: 'sh-title' }, title),
-        h('p', { class: 'sh-sub' }, [o.name, G.parseDay(o.first) ? tourSpan(o.first, o.last || o.first) : ''].filter(Boolean).join(' · ')),
+        book ? (book.id ? h('p', { class: 'sh-sub' }, [book.name, G.pnlBookWhen({ kind: 'pnl', pnlFrom: book.from, pnlTo: book.to })].filter(Boolean).join(' · ')) : null)
+          : h('p', { class: 'sh-sub' }, [o.name, G.parseDay(o.first) ? tourSpan(o.first, o.last || o.first) : ''].filter(Boolean).join(' · ')),
+        bookCard,
         read ? h('div', { class: 'pnl-read' }, read[0], read[1], h('p', { class: 'note' }, 'Photo, PDF or spreadsheet. You check every number before it saves.')) : null,
         st.file ? h('p', { class: 'note pnl-said' }, 'Read from ' + st.file + '. Check each number, then Save.') : null,
         st.warn.map(function (w) { return h('p', { class: 'note pnl-warn' }, w); }),
@@ -15567,8 +18330,7 @@
         h('h3', { class: 'mn-h mn-over' }, 'Additional income'),
         h('div', { class: 'ledger lf-card pnl-card' }, G.PNL_INCOME.slice(G.PNL_INCOME_TOP).map(function (l) { return moneyRow(l[1], st.income, l[0]); })),
         h('h3', { class: 'mn-h mn-over' }, 'Went out'),
-        h('div', { class: 'ledger lf-card pnl-card' }, G.PNL_OUT.map(function (l) { return moneyRow(l[1], st.lines, l[0]); }),
-          added.map(function (l) { return moneyRow(l.label, st.lines, l.key); })),
+        h('div', { class: 'ledger lf-card pnl-card' }, G.PNL_OUT.map(function (l) { return moneyRow(l[1], st.lines, l[0]); }), addedHost),
         otherHost,
         h('button', { class: 'linkbtn pnl-add', type: 'button', onclick: function () { st.other.push({ label: '', amount: null }); drawOthers(); } }, '+ Add a line'),
         more,
@@ -15579,7 +18341,7 @@
           h('div', { class: 'bh-stat' }, h('span', { class: 'bh-k' }, 'Went out'), totals.out = h('strong', { class: 'bh-v num' }, '$0')),
           h('div', { class: 'bh-stat' }, h('span', { class: 'bh-k' }, 'Net'), totals.net = h('strong', { class: 'bh-v num' }, '$0'))),
         h('div', { class: 'stack' }, saveBtn, h('button', { class: 'btn ghost block', type: 'button', onclick: done }, 'Cancel')),
-        saved && B.finishOn && B.finishOn() ? h('p', { class: 'pnl-finishlink' }, pnlLinkEl('Finish this P&L', function () { pnlFinishAsk(o, st); })) : null,
+        !book && saved && B.finishOn && B.finishOn() ? h('p', { class: 'pnl-finishlink' }, pnlLinkEl('Finish this P&L', function () { pnlFinishAsk(o, st); })) : null,
         saved ? h('button', { class: 'btn ghost block danger pnl-drop', type: 'button', onclick: function () {
           var gone = false;
           confirmSheet({ title: 'Remove this P&L?', action: 'Remove', cancel: 'Keep it', danger: true,
@@ -15592,11 +18354,17 @@
               } catch (x) { fail(x); }
               return false;
             } });
-        } }, 'Remove this P&L') : null
+        } }, 'Remove this P&L') : null,
+        book && book.id && mayDeleteTour(book.id) ? h('button', { class: 'btn ghost block danger pnl-drop', type: 'button', onclick: function () {
+          var gone = false;
+          if (sheet) sheet.leaving = null;
+          confirmDeleteTour(book.id, function () { gone = true; go(book.back || { name: 'home' }); },
+            function () { if (!gone) sheetBack(function () { openPnlSheet(o, st); }); });
+        } }, WORDS.deletePnl) : null
       ];
       return out;
     }, { label: title, leaving: function () {
-      if (JSON.stringify(docNow()) === st.start) return false;
+      if (snap() === st.start) return false;
       var gone = false;
       confirmSheet({ title: 'Close without saving?', body: 'What you changed here will be lost.', action: 'Close without saving', cancel: 'Keep it open', danger: true,
         onClose: function () { if (!gone) sheetBack(function () { openPnlSheet(o, st); }); },
@@ -15604,6 +18372,74 @@
       return true;
     } });
     drawOthers(); paint();
+  }
+  function pnlBookCard(book, w, onArtist) {
+    var NONE = 'No artist';
+    var nameIn = h('input', { class: 'input', type: 'text', maxlength: G.PNL_BOOK_NAME_MAX, autocomplete: 'off', placeholder: 'Spring run 2027',
+      'aria-label': 'Name', value: w.name || '', oninput: function (e) { w.name = e.target.value; } });
+    var toIn = h('input', { class: 'input', type: 'date', value: w.to || '', 'aria-label': 'Last day', onchange: function (e) { w.to = e.target.value; } });
+    var fromIn = h('input', { class: 'input', type: 'date', value: w.from || '', 'aria-label': 'First day',
+      onchange: function (e) {
+        w.from = e.target.value;
+        if (G.parseDay(w.from) && G.parseDay(w.to) && w.to < w.from) { w.to = w.from; toIn.value = w.from; }
+      } });
+    var artistRow = book.fixedArtist
+      ? h('div', { class: 'row lf-row pnl-row' }, h('span', { class: 'lf-k' }, 'Artist'), h('span', { class: 'row-label' }, w.artist || NONE))
+      : h('div', { class: 'row lf-row lf-chips pnl-row' }, h('span', { class: 'lf-k' }, 'Artist'),
+          chipRow(myArtistNames().concat([NONE]), w.artist || NONE, function (v) { w.artist = v === NONE ? '' : v; if (onArtist) onArtist(w.artist); }));
+    return [h('h3', { class: 'mn-h mn-over' }, 'The P&L'),
+      h('div', { class: 'ledger lf-card pnl-card' }, rowField('Name', nameIn, 'pnl-row'), artistRow,
+        rowField('First day', fromIn, 'pnl-row'), rowField('Last day', toIn, 'pnl-row'))];
+  }
+  function pnlBookPageId(artist) {
+    var key = String(artist || '').trim().toLowerCase();
+    if (!key) return null;
+    var acting = actingAs() ? actingCard() : null;
+    if (acting && acting.id && String(acting.name || '').trim().toLowerCase() === key) return String(acting.id);
+    var page = ((myActs().list) || []).filter(function (x) { return x && x.mine && x.id && String(x.name || '').trim().toLowerCase() === key; })[0];
+    return page ? String(page.id) : null;
+  }
+  function openPnlBookSheet(id, back) {
+    var t = id ? getTour(id) : null, book;
+    if (id) {
+      if (!G.isPnlDoc(t)) return;
+      book = { id: id, back: back || null, name: String(t.name || ''), artist: artistOf(t), artistId: t.artistId || null,
+        from: t.pnlFrom || '', to: t.pnlTo || '', fixedArtist: true, pnl: t.pnl, was: JSON.parse(JSON.stringify(t)) };
+    } else {
+      var acting = actingAs() ? actingCard() : null, names = myArtistNames();
+      var artist = acting && acting.name ? String(acting.name) : names.length === 1 ? names[0] : '';
+      book = { id: null, back: back || null, name: '', artist: artist, artistId: null, from: '', to: '', fixedArtist: !!(acting && acting.name), pnl: null };
+    }
+    openPnlSheet({ book: book, artist: book.artist, name: book.name });
+  }
+  async function pnlBookSave(book, st, doc) {
+    var w = st.book;
+    if (!book.id) {
+      var made = G.pnlBookDoc({ name: w.name, artist: w.artist, artistId: pnlBookPageId(w.artist), from: w.from, to: w.to, pnl: doc });
+      if (!made) { toast(G.pnlBookCheck(w) || 'Couldn’t save. Try again.'); return false; }
+      var id = newId();
+      if (!(await api.create(id, made))) return false;
+      toast(WORDS.pnlSaved);
+      var back = book.back || { name: 'home' };
+      go(pnlBookRoute(id, back));
+      return true;
+    }
+    var patch = G.pnlBookPatch(book.was, { name: w.name, from: w.from, to: w.to, pnl: doc });
+    if (!patch) { toast(G.pnlBookCheck(w) || 'Couldn’t save. Try again.'); return false; }
+    if (!Object.keys(patch).length) { toast('Saved'); return true; }
+    var B = window.GR_BACKEND, now = getTour(book.id);
+    if (S.mode === 'db' && B && typeof B.tourFresh === 'function') {
+      try { var fresh = await B.tourFresh(book.id); if (fresh) now = fresh; } catch (x) {   }
+    }
+    if (G.pnlBookClash(book.was, now, patch)) { toast('Someone else just changed this P&L. Open it again.'); return false; }
+    if (!(await api.update(book.id, patch))) return false;
+    toast('Saved');
+    render(true);
+    return true;
+  }
+  function pnlBookFinishOn() {
+    var B = window.GR_BACKEND;
+    return pnlFinishOn() && typeof B.pnlBookOn === 'function' && !!B.pnlBookOn();
   }
   function pnlFinishAsk(o, st) {
     var B = window.GR_BACKEND, kept = false;
@@ -16058,22 +18894,24 @@
       eye.length ? summarySection({ title: 'Worth a look first', lines: eye.map(function (e) { return { label: e.label, amount: e.amount, hint: '' }; }) }) : null);
   }
   function pnlFinishBlock(id, t, x) {
-    if (!pnlFinishOn() || !tourOver(t)) return null;
+    var pb = G.isPnlDoc(t);
+    if (pb ? !pnlBookFinishOn() : (!pnlFinishOn() || !tourOver(t))) return null;
     var book = !!(x && x.book), edit = !book && canEditTour(id), made = !book && createdTour(id), w = G.finishWords(t.finish);
     var head = h('h2', { class: 'mn-h mn-over' }, 'Finish');
     if (G.tourFinished(t)) {
       return h('section', { class: 'bh-sec pnl-sec pnl-finish' }, head, h('p', { class: 'note' }, w.line),
-        made ? h('button', { class: 'btn ghost block', type: 'button', onclick: function () { tourReopenAsk(id, t, x); } }, 'Reopen') : h('p', { class: 'note' }, 'Only the person who made this tour can reopen it.'));
+        made ? h('button', { class: 'btn ghost block', type: 'button', onclick: function () { tourReopenAsk(id, t, x); } }, 'Reopen') : h('p', { class: 'note' }, 'Only the person who made this ' + (pb ? 'P&L' : 'tour') + ' can reopen it.'));
     }
     return h('section', { class: 'bh-sec pnl-sec pnl-finish' }, head, w.line ? h('p', { class: 'note' }, w.line) : null,
       edit ? [h('p', { class: 'note' }, 'Money still coming in? Leave it open. Everything can change until you finish.'),
-        h('button', { class: 'btn ghost block', type: 'button', onclick: function () { tourFinishAsk(id, t, x); } }, 'Finish this tour')] : h('p', { class: 'note' }, 'Still open. Numbers can change.'));
+        h('button', { class: 'btn ghost block', type: 'button', onclick: function () { tourFinishAsk(id, t, x); } }, pb ? 'Finish this P&L' : 'Finish this tour')] : h('p', { class: 'note' }, 'Still open. Numbers can change.'));
   }
   function pnlFinishOn() {
     var B = window.GR_BACKEND;
     return S.mode === 'db' && !!B && typeof B.finishOn === 'function' && B.finishOn();
   }
   function tourPnlRow(id, t, x) {
+    if (G.isPnlDoc(t)) return null;
     var B = window.GR_BACKEND, aid = pnlOn() ? (x && x.artistId) || B.pnlArtistOf(t) : null;
     var got = aid ? B.pnlRows(aid) : null;
     if (!got || !got.rows) return null;
@@ -16082,15 +18920,17 @@
     return row ? { aid: aid, row: row } : null;
   }
   function tourFinishAsk(id, t, x) {
-    var B = window.GR_BACKEND, open = G.finishOpen(t, reimbRows(id)), said = open.map(function (o) { return o.words; }).join(', ');
-    var name = t.name || 'this tour';
+    var pb = G.isPnlDoc(t), open = pb ? [] : G.finishOpen(t, reimbRows(id)), said = open.map(function (o) { return o.words; }).join(', ');
+    var B = window.GR_BACKEND, name = t.name || (pb ? 'this P&L' : 'this tour');
     confirmSheet({ title: 'Finish ' + name + '?', action: 'Finish', cancel: 'Not yet',
-      body: 'This locks the book and any P&L for this tour. Nobody can change it until the person who made this tour reopens it. The business manager sheet will say Final.' + (said ? ' Still open: ' + said + '.' : ''),
+      body: pb ? 'This locks this P&L. Nobody can change it until the person who made it reopens it. The PDF and spreadsheet will say Final.'
+        : 'This locks the book and any P&L for this tour. Nobody can change it until the person who made this tour reopens it. The business manager sheet will say Final.' + (said ? ' Still open: ' + said + '.' : ''),
       onConfirm: async function () {
         var a;
         try { a = await B.finishTour(id); } catch (e) { toast(sendRefusal(e) || 'Couldn’t finish. Try again.'); return false; }
         if (!a.ok) {
-          toast(a.why === 'already' ? 'Someone else just finished this tour.' : a.why === 'on_road' ? 'This tour isn’t over yet.' : a.why === 'not_allowed' ? 'Only people who can edit this tour’s money can finish it.' : 'Couldn’t finish. Try again.');
+          var what = pb ? 'P&L' : 'tour';
+          toast(a.why === 'already' ? 'Someone else just finished this ' + what + '.' : a.why === 'on_road' && !pb ? 'This tour isn’t over yet.' : a.why === 'not_allowed' ? 'Only people who can edit this ' + what + '’s money can finish it.' : 'Couldn’t finish. Try again.');
           return false;
         }
         S.pnlPack = null;
@@ -16103,8 +18943,10 @@
       } });
   }
   function tourReopenAsk(id, t, x) {
-    var B = window.GR_BACKEND;
-    confirmSheet({ title: 'Reopen this tour?', body: 'The book can be changed again, and the sheet will say Draft. Any sheet already sent is out of date.', action: 'Reopen', cancel: 'Keep it finished',
+    var B = window.GR_BACKEND, pb = G.isPnlDoc(t);
+    confirmSheet({ title: pb ? 'Reopen this P&L?' : 'Reopen this tour?',
+      body: pb ? 'The P&L can be changed again, and the files will say Draft. Any file already sent is out of date.' : 'The book can be changed again, and the sheet will say Draft. Any sheet already sent is out of date.',
+      action: 'Reopen', cancel: 'Keep it finished',
       onConfirm: async function () {
         var a;
         try { a = await B.reopenTour(id); } catch (e) { toast(sendRefusal(e) || 'Couldn’t reopen. Try again.'); return false; }
@@ -16304,20 +19146,25 @@
     toast('Saved ' + file.name);
   }
   function cpaArtistBooks(artist) {
-    var key = String(artist || '').trim().toLowerCase(), out = { tours: [], off: null, deleted: [], unknown: false };
+    var key = String(artist || '').trim().toLowerCase(), out = { tours: [], studios: [], pnls: [], off: null, deleted: [], unknown: false };
     if (!key) return out;
-    allTourEntries(true).forEach(function (e) {
-      var t = e[1];
-      if (!G.isObj(t) || artistOf(t).toLowerCase() !== key) return;
-      if (!roleKnown(e[0])) { tourRole(e[0]); out.unknown = true; return; }
-      if (!canSeeMoney(e[0])) return;
-      if (t.deletedAt) {
-        var hasMoney = G.rows(t.charges).length || G.rows(t.otherIncome).length || G.rows(t.shows).some(function (s) { return !!s.loggedAt; });
-        if (hasMoney) out.deleted.push({ name: String(t.name || '').trim() || 'Untitled tour' });
-        return;
-      }
-      out.tours.push({ id: e[0], doc: t });
-    });
+    var take = function (into) {
+      return function (e) {
+        var t = e[1];
+        if (!G.isObj(t) || artistOf(t).toLowerCase() !== key) return;
+        if (!roleKnown(e[0])) { tourRole(e[0]); out.unknown = true; return; }
+        if (!canSeeMoney(e[0])) return;
+        if (t.deletedAt) {
+          var hasMoney = G.rows(t.charges).length || G.rows(t.otherIncome).length || G.rows(t.shows).some(function (s) { return !!s.loggedAt; });
+          if (hasMoney) out.deleted.push({ name: G.isStudioDoc(t) ? G.studioBookName(t) : String(t.name || '').trim() || 'Untitled tour' });
+          return;
+        }
+        into.push({ id: e[0], doc: t });
+      };
+    };
+    allTourEntries(true).forEach(take(out.tours));
+    studioEntries(true).forEach(take(out.studios));
+    pnlEntries().forEach(take(out.pnls));
     var offId = mayOpenOff(artist) ? offTourOf(artist) : null, offDoc = offId ? getTour(offId) : null;
     if (offDoc) out.off = { id: offId, doc: offDoc };
     return out;
@@ -16327,10 +19174,11 @@
     var later = function () { setTimeout(function () { if (S.route === here) render(true); }, 700); return { wait: true }; };
     if (book) {
       var nowIs = new Date(), asks = {};
-      book.rows.forEach(function (r) { asks[r.id] = r.doc._reimb || []; });
-      var nightsOf = book.rows.map(function (r) { return { name: r.doc.name || 'Untitled tour', days: G.rows(r.doc.shows).map(function (s) { return s.date; }) }; });
+      var bkTours = book.rows.filter(function (r) { return !G.isPnlDoc(r.doc); }), bkPnls = book.rows.filter(function (r) { return G.isPnlDoc(r.doc); });
+      bkTours.forEach(function (r) { asks[r.id] = r.doc._reimb || []; });
+      var nightsOf = bkTours.map(function (r) { return { name: r.doc.name || 'Untitled tour', days: G.rows(r.doc.shows).map(function (s) { return s.date; }) }; });
       return { input: { artist: artist, year: String(year), today: G.ymd(nowIs), made: new Intl.DateTimeFormat('en-US', { dateStyle: 'long' }).format(nowIs),
-        tours: book.rows, off: null, spans: G.offTourSpans(nightsOf, []), reimb: asks, deleted: [], deposits: null, cardPayments: null, waiting: null } };
+        tours: bkTours, pnls: bkPnls, off: null, spans: G.offTourSpans(nightsOf, []), reimb: asks, deleted: [], deposits: null, cardPayments: null, waiting: null } };
     }
     if (!scopeRolesKnown()) return later();
     if (!artist || !mayOpenOff(artist)) return { none: true };
@@ -16346,18 +19194,20 @@
     var B = window.GR_BACKEND;
     var reimbRead = !reimbOn() || !B || typeof B.reimbursementsRead !== 'function' || !!B.reimbursementsRead();
     var reimb = reimbOn() ? (reimbRead ? {} : null) : S.mode === 'db' ? null : {};
-    if (reimb) b.tours.forEach(function (t) { reimb[t.id] = reimbRows(t.id); });
+    var books = b.tours.concat(b.studios || []);
+    if (reimb) books.forEach(function (t) { reimb[t.id] = reimbRows(t.id); });
     var waiting = cpaWaitingFor(b);
     if (waiting && waiting.wait) return later();
     var now = new Date();
     return { input: { artist: artist, year: String(year), today: G.ymd(now), made: new Intl.DateTimeFormat('en-US', { dateStyle: 'long' }).format(now),
-      tours: b.tours, off: b.off, spans: spans.tours, reimb: reimb, deleted: b.deleted, deposits: null, cardPayments: null, waiting: waiting } };
+      tours: books, pnls: b.pnls, off: b.off, spans: spans.tours, reimb: reimb, deleted: b.deleted, deposits: null, cardPayments: null, waiting: waiting } };
   }
   var cpaWaitSince = 0;
   function cpaWaitingFor(b) {
     if (S.mode !== 'db') return { charges: [], deposits: [] };
     var names = {};
     b.tours.forEach(function (t) { names[t.id] = String(t.doc.name || '').trim() || 'Untitled tour'; });
+    (b.studios || []).forEach(function (t) { names[t.id] = G.studioBookName(t.doc); });
     if (b.off) names[b.off.id] = 'Off Tour';
     var mine = Object.keys(names).filter(createdTour), B = window.GR_BACKEND;
     if (!mine.length || !B || !B.feedWatch) return null;
@@ -16405,7 +19255,7 @@
     var artist = names.filter(function (n) { return n.toLowerCase() === key; })[0] || names[0] || '';
     if (!artist) return page(emptyState('Nothing to show', 'Only the people who see an artist’s money see its CPA package.'));
     var today = G.ymd(new Date());
-    var yearsOf = function (n, moneyOnly) { var b = cpaArtistBooks(n); return G.cpaYears(b.tours.concat(b.off ? [b.off] : []), today, moneyOnly); };
+    var yearsOf = function (n, moneyOnly) { var b = cpaArtistBooks(n); return G.cpaYears(b.tours.concat(b.studios, b.off ? [b.off] : []), today, moneyOnly); };
     var years = yearsOf(artist);
     var year = years.indexOf(String(c.year || '')) >= 0 ? String(c.year) : years[0];
     var got = cpaInputFor(artist, year);
@@ -16503,7 +19353,7 @@
     if (live) return live[0];
     if (last && onRoad(getTour(last))) return last;
     var road = entries.filter(function (e) { return onRoad(e[1]); })[0];
-    return road ? road[0] : (last || (actingAs() && entries[0] ? entries[0][0] : null));
+    return road ? road[0] : (modeTourId() || last || (actingAs() && entries[0] ? entries[0][0] : null));
   }
   function openTourPicker(cur) {
     var entries = scopedTours(), id = cur || profileTourId();
@@ -16748,7 +19598,7 @@
     };
     var row = function (name, page, logo, endorsed, sub) {
       var former = endorsed && endorsed.past && endorsed.id ? (endorsed.kind === 'band' ? 'Former member' : 'Former crew') : '';
-      var under = sub || [page && page.handle, former].filter(Boolean).join(' \u00b7 ');
+      var under = sub || [page && !machineHandle(page.handle) ? page.handle : '', former].filter(Boolean).join(' \u00b7 ');
       var inner = [
         h('span', { class: 'avatar' + (logo ? ' has' : ncCls('myArtists')) + (page && actPic(page.avatar) ? ' photo' : ''), 'aria-hidden': 'true' },
           logo ? h('img', { class: 'brand-logo', src: logo, alt: '' }) : ncFace('myArtists', name)),
@@ -17002,7 +19852,8 @@
         });
       },
       deleteme: function () { openDeleteAccount(); },
-      docs: function () { openLegalDocs(); }
+      docs: function () { openLegalDocs(); },
+      apptour: function () { appTourReplay(); }
     };
   }
   function settingsItems(d) {
@@ -17013,6 +19864,7 @@
     if (d.signedIn && typeof B.reportsList === 'function' && S.reportsRow && S.reportsRow.yes === true) add('reports', 'flag', 'Reports', A.reports);
     if (d.signedIn && typeof B.modOn === 'function' && typeof B.refreshBlocks === 'function' && modOn()) add('blocked', 'block', 'Blocked people', A.blocked);
     add('contactus', 'mail', 'Contact us', A.contact);
+    add('apptour', 'tabmap', 'Take the tour', A.apptour);
     var cm = d.offId ? cardMenuTap(d.offId) : null;
     if (cm) add('cardsettings', cm.ic, cm.label, cm.tap);
     if (historyArtists().length) add('business', 'tag', 'Business details', function () { openCpaBusiness(null, openSettingsSheet); });
@@ -17097,7 +19949,8 @@
         adminGroup,
         stGroup('Your account', [
           blockedRow,
-          stRow('mail', 'Contact us', A.contact, { sub: CONTACT_EMAIL })]),
+          stRow('mail', 'Contact us', A.contact, { sub: CONTACT_EMAIL }),
+          stRow('tabmap', 'Take the tour', A.apptour)]),
         stGroup('Your tours', [
           offId ? cardMenuItem(offId, true) : null,
           historyArtists().length ? stRow('tag', 'Business details', function () { openCpaBusiness(null, openSettingsSheet); }) : null,
@@ -17556,15 +20409,28 @@
     var a = runStart(t), b = G.tourEnd(t), today = G.tourToday();
     return !!a && !!b && a <= today && today <= b;
   }
-  function offNow() { return !scopedTours().some(function (e) { return onRoad(e[1]) && !teamSeated(e[0]); }); }
+  function offNow() { var f = actingAs() ? '' : modeForced(); return f ? f === 'off' : offReal(); }
+  function offReal() { return !scopedTours().some(function (e) { return onRoad(e[1]) && !teamSeated(e[0]); }); }
   function roadTourId() {
     var id = profileTourId(), t = id ? getTour(id) : null;
     if (t && onRoad(t) && !teamSeated(id)) return id;
     var e = scopedTours().filter(function (x) { return onRoad(x[1]) && !teamSeated(x[0]); })[0];
+    return e ? e[0] : modeTourId();
+  }
+  function modeTourId() {
+    if (actingAs() || modeForced() !== 'on') return null;
+    var n = nextTourEntry();
+    if (n) return n.id;
+    var dated = scopedTours().filter(function (e) { return modeDatedOf(e[1]); });
+    var e = dated.filter(function (x) { return !teamSeated(x[0]); })[0] || dated[0];
     return e ? e[0] : null;
   }
   function firstNight(t) {
     return G.rows(t && t.shows).map(function (x) { return x.date; }).filter(G.parseDay).sort()[0] || '';
+  }
+  function lastNight(t) {
+    var d = G.rows(t && t.shows).map(function (x) { return x.date; }).filter(G.parseDay).sort();
+    return d.length ? d[d.length - 1] : '';
   }
   function nextTourEntry() {
     var today = G.tourToday(), best = null;
@@ -17586,7 +20452,8 @@
   }
   function scopeRolesKnown() { return scopedTours().every(function (e) { return roleKnown(e[0]); }); }
   function seesBudgets() {
-    return historyArtists().length > 0 || scopedTours().some(function (e) { return canSeeMoney(e[0]); }) || bookArtists().length > 0;
+    return historyArtists().length > 0 || scopedTours().some(function (e) { return canSeeMoney(e[0]); }) || bookArtists().length > 0 ||
+      scopedStudios().some(function (e) { return canSeeMoney(e[0]); }) || pnlMoneyRows().length > 0;
   }
   function offArtistFor(want) {
     want = String(want || '').trim();
@@ -17594,23 +20461,51 @@
       var key = want.toLowerCase(), book = offTourOf(want);
       var spelled = (book ? [artistOf(getTour(book))] : [])
         .concat(allTourEntries().map(function (e) { return artistOf(e[1]); }).filter(function (n) { return n.toLowerCase() === key; }), [want]);
-      return spelled.filter(function (n) { return n && mayOpenOff(n); })[0] || '';
+      return spelled.filter(function (n) { return n && mayOpenOff(n, true); })[0] || '';
     }
+    var n = String(offPickGet() || '').trim().toLowerCase();
+    return (n && offPillNames().filter(function (x) { return x.toLowerCase() === n; })[0]) || offHomeArtist();
+  }
+  function offHomeArtist() {
+    return offHomeChoices()[0] || '';
+  }
+  function offHomeChoices() {
     var list = historyArtists();
     var pick = function (n) {
       n = String(n || '').trim().toLowerCase();
       return (n && list.filter(function (x) { return x.toLowerCase() === n; })[0]) || '';
     };
     var nx = nextTourEntry(), recent = scopedTours()[0];
-    return pick(S.offArtist) || pick(nx && artistOf(nx.t)) || pick(recent && artistOf(recent[1])) || list[0] || '';
+    return [pick(nx && artistOf(nx.t)), pick(recent && artistOf(recent[1]))].concat(list).filter(Boolean);
+  }
+  function offPayArtist(fr) {
+    if (!actingAs() && modeForced()) fr = offFrame(true);
+    var a = fr && fr.host ? artistOf(getTour(fr.host)) : '';
+    if (a) return offArtistFor(a);
+    var c = offHomeChoices();
+    for (var i = 0; i < c.length; i += 1) if (offPayOf(c[i])) return c[i];
+    return c[0] || '';
+  }
+  function offPickKey() {
+    var B = window.GR_BACKEND;
+    return 'gr-off-pick:' + ((S.mode === 'db' && B && B.uid && B.uid()) || 'me');
+  }
+  function offPickGet() {
+    var k = offPickKey();
+    return S.offArtist && S.offArtist.key === k ? S.offArtist.name : (lsGet(k) || '');
+  }
+  function offPickSet(name) {
+    var k = offPickKey();
+    S.offArtist = { key: k, name: String(name || '').trim() };
+    lsSet(k, S.offArtist.name);
   }
   function offRoute(artist, view, host) {
     var r = { name: 'offtour', view: view || 'costs', artist: String(artist || '').trim() };
     if (host) r.host = host;
     return r;
   }
-  function offFrame() {
-    var r = S.route || {}, entries = scopedTours(), off = offNow();
+  function offFrame(real) {
+    var r = S.route || {}, entries = scopedTours(), off = real ? offReal() : offNow();
     var has = function (x) { return !!x && entries.some(function (e) { return e[0] === x; }); };
     var host = !off && has(r.host) ? r.host : null;
     if (!host && !off) host = roadTourId();
@@ -17634,7 +20529,7 @@
           if (menu && current === 'tours') menu.toggle(e); else back(bookTabNow())();
         } });
       }
-      if (offPayOf(artist)) {
+      if (offPayOf(offPayArtist(fr))) {
         tabs.push({ label: 'MY PAY', on: current === 'mypay', go: function () {
           if (current !== 'mypay') go(Object.assign(offRoute(artist, 'mypay', fr.host), { list: (S.route && S.route.list) || null }));
         } });
@@ -17648,39 +20543,58 @@
     return payTabRow(tabs);
   }
   function offBar(fr) { return tourTabs(fr.bar, 'costs', { off: true }); }
-  function offArtistBar(name) {
-    var list = historyArtists(), key = String(name || '').toLowerCase();
-    var listed = list.some(function (n) { return n.toLowerCase() === key; });
-    if (list.length < 2 && listed) return null;
-    return h('div', { class: 'pt-tourbar' },
-      h('span', { class: 'pt-tourname' }, h('span', null, 'Off Tour book: ' + name)),
-      list.length > 1 || (list.length && !listed) ? h('button', { class: 'mn-change', type: 'button', 'aria-label': 'Change artist',
-        onclick: function () { openOffArtistPicker(name); } }, 'Change') : null);
+  function offPillNames() {
+    var seen = Object.create(null);
+    var pages = actingAs() ? [] : ((myActs().list) || []).filter(function (x) { return !!x && x.mine === true; })
+      .map(function (x) { return String(x.name || '').trim(); }).filter(function (n) { return n && mayOpenOff(n, true); });
+    return historyArtists().concat(pages).filter(function (n) { var k = n.toLowerCase(); return !seen[k] && (seen[k] = true); });
   }
-  function openOffArtistPicker(cur) {
-    var list = historyArtists();
-    openSheet(function () {
-      return [
-        h('h2', { class: 'sh-title' }, 'Which artist?'),
-        h('p', { class: 'sh-sub' }, 'OFF TOUR opens this artist’s book.'),
-        h('div', { class: 'fl-list' }, list.map(function (n) {
-          var on = n === cur;
-          return h('button', { class: 'fl-row', type: 'button', 'aria-pressed': on ? 'true' : 'false',
-            onclick: function () { S.offArtist = n; closeSheet(); go(offRoute(n, bookTabNow())); } },
-            h('span', { class: 'lr-text' }, h('span', { class: 'lr-title' }, n)),
-            on ? h('span', { class: 'acct-on', 'aria-hidden': 'true' }, icon('check', 14)) : null);
-        })),
-        h('div', { class: 'stack' },
-          h('button', { class: 'btn ghost block', type: 'button', onclick: function () { closeSheet(); } }, 'Close'))
-      ];
-    }, { label: 'Which artist?' });
+  var offPillsSlid = { key: '', x: 0 };
+  function offArtistPills(name) {
+    var own = offPillNames(), key = String(name || '').trim().toLowerCase(), r = S.route || {};
+    var extra = !!key && !own.some(function (n) { return n.toLowerCase() === key; });
+    var names = extra ? own.concat([String(name).trim()]) : own;
+    if (names.length < 2 && !extra) return null;
+    var slid = names.join('\n') + '\n' + key;
+    var row = h('div', { class: 'bar-tabs-s op-pills', role: 'group', 'aria-label': 'Off Tour books' }, names.map(function (n) {
+      var on = n.toLowerCase() === key;
+      return h('button', { class: 'op-pill' + (on ? ' on' : ''), type: 'button', 'aria-pressed': on ? 'true' : 'false',
+        onclick: function () {
+          if (on) return;
+          offPickSet(n);
+          var to = offRoute(n, bookTabNow(), r.host);
+          if (r.list) to.list = r.list;
+          go(to);
+        } }, n);
+    }));
+    row.addEventListener('scroll', function () { offPillsEnds(row); if (row.isConnected) offPillsSlid = { key: slid, x: row.scrollLeft }; }, { passive: true });
+    requestAnimationFrame(function () { offPillsFit(row, offPillsSlid.key === slid ? offPillsSlid.x : null); });
+    return row;
+  }
+  function offPillsFit(row, x) {
+    if (!row.isConnected || !row.getBoundingClientRect) return;
+    var lit = row.querySelector('.op-pill.on');
+    if (x != null) row.scrollLeft = x;
+    else if (lit) {
+      var a = row.getBoundingClientRect(), b = lit.getBoundingClientRect(), at = row.scrollLeft;
+      var left = lit.previousElementSibling ? b.left - a.left + at - 28 : 0;
+      var right = lit.nextElementSibling ? b.right - a.left + at + 28 : row.scrollWidth;
+      if (right > at + row.clientWidth) at = right - row.clientWidth;
+      if (left < at) at = left;
+      row.scrollLeft = Math.max(0, Math.min(row.scrollWidth - row.clientWidth, at));
+    }
+    offPillsEnds(row);
+  }
+  function offPillsEnds(row) {
+    var left = row.scrollLeft > 1, right = row.scrollWidth - row.clientWidth - row.scrollLeft > 1;
+    row.className = 'bar-tabs-s op-pills' + (left ? ' more-l' : '') + (right ? ' more-r' : '');
   }
   function viewOffFrame() {
     var r = S.route, view = r.view || 'details', fr = offFrame();
     S.offShown = null;
     if (['costs', 'cards', 'money', 'tours', 'mypay'].indexOf(view) < 0) {
       if (['details', 'day', 'guests', 'stats', 'chat'].indexOf(view) < 0) view = 'details';
-      if (homeViews().indexOf(view) >= 0) return viewOffHome(view);
+      if (homeViews().indexOf(view) >= 0 || (r.own && view === 'day' && homeOn() && !actingAs())) return viewOffHome(view);
       if (fr.bar) { S.route = { name: 'tour', id: fr.bar, view: view }; return viewTour(); }
       return viewOffEmpty(view);
     }
@@ -17696,7 +20610,7 @@
     if (view === 'tours' && fr.host && !(r.host === fr.host && fr.host === roadTourId())) view = bookTabNow();
     if (!artist && view !== 'mypay') view = 'tours';
     if (view === 'mypay') {
-      if (fr.host && !offPayOf(artist)) { S.route = { name: 'tour', id: fr.host, view: 'mypay', list: r.list || null }; return viewTour(); }
+      if (fr.host && !offPayOf(offPayArtist(fr))) { S.route = { name: 'tour', id: fr.host, view: 'mypay', list: r.list || null }; return viewTour(); }
       return viewOffPay(fr, artist);
     }
     if (view === 'tours') return viewOffTours(fr, artist);
@@ -17708,6 +20622,7 @@
     if (id && offPayOf(name) === id) myPayInfo(id);
     if (!id && mine && r.start && !S.offMaking) startOffBook(name);
     var t = id ? getTour(id) : null;
+    if (t) setTimeout(function () { pastMoveSettle(id); }, 0);
     var body;
     if (!t) {
       body = !mine ? emptyState('Nothing off tour yet', 'Once the tour’s creator starts ' + name + '’s Off Tour book, it shows up here.')
@@ -17729,9 +20644,9 @@
     }
     return h('div', { class: 'page tour has-tabs ' + (view === 'money' ? 'budget-page' : 'exp-page') },
       pageBar(offTopTabs(fr, name, 'off'), r.list),
+      offArtistPills(name),
       bookStrip(id, view, function (v) { return offRoute(name, v); }),
       dbBanner(),
-      offArtistBar(name),
       body,
       offBar(fr));
   }
@@ -17830,7 +20745,7 @@
     });
   }
   function offIncome(id, t, c, name) {
-    var cls = { guarantee: 'guar', royalties: 'guar', merch: 'merch', advance: 'merch' };
+    var cls = { guarantee: 'guar', royalties: 'guar', merch: 'merch', advance: 'merch' }, studio = G.isStudioDoc(t);
     var kinds = [];
     (c.otherRows || []).forEach(function (x) {
       var label = G.otherKindLabel(x && x.kind);
@@ -17844,13 +20759,22 @@
     return [
       bars,
       h('div', { class: 'shows-panel' },
-        list || emptyState('No income off tour yet', 'Royalties, an advance or anything else that comes in for ' + name + ' between tours shows up here once it is logged.'),
+        list || (studio ? emptyState(WORDS.noStudioIncome, 'An advance, royalties or anything else that comes in for it shows up here once it is logged.')
+          : emptyState('No income off tour yet', 'Royalties, an advance or anything else that comes in for ' + name + ' between tours shows up here once it is logged.')),
         createdTour(id) ? h('p', { class: 'feed-checked' }, 'Income is logged from its bank deposit. ',
-          h('button', { class: 'linkbtn feed-catchup', type: 'button', onclick: function () { go(offRoute(name, 'cards')); } }, 'Open Cards/Links')) : null)
+          h('button', { class: 'linkbtn feed-catchup', type: 'button', onclick: function () { go(studio ? { name: 'tour', id: id, view: 'cards' } : offRoute(name, 'cards')); } }, 'Open Cards/Links')) : null)
     ];
   }
   function offToursSplit() {
     var now = [], soon = [], undated = [];
+    var studios = scopedStudios(), studioFirst = function (e) { var sp = G.studioSpan(e[1]); return sp ? sp.from : ''; };
+    studios.forEach(function (e) { if (!studioOver(e[1])) soon.push(e); });
+    var pnls = pnlMoneyRows(), today = G.tourToday();
+    var pnlLast = function (t) { return G.parseDay(t.pnlTo) ? t.pnlTo : G.parseDay(t.pnlFrom) ? t.pnlFrom : G.ymd(new Date(t.createdAt || 0)); };
+    var pnlSoon = function (t) { return (G.parseDay(t.pnlTo) || G.parseDay(t.pnlFrom)) && pnlLast(t) >= today; };
+    pnls.forEach(function (e) { if (pnlSoon(e[1])) soon.push(e); });
+    var startOf = function (e) { return G.isStudioDoc(e[1]) ? studioFirst(e) : G.isPnlDoc(e[1]) ? (e[1].pnlFrom || pnlLast(e[1])) : runStart(e[1]); };
+    var nightOf = function (e) { return G.isStudioDoc(e[1]) ? studioFirst(e) : G.isPnlDoc(e[1]) ? (e[1].pnlFrom || pnlLast(e[1])) : firstNight(e[1]); };
     scopedTours().forEach(function (e) {
       if (tourOver(e[1])) return;
       if (!firstNight(e[1])) undated.push(e);
@@ -17858,12 +20782,21 @@
       else soon.push(e);
     });
     soon.sort(function (a, b) {
-      return String(runStart(a[1])).localeCompare(String(runStart(b[1]))) || String(firstNight(a[1])).localeCompare(String(firstNight(b[1]))) ||
+      return String(startOf(a)).localeCompare(String(startOf(b))) || String(nightOf(a)).localeCompare(String(nightOf(b))) ||
         ((b[1].createdAt || 0) - (a[1].createdAt || 0));
     });
     undated.sort(function (a, b) { return (b[1].createdAt || 0) - (a[1].createdAt || 0); });
-    var past = historyYears().map(function (y) { return { year: y.year, tours: y.tours.filter(function (e) { return tourOver(e[1]); }) }; })
-      .filter(function (y) { return y.tours.length; });
+    var past = historyYears().map(function (y) { return { year: y.year, tours: y.tours.filter(function (e) { return tourOver(e[1]); }) }; });
+    var lastOf = function (e) { return G.isStudioDoc(e[1]) ? G.studioSpan(e[1]).to : G.isPnlDoc(e[1]) ? pnlLast(e[1]) : lastNight(e[1]); };
+    var pastPnls = pnls.filter(function (e) { return !pnlSoon(e[1]) && G.pnlBookYear(e[1]); });
+    studios.filter(function (e) { return studioOver(e[1]); }).concat(pastPnls).sort(function (a, b) { return String(lastOf(b)).localeCompare(String(lastOf(a))); }).forEach(function (e) {
+      var year = G.isPnlDoc(e[1]) ? G.pnlBookYear(e[1]) : studioFirst(e).slice(0, 4), slot = past.filter(function (y) { return y.year === year; })[0];
+      if (!slot) { past.push(slot = { year: year, tours: [] }); past.sort(function (a, b) { return b.year.localeCompare(a.year); }); }
+      var i = 0;
+      while (i < slot.tours.length && String(lastOf(slot.tours[i])) >= lastOf(e)) i += 1;
+      slot.tours.splice(i, 0, e);
+    });
+    past = past.filter(function (y) { return y.tours.length; });
     return { upcoming: now.concat(soon, undated), past: past };
   }
   function viewOffTours(fr, artist) {
@@ -17871,12 +20804,15 @@
     if (fr.host) here.list = (S.route && S.route.list) || null;
     var lists = offToursSplit(), books = bookArtists();
     var row = function (e, onSummary) {
-      return h('li', null, tourListRow(e, function () { openTour(e[0], tourBudget(e[0]).view, here, 'Tours', 'list'); }, onSummary,
-        { kind: true, none: WORDS.noDatesYet }));
+      var tap = G.isPnlDoc(e[1]) ? function () { go(pnlBookRoute(e[0], here, { to: here, label: 'Tours', short: 'Back' })); }
+        : function () { openTour(e[0], tourBudget(e[0]).view, here, 'Tours', 'list'); };
+      return h('li', null, tourListRow(e, tap, G.isPnlDoc(e[1]) ? null : onSummary, { kind: true, none: WORDS.noDatesYet }));
     };
     return h('div', { class: 'page tour has-tabs exp-page bt-page' },
       pageBar(offTopTabs(fr, artist, 'tours')),
       dbBanner(),
+      mayCreatePnl() ? h('button', { class: 'btn ghost block' + cfCls(true) + ' pnl-create', type: 'button', onclick: createPnlFromBudget },
+        icon('plus', 18), WORDS.createPnl) : null,
       lists.upcoming.length ? h('section', { class: 'hist-year' },
         h('h2', { class: 'mn-h mn-over hist-y' }, WORDS.upcoming),
         h('ul', { class: 'tour-list rows mn-list' }, lists.upcoming.map(function (e) { return row(e, null); }))) : null,
@@ -17903,7 +20839,7 @@
     return function () { go({ name: 'history', back: here, sum: { kind: 'tour', id: e[0], ls: { to: here, label: 'Tours', short: 'Back' } } }); };
   }
   function viewOffPay(fr, artist) {
-    var own = offPayOf(artist), body, top = null;
+    var own = offPayOf(offPayArtist(fr)), body, top = null;
     if (own) {
       top = myPayTop(own);
       body = myPayBody(own, getTour(own), { lead: h('p', { class: 'hist-who', style: 'margin-top:0' }, 'Your own book, between tours') });
@@ -17925,6 +20861,7 @@
   function offMoveOk(id, r) {
     var t = getTour(id), B = window.GR_BACKEND;
     if (!r || !r.chargeId || !t || !isOffTour(t) || offPayOf(artistOf(t)) !== id || !canWrite() || !canEditTour(id)) return false;
+    if (offPayOf(offPayArtist(offFrame())) !== id) return false;
     if (!B || !(B.patchMyPayBook || B.saveMyPayBook)) return false;
     var ch = G.isObj(t.charges) ? t.charges[r.chargeId] : null;
     if (!(G.isObj(ch) && !ch.accounted && G.num(ch.amount) > 0 && !ch.crewId && !G.crewSplitOf(ch))) return false;
@@ -18157,6 +21094,214 @@
       ];
     }, { label: 'Remove this expense?', onClose: function () { if (again) setTimeout(function () { if (!sheet) again(); }, 250); } });
   }
+  function pastMoving(id, on) { S.pastMoving = S.pastMoving || {}; if (on !== undefined) S.pastMoving[id] = on; return !!S.pastMoving[id]; }
+  function pastMoveTo(id, own) { var t = getTour(id); return t && isOffTour(t) ? pastToursOf(artistOf(t), id, own) : []; }
+  function pastBankLine(t, key, ch) {
+    return chargeSource(t, Object.assign({ id: key }, ch)) === 'PLAID' || (/^[py]./.test(String(key)) && !ch.byUser);
+  }
+  function pastChargeTo(id, key) {
+    var t = getTour(id), ch = t && G.isObj(t.charges) ? t.charges[key] : null;
+    return pastMoveTo(id, G.isObj(ch) && pastBankLine(t, key, ch));
+  }
+  function pastMoveLine(id, key, list) {
+    var t = getTour(id);
+    if (!t || !isOffTour(t) || t.deletedAt || !canWrite() || !canEditTour(id)) return false;
+    var ch = G.isObj(t.charges) ? t.charges[key] : null;
+    if (!G.isObj(ch) || ch.category === 'offdebt' || ch.fromTour || offMoveTwin(t, id, key) || G.homeBill(t, ch)) return false;
+    if (pastBankLine(t, key, ch)) return createdTour(id) && pastMoveTo(id, true).length > 0;
+    return (list || pastMoveTo(id)).length > 0;
+  }
+  function pastMoveOk(id, r, list) { return !!(r && r.chargeId) && pastMoveLine(id, String(r.chargeId), list); }
+  function pastIncomeOk(id, x, row) {
+    var B = window.GR_BACKEND, t = getTour(id), e = t && x && x.id != null && G.isObj(t.otherIncome) ? t.otherIncome[String(x.id)] : null;
+    if (!t || !isOffTour(t) || t.deletedAt || !G.isObj(e) || (e.kind !== 'advance' && e.kind !== 'other') || e.unsorted) return false;
+    if (!canWrite() || !canEditTour(id) || !createdTour(id) || !B || !B.undoDeposit || !B.catalogIncome) return false;
+    if (!G.isObj(row) || !row.can || String(row.id) !== String(x.id) || !row.tour || row.tour.id !== id ||
+      (row.kind != null && row.kind !== e.kind)) return false;
+    return pastMoveTo(id, true).length > 0;
+  }
+  function pastMovePlan(bookId, toId, key) {
+    var book = getTour(bookId), to = getTour(toId);
+    var ch = book && G.isObj(book.charges) ? book.charges[key] : null;
+    if (!G.isObj(ch) || !to) return null;
+    var line = JSON.parse(JSON.stringify(ch)), crew = {}, map = {};
+    delete line.id;
+    var who = function (pid) {
+      if (Object.prototype.hasOwnProperty.call(map, pid)) return map[pid];
+      if (crewPerson(to, pid)) return (map[pid] = pid);
+      var p = crewPerson(book, pid);
+      if (!p) return (map[pid] = pid);
+      var same = crewGroups(to, true).all.filter(function (q) { return samePerson(q, p); })[0];
+      if (same) return (map[pid] = same.id);
+      crew[pid] = G.isHelper(p) ? JSON.parse(JSON.stringify(book.crew[pid]))
+        : { name: String(p.name || '').trim(), title: String(p.title || '').trim(), member: !!G.isMember(p), helper: true, createdAt: G.num(p.createdAt) || Date.now() };
+      return (map[pid] = pid);
+    };
+    if (line.crewId) line.crewId = who(String(line.crewId));
+    var split = G.crewSplitOf(ch);
+    if (split) {
+      var out = {}, moved = false;
+      Object.keys(split).forEach(function (k) {
+        var n = who(k);
+        if (n !== k) moved = true;
+        out[n] = Math.round((G.num(out[n]) + split[k]) * 100) / 100;
+      });
+      if (moved) line.crewSplit = out;
+    }
+    line.fromOff = bookId;
+    var amt = Math.round(G.num(ch.amount) * 100) / 100, imp = null, offImp = null;
+    var bi = ch.importId && G.isObj(book.imports) ? book.imports[ch.importId] : null;
+    var there = G.isObj(to.charges) ? to.charges[key] : null, landed = G.isObj(there) && there.fromOff === bookId;
+    if (G.isObj(bi)) {
+      var had = G.isObj(to.imports) && G.isObj(to.imports[ch.importId]) ? to.imports[ch.importId] : null;
+      if (!landed) imp = Object.assign({}, bi, had || {}, { count: (had ? G.num(had.count) : 0) + 1,
+        total: Math.round(((had ? G.num(had.total) : 0) + amt) * 100) / 100 });
+      offImp = { count: Math.max(0, G.num(bi.count) - 1), total: Math.round((G.num(bi.total) - amt) * 100) / 100 };
+    }
+    var feed = /^p./.test(String(key)) && chargeSource(book, Object.assign({ id: key }, ch)) === 'PLAID' ? String(key).slice(1) : null;
+    return { line: line, crew: crew, imp: imp, offImp: offImp, feed: feed };
+  }
+  async function pastMoveCharge(id, key, toId) {
+    if (pastMoving(id) || offMoving(id)) return false;
+    var prior = pastMoveJobs(id).filter(function (j) { return j.key === key; })[0] || null;
+    if (prior) toId = prior.to;
+    var may = prior ? canWrite() && canEditTour(id) : pastMoveLine(id, key) && pastChargeTo(id, key).some(function (p) { return p.id === toId; });
+    var plan = may ? pastMovePlan(id, toId, key) : null;
+    if (!plan) { toast('That entry isn’t there anymore.'); return false; }
+    pastMoving(id, true);
+    try {
+      if (!prior) {
+        if (!(await catOnBook(toId, plan.line.category, true))) return false;
+        var on = { charges: {} };
+        on.charges[key] = plan.line;
+        if (Object.keys(plan.crew).length) on.crew = plan.crew;
+        if (plan.imp) { on.imports = {}; on.imports[plan.line.importId] = plan.imp; }
+        if (!(await api.update(toId, on))) return false;
+        var got = getTour(toId), there = got && G.isObj(got.charges) ? got.charges[key] : null;
+        if (!G.isObj(there) || there.fromOff !== id) {
+          toast(G.tourFinished(got) ? G.FINISH_REFUSAL : 'That tour didn’t take it. It’s still on Off Tour.', 4200);
+          return false;
+        }
+      }
+      var off = { charges: {} };
+      off.charges[key] = null;
+      if (plan.offImp) { off.imports = {}; off.imports[plan.line.importId] = plan.offImp; }
+      if (!(await api.update(id, off))) return false;
+      if (S.drafts) delete S.drafts['exp:' + id];
+      if (plan.feed) pastFeedFollow([plan.feed]);
+      return toId;
+    } finally { pastMoving(id, false); }
+  }
+  async function pastMoveIncome(id, key, toId, row) {
+    var B = window.GR_BACKEND;
+    if (pastMoving(id)) return false;
+    var t = getTour(id), e = t && G.isObj(t.otherIncome) ? t.otherIncome[key] : null;
+    if (!G.isObj(e) || !pastIncomeOk(id, { id: key }, row) || !pastMoveTo(id, true).some(function (p) { return p.id === toId; })) {
+      toast('That entry isn’t there anymore.'); return false;
+    }
+    var kind = e.kind, words = kind === 'other' ? G.otherNote(e.label) : '';
+    pastMoving(id, true);
+    try {
+      var out = null, res = null;
+      try { out = await B.undoDeposit(key, { tourId: id }); } catch (err) { out = null; }
+      if (!out || !out.ok) { toast(out ? undoWhyWords(out) : 'Couldn’t move it. Try again in a moment.', 4200); return false; }
+      try { res = await B.catalogIncome(key, { tourId: toId, showId: null, kind: kind, note: words || null }); } catch (err) { res = null; }
+      S.incomeNew = null; ensureIncomeNew(id);
+      if (!res || !res.ok) { toast('It’s back in New income. Log it to Past tour from there.', 4200); return false; }
+      return toId;
+    } finally { pastMoving(id, false); }
+  }
+  function pastFeedFollow(ids) {
+    var B = window.GR_BACKEND;
+    if (S.mode !== 'db' || !B || !B.feedLineFollow || !ids.length) return;
+    Promise.resolve().then(function () { return B.feedLineFollow(ids); }).catch(function () {   });
+  }
+  function pastMoveJobs(id) {
+    var t = getTour(id), out = [];
+    if (!t || !isOffTour(t)) return out;
+    var same = function (a, b) {
+      return G.isObj(a) && G.isObj(b) && String(a.date || '') === String(b.date || '') &&
+        Math.round(G.num(a.amount) * 100) === Math.round(G.num(b.amount) * 100) && String(a.importId || '') === String(b.importId || '');
+    };
+    var here = G.isObj(t.charges) ? t.charges : {};
+    bandTours(artistOf(t)).forEach(function (e) {
+      var there = G.isObj(e[1].charges) ? e[1].charges : {};
+      Object.keys(there).forEach(function (k) {
+        var x = there[k];
+        if (G.isObj(x) && x.fromOff === id && same(here[k], x)) out.push({ coll: 'charges', key: k, to: e[0] });
+      });
+    });
+    return out;
+  }
+  function pastMoveSettle(id) {
+    S.pastSettled = S.pastSettled || {};
+    if (!S.loaded || !canWrite() || !canEditTour(id) || pastMoving(id) || offMoving(id) || Date.now() - (S.pastSettled[id] || 0) < 60e3) return;
+    var t = getTour(id), jobs = pastMoveJobs(id);
+    if (!jobs.length) return;
+    S.pastSettled[id] = Date.now();
+    var patch = {}, imps = {}, feeds = [];
+    jobs.forEach(function (j) {
+      (patch[j.coll] = patch[j.coll] || {})[j.key] = null;
+      if (j.coll !== 'charges') return;
+      var ch = t.charges[j.key], bi = ch.importId && G.isObj(t.imports) ? t.imports[ch.importId] : null;
+      if (G.isObj(bi)) {
+        var m = imps[ch.importId] = imps[ch.importId] || { count: G.num(bi.count), total: G.num(bi.total) };
+        m.count = Math.max(0, m.count - 1); m.total = Math.round((m.total - G.num(ch.amount)) * 100) / 100;
+      }
+      if (/^p./.test(j.key) && chargeSource(t, Object.assign({ id: j.key }, ch)) === 'PLAID') feeds.push(j.key.slice(1));
+    });
+    if (Object.keys(imps).length) patch.imports = imps;
+    pastMoving(id, true);
+    quietUpdate(id, patch).then(function (ok) {
+      pastMoving(id, false);
+      if (ok && feeds.length) pastFeedFollow(feeds);
+      render(true);
+    }, function () { pastMoving(id, false); });
+  }
+  function pastMoveBtn(id, r, again) {
+    return h('button', { class: 'sw-edit tray-move', type: 'button', 'aria-label': 'Move ' + r.label + ' to a past tour',
+      onclick: function () { pastMoveAskCharge(id, String(r.chargeId), again); } }, icon('history', 16), 'Past tour');
+  }
+  function pastMoveAskCharge(id, key, again) {
+    var t = getTour(id), ch = t && G.isObj(t.charges) ? t.charges[key] : null;
+    if (!G.isObj(ch)) { toast('That entry isn’t there anymore.'); return; }
+    pastMoveAsk(id, { label: String(ch.merchant || '').trim() || 'This line', amount: G.num(ch.amount), list: pastChargeTo(id, key),
+      go: function (toId) { return pastMoveCharge(id, key, toId); } }, again);
+  }
+  function pastMoveAskIncome(id, x, row, again) {
+    pastMoveAsk(id, { label: otherName(x), amount: G.num(x.amount), list: pastMoveTo(id, true),
+      go: function (toId) { return pastMoveIncome(id, String(x.id), toId, row); } }, again);
+  }
+  function pastMoveAsk(id, line, again) {
+    var list = line.list || [];
+    if (!list.length) { toast('No tour of this artist ended in the last ' + PAST_DAYS + ' days.'); return; }
+    var pick = list[0], busy = false;
+    var title = h('h2', { class: 'sh-title' }), sub = h('p', { class: 'sh-sub' });
+    var say = function () {
+      title.textContent = 'Move ' + line.label + ' ' + G.moneyCents(line.amount) + ' to ' + pick.name + '?';
+      sub.textContent = 'It leaves Off Tour and counts on ' + pick.name + '.';
+    };
+    say();
+    openSheet(function () {
+      return [title, sub,
+        list.length > 1 ? cpaAsk('Which tour', chipRow(list.map(pastTourWords), pastTourWords(pick), function (w) {
+          pick = list.filter(function (p) { return pastTourWords(p) === w; })[0] || pick;
+          say();
+        })) : null,
+        h('div', { class: 'stack' },
+          h('button', { class: 'btn primary block' + cfCls(true), type: 'button', onclick: async function (e) {
+            if (busy) return;
+            busy = true; e.currentTarget.disabled = true;
+            var to = await line.go(pick.id), went = to ? getTour(to) : null;
+            busy = false;
+            closeSheet();
+            if (to) toast('Moved to ' + ((went && String(went.name || '').trim()) || pick.name));
+            render(true);
+          } }, 'Move'),
+          h('button', { class: 'btn ghost block' + cfCls(false), type: 'button', autofocus: true, onclick: function () { closeSheet(); } }, 'Cancel'))
+      ];
+    }, { label: 'Move to a past tour', onClose: function () { if (again) setTimeout(function () { if (!sheet) again(); }, 250); } });
+  }
   function viewOffEmpty(view) {
     var bar = tourTabs(null, view);
     var page = function (title, body, extra) {
@@ -18325,8 +21470,12 @@
     var exit = function () { return id ? go({ name: 'tour', id: id, view: 'menu' }) : go({ name: 'home' }); };
     var people = wzHasPeople();
     var show = t ? G.isShowDoc(t) : S.route.kind === 'show';
+    var studio = t ? G.isStudioDoc(t) : S.route.kind === 'studio';
     var steps;
-    if (show) {
+    if (studio) {
+      steps = people ? [1, 2] : [1];
+      if (steps.indexOf(step) < 0) step = steps[steps.length - 1];
+    } else if (show) {
       steps = people ? [1, 2, 3] : [1, 2];
       if (steps.indexOf(step) < 0) step = steps[steps.length - 1];
     } else {
@@ -18345,7 +21494,8 @@
           id ? h('button', { class: 'linkbtn' + cfCls(false), type: 'button', onclick: exit }, 'Finish later') : null,
           stop ? h('button', { class: 'linkbtn' + cfCls(false), type: 'button', onclick: function () { wzStop(id); } }, 'Cancel') : null)));
     var body;
-    if (show) body = !id || step <= 1 ? wzShowSheet(id, t) : step === 2 ? wzShowDays(id, t) : wzCrew(id, t);
+    if (studio) body = !id || step <= 1 ? wzStudio(id, t) : wzCrew(id, t);
+    else if (show) body = !id || step <= 1 ? wzShowSheet(id, t) : step === 2 ? wzShowDays(id, t) : wzCrew(id, t);
     else if (!id || step <= 1) body = wzName(id, t);
     else if (step === 2) body = wzCrew(id, t);
     else body = wzShows(id, t);
@@ -18368,7 +21518,7 @@
   }
   function wzStop(id) {
     var leave = function () {
-      ['wzName', 'wzArtist', 'wzDate', 'wzDays', 'wzPage', 'wzFirst', 'wzShow'].forEach(function (k) { delete S.drafts[k]; });
+      ['wzName', 'wzArtist', 'wzDate', 'wzDays', 'wzPage', 'wzFirst', 'wzShow', 'wzStudio'].forEach(function (k) { delete S.drafts[k]; });
       go({ name: 'home' });
     };
     if (!id) { leave(); return; }
@@ -18388,16 +21538,107 @@
   }
   function wzCrew(id, t) {
     var show = G.isShowDoc(t);
+    var studio = G.isStudioDoc(t);
     return h('div', { class: 'wz-body wz-crew' },
       h('h1', { class: 'wz-title' }, 'Who\u2019s on this ' + tourWord(t) + '?'),
       h('p', { class: 'wz-sub' }, 'Bring your people onto this ' + tourWord(t) + '. A Manager sees and edits everything on it, the money included. ' +
-        'Crew see the Overview, day sheets, guest list, stats, chat and their own pay. You can change all of it later.'),
+        (studio ? 'Crew see its days, the studio and the times, and their own pay.' : 'Crew see the Overview, day sheets, guest list, stats, chat and their own pay.') +
+        ' You can change all of it later.'),
       wzPeopleNode(id),
-      wzFoot(function () { go({ name: 'wizard', id: id, step: show ? 2 : 1 }); }, show ? 'Finish' : 'Next', function () {
+      wzFoot(function () { go({ name: 'wizard', id: id, step: show ? 2 : 1 }); }, show || studio ? 'Finish' : 'Next', function () {
         blurActive();
-        if (show) wzShowFinish(id);
+        if (studio) wzStudioFinish(id);
+        else if (show) wzShowFinish(id);
         else go({ name: 'wizard', id: id, step: 3 });
       }));
+  }
+  function startStudio(artist, date, page) {
+    var day = G.parseDay(date) ? date : '';
+    S.drafts.wzStudio = { id: null, artist: String(artist || '').trim(), name: '', place: '', city: '', from: day, to: day, start: '', end: '',
+      page: G.isObj(page) && page.id ? { id: String(page.id), name: String(page.name || '') } : null };
+    go({ name: 'wizard', id: null, step: 1, kind: 'studio' });
+  }
+  function wzStudioDraft(id, t) {
+    var w = S.drafts.wzStudio;
+    if (G.isObj(w) && (w.id || null) === (id || null)) return w;
+    var si = id ? G.studioInfo(t) : null;
+    w = S.drafts.wzStudio = { id: id || null, artist: String(t && t.artist || ''), name: String(t && t.name || ''),
+      place: si ? si.place : '', city: si ? si.city : '', from: si ? si.from : '', to: si ? si.to : '',
+      start: si ? si.start : '', end: si ? si.end : '', page: null };
+    return w;
+  }
+  function studioFields(w) {
+    var text = function (label, key, ph) {
+      return field(label, h('input', { class: 'input', type: 'text', maxlength: 80, autocomplete: 'off', value: w[key] || '', placeholder: ph,
+        'aria-label': label, oninput: function (e) { w[key] = e.target.value; } }));
+    };
+    var toIn = h('input', { class: 'input', type: 'date', value: w.to || '', 'aria-label': 'Last day',
+      onchange: function (e) { w.to = e.target.value; } });
+    var fromIn = h('input', { class: 'input', type: 'date', value: w.from || '', 'aria-label': 'First day',
+      onchange: function (e) {
+        w.from = e.target.value;
+        if (G.parseDay(w.from) && (!G.parseDay(w.to) || w.to < w.from)) { w.to = w.from; toIn.value = w.from; }
+      } });
+    return [
+      text('Name', 'name', 'Optional'),
+      text('Studio', 'place', 'The Panda Studios'),
+      text('City', 'city', 'Fremont, CA'),
+      h('div', { class: 'field-row' }, field('First day', fromIn), field('Last day', toIn)),
+      h('div', { class: 'field-row' },
+        field('Starts', clockIn(function () { return w.start; }, function (v) { w.start = v; }, '11', 'AM')),
+        field('Ends', clockIn(function () { return w.end; }, function (v) { w.end = v; }, '11', 'PM')))
+    ];
+  }
+  function wzStudio(id, t) {
+    var w = wzStudioDraft(id, t), busy = false;
+    var submit = async function (e) {
+      e.preventDefault();
+      if (busy) return;
+      var bad = G.studioCheck({ from: w.from, to: w.to });
+      if (bad) { toast(bad); return; }
+      blurActive();
+      busy = true;
+      var tid = w.id;
+      if (!tid) {
+        var made = await makeNewStudio(w);
+        busy = false;
+        if (!made) return;
+        tid = w.id = made;
+      } else {
+        var patch = G.studioEditPatch(getTour(tid), w, S.mode === 'db' && !createdTour(tid));
+        var ok = !!patch && await api.update(tid, patch);
+        busy = false;
+        if (!ok) return;
+      }
+      if (wzHasPeople()) go({ name: 'wizard', id: tid, step: 2 });
+      else wzStudioFinish(tid);
+    };
+    return h('div', { class: 'wz-body ds-ed-sheet' },
+      h('h1', { class: 'wz-title' }, 'Studio time'),
+      h('p', { class: 'sh-sub clean' }, WORDS.studioSub(w.artist)),
+      h('form', { class: 'sh-form ds-editor', novalidate: true, onsubmit: submit }, studioFields(w), wzFoot(null, 'Next')));
+  }
+  async function makeNewStudio(w) {
+    var id = newId();
+    var onPage = G.isObj(w.page) ? w.page : actingAs() ? actingCard() : null;
+    var doc = G.studioDoc({ name: w.name, artist: w.artist, place: w.place, city: w.city, from: w.from, to: w.to, start: w.start, end: w.end,
+      artistId: onPage && onPage.id && String(onPage.name || '').trim().toLowerCase() === String(w.artist || '').trim().toLowerCase() ? onPage.id : null });
+    if (!doc) return null;
+    doc.setupDone = false;
+    doc.setupStep = 2;
+    if (!(await api.create(id, doc))) return null;
+    S.wzMade = S.wzMade || {}; S.wzMade[id] = true;
+    return id;
+  }
+  function wzStudioFinish(id) {
+    blurActive();
+    delete S.drafts.wzStudio;
+    var sp = G.studioSpan(getTour(id));
+    S.lastNet[id] = 0;
+    bookTabSet('costs');
+    go({ name: 'tour', id: id, view: 'costs' });
+    api.update(id, { setupDone: true, setupStep: 5 });
+    if (sp) toast(WORDS.studioAdded(G.studioSpanWords(sp.from, sp.to, true)));
   }
   function wzFoot(back, label, onNext) {
     return h('div', { class: 'wz-foot' },
@@ -18844,6 +22085,129 @@
         income: a.card === 'debit' && Array.isArray(a.income) ? a.income.map(String).sort() : [], label: cardShort(name, bank) };
     });
   }
+  var OFF_CARD = 'offcard:';
+  var OFF_CARD_MOVES = 20;
+  function offCardKey(s) {
+    return String(s == null ? '' : s).replace(/¬∑/g, '·').replace(/\s+/g, ' ').trim().toLowerCase();
+  }
+  function offOwnBooks() {
+    var out = [], seen = {};
+    var look = function (t, id) { if (!seen[id] && isOffTour(t) && !t.deletedAt && createdTour(id)) { seen[id] = true; out.push({ id: id, t: t }); } };
+    S.tours.forEach(look);
+    Object.keys(S.pending).forEach(function (id) { look(S.pending[id], id); });
+    return out;
+  }
+  function offCardBook(card) {
+    if (!card) return null;
+    var books = offOwnBooks(), today = G.ymd(new Date()), byId = {}, labels = S.labels || {};
+    books.forEach(function (b) { byId[b.id] = b; });
+    var id = String(card.id || ''), keys = (Array.isArray(card.names) ? card.names : [card.name]).map(offCardKey).filter(Boolean);
+    var claims = [];
+    Object.keys(labels).forEach(function (k) {
+      var c = labels[k];
+      if (k.indexOf(OFF_CARD) !== 0 || k.length <= OFF_CARD.length || !G.isObj(c) || c.kind !== 'offcard') return;
+      var key = offCardKey(c.name), tail = /··\s*[a-z0-9]{1,8}$/.test(key);
+      offCardMoves(c).forEach(function (m) {
+        if (!byId[m.book] || !G.parseDay(m.from)) return;
+        claims.push({ id: k.slice(OFF_CARD.length), key: key, tail: tail, book: byId[m.book], from: m.from, at: m.at });
+      });
+    });
+    var mine = claims.filter(function (c) { return !!id && c.id === id; });
+    if (!mine.length) mine = claims.filter(function (c) { return c.tail && keys.indexOf(c.key) >= 0; });
+    var best = null;
+    mine.forEach(function (c) { if (c.from <= today && (!best || c.from > best.from || (c.from === best.from && c.at > best.at))) best = c; });
+    if (best) return { id: best.book.id, t: best.book.t, moved: true };
+    var logs = books.filter(function (b) { return String(b.t.offFrom == null ? '9999' : b.t.offFrom) <= today; });
+    return logs.length === 1 ? { id: logs[0].id, t: logs[0].t, moved: false } : null;
+  }
+  function offCardMoves(c) {
+    if (!G.isObj(c)) return [];
+    var plain = function (m) { return { book: String(m.book == null ? '' : m.book), from: String(m.from == null ? '' : m.from), at: G.num(m.at) }; };
+    var list = (Array.isArray(c.moves) ? c.moves : []).filter(G.isObj).map(plain), top = plain(c), last = list[list.length - 1];
+    if (!last || last.book !== top.book || last.from !== top.from || last.at !== top.at) list.push(top);
+    return list;
+  }
+  function offCardsHere(id, list) {
+    if (S.mode === 'db' && !S.labelsIn) return [];
+    return (list || []).filter(function (c) { var b = offCardBook(c); return !!b && b.id === id; });
+  }
+  function offCardAway(id, c) {
+    var b = offCardBook(c);
+    return !!b && b.moved && b.id !== id;
+  }
+  function offCardsMine(id) {
+    return S.mode === 'db' && !!store.db && !!S.labelsIn && isOffTour(getTour(id)) && createdTour(id) && canWrite();
+  }
+  function offCardConnectNode(id) {
+    if (!offCardsMine(id) || !bookCards().length) return null;
+    return h('div', { class: 'stack' }, h('button', { class: 'btn primary block off-connect' + cfCls(true), type: 'button',
+      onclick: function () { openOffCardConnect(id); } }, icon('card', 18), 'Connect a card'));
+  }
+  function offCardWhere(card) {
+    var b = offCardBook(card);
+    return b ? 'On ' + (artistOf(b.t) || 'Off Tour') : 'Not on a project';
+  }
+  function openOffCardConnect(id) {
+    var t = getTour(id);
+    if (!t || !offCardsMine(id)) return;
+    var here = artistOf(t) || 'Off Tour';
+    openSheet(function () {
+      var rows = bookCards().map(function (c) {
+        var b = offCardBook(c), label = h('div', { class: 'row-label' }, c.label, h('span', { class: 'hint' }, offCardWhere(c)));
+        if (b && b.id === id) return h('div', { class: 'row card-line' }, label);
+        return h('button', { class: 'row rowbtn card-line', type: 'button', onclick: function () { offCardAsk(id, c); } },
+          label, icon('chevron', 18));
+      });
+      return [
+        h('h2', { class: 'sh-title' }, 'Connect a card'),
+        h('p', { class: 'sh-sub' }, 'Pick a card to move it to ' + here + '. A card belongs to one project at a time.'),
+        h('div', { class: 'ledger cards-list' }, rows),
+        h('div', { class: 'stack' },
+          h('button', { class: 'btn ghost block' + cfCls(false), type: 'button', onclick: function () { closeSheet(); } }, 'Done'))
+      ];
+    }, { label: 'Connect a card' });
+  }
+  function offCardAsk(id, c) {
+    var here = artistOf(getTour(id)) || 'Off Tour';
+    confirmSheet({ title: 'Move ' + c.label + ' to ' + here + '?', cf: true,
+      body: 'From now on its charges between tours go to ' + G.whose(here) + ' book. Charges already filed stay where they are.',
+      action: 'Move', onConfirm: function () { return offCardMove(id, c); } });
+  }
+  function offCardFresh(key) {
+    if (S.mode !== 'db' || !store.db) return Promise.resolve(undefined);
+    var ref = store.db.doc('labels/' + key);
+    if (!ref || typeof ref.get !== 'function') return Promise.resolve(undefined);
+    var ask = Promise.resolve().then(function () { return ref.get(); })
+      .then(function (snap) { return snap && snap.exists ? snap.data() : null; }).catch(function () { return undefined; });
+    return Promise.race([ask, new Promise(function (res) { setTimeout(function () { res(undefined); }, 3000); })]);
+  }
+  async function offCardMove(id, c) {
+    var t = getTour(id);
+    if (!t || !c || !c.id || !offCardsMine(id)) return false;
+    var key = OFF_CARD + String(c.id), here = artistOf(t);
+    var had = Object.prototype.hasOwnProperty.call(S.labels, key), was = S.labels[key];
+    var fresh = await offCardFresh(key), base = fresh === undefined ? was : fresh;
+    var mine = G.isObj(base) && base.kind === 'offcard';
+    if (mine && String(base.book || '') === id) {
+      S.labels[key] = base;
+      toast(c.label + ' is on ' + (here || 'this book') + ' now');
+      return true;
+    }
+    var day = G.ymd(new Date()), at = Date.now();
+    var moves = (mine ? offCardMoves(base) : []).filter(function (m) { return !!m.book && !!G.parseDay(m.from); });
+    moves.push({ book: id, from: day, at: at });
+    var rec = { kind: 'offcard', book: id, artist: here, name: String(c.name || ''), from: day, at: at, moves: moves.slice(-OFF_CARD_MOVES) };
+    S.labels[key] = rec;
+    try {
+      await store.db.doc('labels/' + key).set(rec);
+    } catch (e) {
+      if (had) S.labels[key] = was; else delete S.labels[key];
+      saveFailed('offcard', e);
+      return false;
+    }
+    toast(c.label + ' is on ' + (here || 'this book') + ' now');
+    return true;
+  }
   function cardRow(id, t, card, paidCell, creditCell, cashCell) {
     var sm = G.cardSummary(card, t);
     var bank = cardBank(card);
@@ -19115,12 +22479,13 @@
   }
   function tabExpenses(id, t, c, o) {
     var off = !!(o && o.off), partsOnly = !!(o && o.parts), readOnly = !!(o && o.readOnly);
+    var studio = G.isStudioDoc(t);
     if (!off && !partsOnly) syncCrew(id);
     if (!partsOnly && !readOnly) tasksSeen(id, taskCharges(t).map(function (x) { return 'exp:' + x.ch.id; }));
     if (!partsOnly) healCatNames(id);
     if (off) c = Object.assign({}, c, { lines: c.lines.filter(function (l) { return l.key !== 'offdebt' && (l.key === 'commission' || !G.isDerived(l.key)); }) });
-    else c = Object.assign({}, c, { lines: c.lines.map(function (l) { return l.key === 'commission' && G.num(l.paid) < 0 ? Object.assign({}, l, { paid: 0 }) : l; }) });
-    var figured = function (k) { return G.isDerived(k) && !(off && k === 'commission'); };
+    else if (!studio) c = Object.assign({}, c, { lines: c.lines.map(function (l) { return l.key === 'commission' && G.num(l.paid) < 0 ? Object.assign({}, l, { paid: 0 }) : l; }) });
+    var figured = function (k) { return G.isDerived(k) && !((off || studio) && k === 'commission'); };
     var edit = canEditTour(id) && !readOnly;
     var chev = edit ? h('span', { class: 'ex-chev', 'aria-hidden': 'true' }) : null;
     var head = h('div', { class: 'row ex-head', 'aria-hidden': 'true' },
@@ -19205,7 +22570,7 @@
     entries.sort(function (a, b) { return (b.amt - a.amt) || (b.owed - a.owed) || (a.i - b.i); });
     var rows = [];
     feedCards.forEach(function (card) { rowKey = 'feed:' + card.id; rows.push(cardRow(id, t, card, paidCell, creditCell, cashCell)); });
-    tourCards(t).filter(function (c) { return !c.debt; }).forEach(function (c) { rows.push(plainCardRow(id, t, c)); });
+    tourCards(t).filter(function (c) { return !c.debt && !(off && offCardAway(id, c)); }).forEach(function (c) { rows.push(plainCardRow(id, t, c)); });
     if (!off && !partsOnly) { syncCards(id); ensurePile(id); }
     entries.forEach(function (e) {
       rows.push(lineRow(e.l));
@@ -19261,7 +22626,7 @@
       h('strong', { class: 'amt num ex-cash' }, money(cashTotal)),
       chev ? chev.cloneNode() : null));
     var charges = G.rows(t && t.charges);
-    var baselineOffer = (!off && canEditTour(id) && budgetIsBlank(t) && !charges.length && baselineCandidates(id).length)
+    var baselineOffer = (!off && !studio && canEditTour(id) && budgetIsBlank(t) && !charges.length && baselineCandidates(id).length)
       ? h('button', { class: 'btn quiet block', type: 'button', style: 'margin-bottom:14px',
           onclick: function () { openBaselinePicker(id); } },
           icon('copy', 18), 'Start from a previous tour’s budget')
@@ -19678,13 +23043,16 @@
           onclick: function () { openCpaMarks(id, r, function () { reopen(); }); } }, icon('tabsheet', 16), 'For CPA');
       };
       var anyMove = all.some(function (r) { return offMoveOk(id, r); });
+      var pastList = pastMoveTo(id), anyPast = pastList.length > 0 && all.some(function (r) { return pastMoveOk(id, r, pastList); });
+      var pastSay = anyPast ? ' Came in after a tour? Swipe it left and tap Past tour.' : '';
       var anySlide = all.some(function (r) { return slides(r) || mine(r); });
       var anyGroup = all.some(canGroup), anyWho = all.some(canWho), anyInfo = all.some(canInfo), anyCpa = all.some(canCpa);
       var fit = function (acts) { if (acts.length >= 5) acts.forEach(function (b) { b.style.width = '64px'; }); return acts; };
       var entryNode = function (r) {
           var line = logRow(r);
           var first = (canGroup(r) ? [groupBtn(r)] : canWho(r) ? [whoBtn(r)] : []).concat(canCpa(r) ? [cpaBtn(r)] : [], canInfo(r) ? [infoBtn(r)] : [])
-            .concat(offMoveOk(id, r) ? [offMoveBtn(id, r, function () { reopen(); })] : []);
+            .concat(offMoveOk(id, r) ? [offMoveBtn(id, r, function () { reopen(); })] : [])
+            .concat(pastMoveOk(id, r, pastList) ? [pastMoveBtn(id, r, function () { reopen(); })] : []);
           if (mine(r)) {
             return swipeRow(line, fit(first.concat([
               h('button', { class: 'sw-edit', type: 'button', 'aria-label': 'Edit ' + r.label,
@@ -19726,13 +23094,14 @@
         loose ? h('p', { class: 'note' }, plural(loose, 'entry').replace('entrys', 'entries') + ' under Crew ' + (loose === 1 ? 'isn\u2019t' : 'aren\u2019t') + ' anyone\u2019s yet.' +
           (anyWho ? ' Swipe one left and tap Who.' : '')) : null,
         anyCpa ? h('p', { class: 'note sw-hint' }, cpaSwipeWords(anyGroup, anyWho, anySlide, anyInfo),
-          anyMove ? ' Yours, not the band’s? Swipe it left and tap Move to MY PAY.' : '')
+          anyMove ? ' Yours, not the band’s? Swipe it left and tap Move to MY PAY.' : '', pastSay)
         : anySlide || anyGroup || anyWho ? h('p', { class: 'note sw-hint' }, anyGroup
           ? 'Swipe one left to move it to another group' + (anySlide ? ', or to fix it.' : '.')
           : anyWho ? 'Swipe one left to say who it was for' + (anySlide ? ', or to fix it.' : '.')
-          : 'Logged one wrong? Swipe it left to fix it.', anyMove ? ' Yours, not the band’s? Swipe it left and tap Move to MY PAY.' : '')
-          : anyInfo ? h('p', { class: 'note sw-hint' }, 'Swipe a charge left for More info.' + (anyMove ? ' Yours, not the band’s? Swipe it left and tap Move to MY PAY.' : ''))
-          : anyMove ? h('p', { class: 'note sw-hint' }, 'Yours, not the band’s? Swipe it left and tap Move to MY PAY.') : null,
+          : 'Logged one wrong? Swipe it left to fix it.', anyMove ? ' Yours, not the band’s? Swipe it left and tap Move to MY PAY.' : '', pastSay)
+          : anyInfo ? h('p', { class: 'note sw-hint' }, 'Swipe a charge left for More info.' + (anyMove ? ' Yours, not the band’s? Swipe it left and tap Move to MY PAY.' : '') + pastSay)
+          : anyMove ? h('p', { class: 'note sw-hint' }, 'Yours, not the band’s? Swipe it left and tap Move to MY PAY.' + pastSay)
+          : anyPast ? h('p', { class: 'note sw-hint' }, pastSay.trim()) : null,
         body,
         away.length ? [h('h3', { class: 'sh-h3' }, 'During a tour \u00b7 not counted here'),
           h('div', { class: 'ledger logged' }, away.map(entryNode))] : null,
@@ -19784,7 +23153,7 @@
     seen[bookId] = true;
     if (!artist) return out;
     var add = function (doc, id) {
-      if (seen[id] || !G.isObj(doc) || doc.deletedAt || artistOf(doc).toLowerCase() !== artist || !canSeeMoney(id)) return;
+      if (seen[id] || !G.isObj(doc) || doc.deletedAt || G.isPnlDoc(doc) || artistOf(doc).toLowerCase() !== artist || !canSeeMoney(id)) return;
       seen[id] = true;
       out.push({ id: id, doc: doc });
     };
@@ -19833,6 +23202,7 @@
     var guess = fields.how && !f.how ? G.cpaPayHowGuess(line.x, line.book) : '';
     var split = fields.how ? G.crewSplitOf(line.x) : null;
     var moveOk = !!fields.use && offMoveOk(bookId, r);
+    var pastOk = pastMoveOk(bookId, r);
     var mine = !!fields.use && !moveOk && offLineMine(getTour(bookId), bookId, line.x);
     var busy = false;
     var again = function () { if (back) setTimeout(back, 260); };
@@ -19889,6 +23259,9 @@
             segmented(['No', 'Yes'], f.keep === true ? 1 : f.keep === false ? 0 : -1,
               function (i) { f.keep = i === 1; }, 'Gear we’re keeping'),
             'Yes for gear or equipment the band keeps more than a year.') : null,
+          pastOk ? h('div', { class: 'stack' },
+            h('button', { class: 'btn ghost block' + cfCls(false), type: 'button',
+              onclick: function () { pastMoveAskCharge(bookId, String(r.chargeId), back); } }, icon('history', 18), 'Move to a past tour')) : null,
           h('div', { class: 'stack' },
             h('button', { class: 'btn primary block', type: 'submit' }, 'Save'),
             h('button', { class: 'btn ghost block', type: 'button', onclick: function () { closeSheet(); again(); } }, 'Cancel')))
@@ -20602,7 +23975,7 @@
     var t = sheetBook(id);
     var base = G.calc(t);
     var d = { commission: G.normCommission(t && t.commission) };
-    var filed = isOffTour(t) ? G.num((base.lines.filter(function (l) { return l.key === 'commission'; })[0] || {}).paid) : null;
+    var filed = isOffTour(t) || G.isStudioDoc(t) ? G.num((base.lines.filter(function (l) { return l.key === 'commission'; })[0] || {}).paid) : null;
     openSheet(function () {
       var readout = h('div', { class: 'preview' });
       function refresh() {
@@ -24389,6 +27762,7 @@
     { view: 'money', label: 'Income', icon: 'tabmoney' }];
   var BUDGET_TAB = { view: 'costs', label: 'Budget', icon: 'tabmoney', book: true };
   function tourTabs(id, current, o) {
+    if (id && G.isStudioDoc(getTour(id))) return offBar(offFrame());
     var tabs = TOUR_TABS.filter(function (t) { return t.view !== 'money' && t.view !== 'costs'; });
     tabs.splice(1, 0, BUDGET_TAB);
     crewWarm(id);
@@ -24409,7 +27783,7 @@
         }
         if (away && id) {
           if (t.book) { go(budgetLanding(id)); return; }
-          openTour(id, t.view, S.route, 'Back', offNow() ? 'frame' : null);
+          openTour(id, t.view, S.route, 'Back', offNow() || (!actingAs() && modeForced() === 'on') ? 'frame' : null);
           return;
         }
         var fromList = !!id && S.route.name === 'tour' && S.route.id === id && !!S.route.list;
@@ -24426,7 +27800,8 @@
     if (find) buttons.push(find);
     var half = Math.ceil(buttons.length / 2);
     return dock(buttons.slice(0, half), buttons.slice(half), (o && o.cur) || '',
-      (framed ? 'off:' : '') + (away ? 'away:' : '') + (find ? 'find:' : '') + (id || '') + '|' + current + '|' + tabs.map(function (t) { return t.label; }).join(','),
+      (framed ? 'off:' : '') + (away ? 'away:' : '') + (find ? 'find:' : '') + (id || '') + '|' + current + '|' + tabs.map(function (t) { return t.label; }).join(',') +
+        '|' + mineNow.join(','),
       { label: away ? 'Greenroom' : 'Tour sections', cls: find ? 'all-dock' : null });
   }
   function budgetLanding(id) {
@@ -25013,6 +28388,8 @@
       else S.route = { name: 'offtour', view: 'details' };
       return viewOffFrame();
     }
+    if (G.isStudioDoc(t)) return viewStudio(id, t, view);
+    if (G.isPnlDoc(t)) { S.route = pnlBookRoute(id, S.route.back || PF_HOME); return viewHistory(); }
     if (view === 'addshows' && canEditTour(id)) return viewAddShows(id, t);
     if (view === 'menu' || view === 'addshows') view = 'details';
     if (!canSeeMoney(id) && ['details', 'day', 'guests', 'chat', 'calendar', 'stats', 'costs', 'mypay'].indexOf(view) < 0) {
@@ -25106,6 +28483,91 @@
       h('div', { class: 'shows-panel' }, body),
       tourTabs(id, 'money'));
   }
+  function viewStudio(id, t, view) {
+    if (['costs', 'cards', 'money', 'mypay'].indexOf(view) < 0) view = bookTabNow();
+    if (!canSeeMoney(id) && view !== 'mypay') {
+      if (!roleKnown(id)) {
+        return h('div', { class: 'page tour has-tabs exp-page' }, tourBar(id), dbBanner(),
+          h('p', { class: 'note pay-note' }, 'Loading\u2026'), tourTabs(id, 'costs'));
+      }
+      view = 'mypay';
+    }
+    var wanted = view === 'costs' ? bookWanted(id) : null;
+    if (wanted) { S.route.view = wanted; view = wanted; }
+    if (view === 'mypay') {
+      var pay = viewMyPay(id, t), lv = canSeeMoney(id) ? null : leaveTourLink(id, createdTour(id));
+      if (lv) pay.insertBefore(lv, pay.childNodes[pay.childNodes.length - 1] || null);
+      return pay;
+    }
+    var c = G.calc(t);
+    var body = view === 'cards' ? tabCards(id, t)
+      : view === 'money' ? offIncome(id, t, c, artistOf(t))
+      : [studioLine(id, t), heroNode(t, id), tabExpenses(id, t, c)];
+    return h('div', { class: 'page tour has-tabs ' + (view === 'money' ? 'budget-page' : 'exp-page') },
+      tourBar(id, payTabs(id, t, 'costs')),
+      bookStrip(id, view),
+      dbBanner(),
+      body,
+      tourTabs(id, view));
+  }
+  function studioLine(id, t) {
+    var si = G.studioInfo(t);
+    if (!si) return null;
+    var where = [si.place, si.city].filter(Boolean).join(', ') || tourNameOf(t);
+    var when = [studioWhen(t, true), G.studioTimeWords(si.start, si.end)].filter(Boolean).join(' \u00b7 ');
+    return h('div', { class: 'st-line' },
+      h('div', { class: 'st-line-t' },
+        h('span', { class: 'st-line-w' }, where),
+        h('span', { class: 'st-line-s' }, h('span', { class: 'mini-tag' }, WORDS.kindStudio), h('span', { class: 'st-line-d' }, when))),
+      canEditTour(id) ? h('button', { class: 'btn ghost sm' + cfCls(false) + ' st-edit', type: 'button', 'aria-label': 'Edit the studio time',
+        onclick: function () { openStudioEdit(id); } }, 'Edit') : null);
+  }
+  function openStudioEdit(id) {
+    var t = getTour(id);
+    if (!t || !G.isStudioDoc(t)) return;
+    var si = G.studioInfo(t) || {}, busy = false;
+    var w = { name: String(t.name || ''), place: si.place || '', city: si.city || '', from: si.from || '', to: si.to || '', start: si.start || '', end: si.end || '' };
+    var artist = artistOf(t), B = window.GR_BACKEND;
+    openSheet(function () {
+      var save = async function (e) {
+        e.preventDefault();
+        if (busy) return;
+        var bad = G.studioCheck(w);
+        if (bad) { toast(bad); return; }
+        var keepLog = S.mode === 'db' && !createdTour(id);
+        var patch = G.studioEditPatch(getTour(id), w, keepLog);
+        if (!patch) return;
+        var logStays = keepLog && !!(G.studioEditPatch(getTour(id), w) || {}).cardLog;
+        blurActive();
+        busy = true;
+        var ok = await api.update(id, patch);
+        busy = false;
+        if (ok) { closeSheet(); toast(logStays ? WORDS.studioLogStays : 'Saved', logStays ? 6000 : undefined); render(true); }
+      };
+      return [
+        h('h2', { class: 'sh-title' }, 'Studio time'),
+        h('form', { class: 'sh-form ds-editor', novalidate: true, onsubmit: save }, studioFields(w),
+          h('div', { class: 'stack' },
+            h('button', { class: 'btn primary block' + cfCls(true), type: 'submit' }, 'Save'),
+            S.mode === 'db' && B && typeof B.ownsTour === 'function' ? h('button', { class: 'btn ghost block' + cfCls(false) + ' st-people', type: 'button',
+              onclick: function () { closeSheet(true); openStudioPeople(id); } }, WORDS.studioPeople) : null,
+            mayDeleteTour(id) ? h('button', { class: 'btn danger block', type: 'button',
+              onclick: function () { closeSheet(true); confirmDeleteTour(id, function () { go(offRoute(artist, 'tours')); }); } }, WORDS.deleteStudio) : null))
+      ];
+    }, { label: 'Edit the studio time' });
+  }
+  function openStudioPeople(id) {
+    var t = getTour(id);
+    if (!t || !G.isStudioDoc(t) || S.mode !== 'db' || !window.GR_BACKEND) return;
+    openSheet(function () {
+      return [
+        h('h2', { class: 'sh-title' }, 'Who\u2019s on this studio time?'),
+        h('p', { class: 'sh-sub' }, WORDS.studioPeopleSub),
+        peopleSection(id, { stay: true }),
+        leaveTourLink(id, createdTour(id))
+      ];
+    }, { label: WORDS.studioPeople });
+  }
   function rateShowOf(t) {
     var today = G.tourToday();
     var shows = G.rows(t && t.shows).filter(function (x) { return G.parseDay(x.date); });
@@ -25185,7 +28647,7 @@
   var rateOpening = false;
   var nightAskEl = null, nightAskClosed = 0;
   function nightAskBlocked() {
-    return !!(document.getElementById('gr-splash') || document.querySelector('.splash-note') ||
+    return !!(document.getElementById('gr-splash') || document.querySelector('.splash-note') || document.getElementById('gr-apptour') ||
       (fingerDown && Date.now() - fingerDown < 4000) || Date.now() - nightAskClosed < 15000);
   }
   function nightAskBusy() {
@@ -26008,6 +29470,7 @@
     suppliesSplashUp = true;
     var tries = 0, clear = 0;
     var show = function () {
+      if (document.getElementById('gr-apptour')) { clear = 0; setTimeout(show, 600); return; }
       if (tries++ > 60) { suppliesSplashUp = false; return; }
       if (document.getElementById('gr-splash') || document.querySelector('.splash-note') ||
         (fingerDown && Date.now() - fingerDown < 4000)) { clear = 0; setTimeout(show, 600); return; }
@@ -26552,24 +30015,25 @@
     row.leaveFill = function () {
       var on = typeof B.leaveTourOn === 'function' && !!B.leaveTourOn();
       if (on === !!row.firstChild) return;
+      var lt = getTour(tourId);
       row.replaceChildren.apply(row, on ? [h('button', { class: 'linkbtn pf-rb', type: 'button',
-        onclick: function () { openLeaveTour(tourId); } }, G.isShowDoc(getTour(tourId)) ? WORDS.leaveShow : 'Leave tour')] : []);
+        onclick: function () { openLeaveTour(tourId); } }, G.isShowDoc(lt) ? WORDS.leaveShow : G.isStudioDoc(lt) ? WORDS.leaveStudio : 'Leave tour')] : []);
       row.style.display = on ? '' : 'none';
     };
     row.leaveFill();
     return row;
   }
   function openLeaveTour(tourId) {
-    var B = window.GR_BACKEND, t = getTour(tourId), one = G.isShowDoc(t), name = (t && t.name) || 'this ' + tourWord(t);
+    var B = window.GR_BACKEND, t = getTour(tourId), one = G.isShowDoc(t), studio = G.isStudioDoc(t), name = (t && t.name) || 'this ' + tourWord(t);
     confirmSheet({
       title: 'Leave ' + name + '?',
-      body: one ? WORDS.leaveShowBody : 'You come off its crew list and the tour leaves your phone: its day sheets, chat, alerts and your pay on it. ' +
+      body: one ? WORDS.leaveShowBody : studio ? WORDS.leaveStudioBody : 'You come off its crew list and the tour leaves your phone: its day sheets, chat, alerts and your pay on it. ' +
         'Its people can invite you again, and you’d get a Join.',
-      action: one ? WORDS.leaveShow : 'Leave tour', danger: true, cancel: 'Stay',
+      action: one ? WORDS.leaveShow : studio ? WORDS.leaveStudio : 'Leave tour', danger: true, cancel: 'Stay',
       onConfirm: async function () {
         var r = null;
         try { r = await B.leaveTour(tourId); } catch (e) { toast('Couldn’t do that. Try again.'); return false; }
-        if (r && r.ok === false && r.why === 'owner') { toast(one ? WORDS.leaveShowOwner : 'You made this tour: it’s yours to delete, not to leave.'); return false; }
+        if (r && r.ok === false && r.why === 'owner') { toast(one ? WORDS.leaveShowOwner : studio ? WORDS.leaveStudioOwner : 'You made this tour: it’s yours to delete, not to leave.'); return false; }
         forgetCrew(tourId);
         toast((r && r.ok === false) ? 'You’re not on ' + name + ' any more.' : 'You left ' + name + '.');
         go(PF_HOME);
@@ -28095,6 +31559,11 @@
         undoRow && undoRow.can ? h('div', { class: 'stack' },
           h('button', { class: 'btn ghost block', type: 'button',
             onclick: function () { openUndoDeposit(id, undoRow, function () { openOtherIncome(id, x); }); } }, 'Put it back in New income')) : null,
+        pastIncomeOk(id, x, undoRow) ? h('div', { class: 'stack' },
+          h('button', { class: 'btn ghost block' + cfCls(false), type: 'button',
+            onclick: function () { pastMoveAskIncome(id, x, undoRow); } }, icon('history', 18), 'Move to a past tour'))
+          : undoRow && undoRow.can && (x.kind === 'merch' || x.kind === 'guarantee') && createdTour(id) && pastMoveTo(id, true).length
+            ? h('p', { class: 'note' }, 'Came in after a tour? Put it back in New income, then log it to Past tour and pick its night.') : null,
         h('div', { class: 'stack' },
           h('button', { class: 'btn block danger', type: 'button', onclick: async function (e) {
             e.currentTarget.disabled = true;
@@ -28947,6 +32416,7 @@
     } catch (e) { return; }
     var tries = 0;
     var show = function () {
+      if (document.getElementById('gr-apptour')) { setTimeout(show, 600); return; }
       if ((document.getElementById('gr-splash') || document.querySelector('.splash-note') || modeUp || (!modeKnown() && tries < 6)) && tries++ < 40) { setTimeout(show, 600); return; }
       hornSplash(left + (left === 1 ? ' day left' : ' days left'),
         String(t.name || '').trim() || null);
@@ -28958,6 +32428,79 @@
   function modeHad() {
     var today = G.tourToday();
     return allTourEntries().some(function (e) { var end = G.tourEnd(e[1]); return !!end && end < today && !teamSeated(e[0]); });
+  }
+  function modeTapOf(p) {
+    return G.isObj(p) && (p.mode === 'on' || p.mode === 'off') && (p.cal === 'on' || p.cal === 'off') && p.mode !== p.cal ? p : null;
+  }
+  function modeTap() { return modeTapOf(homePrefs().tourSwitch); }
+  function modeHeld(cal, from) {
+    var today = G.tourToday();
+    if (!G.parseDay(from) || from > today) from = today;
+    var runs = seatTours().map(function (e) { return [runStart(e[1]), G.tourEnd(e[1])]; })
+      .filter(function (s) { return !!s[0] && !!s[1] && s[0] <= s[1]; });
+    if (runs.some(function (s) { return (s[0] > from && s[0] <= today) || (s[1] >= from && s[1] < today); })) return false;
+    var spans = runs.filter(function (s) { return s[0] <= today && s[1] >= from; })
+      .sort(function (a, b) { return String(a[0]).localeCompare(String(b[0])); });
+    if (cal === 'off') return !spans.length;
+    var need = from;
+    for (var i = 0; i < spans.length && need <= today; i += 1) {
+      if (spans[i][0] > need) return false;
+      if (spans[i][1] >= need) need = G.addDays(spans[i][1], 1);
+    }
+    return need > today;
+  }
+  function modeForced() {
+    var p = modeTap();
+    if (!p || !notFan() || !modeHeld(p.cal, p.day)) return '';
+    return p.mode === 'on' && !modeDated() ? '' : p.mode;
+  }
+  function modeDatedOf(t) { return !!(firstNight(t) || runStart(t)); }
+  function modeDated() { return allTourEntries().some(function (e) { return modeDatedOf(e[1]); }); }
+  function modeShown() { return modeForced() || modeNow(); }
+  var modeTidying = false;
+  function modeTidy() {
+    var p = modeTap();
+    if (!p || modeTidying || modeHeld(p.cal, p.day) || homeUnread()) return;
+    modeTidying = true;
+    var make = function (r) {
+      var doc = Object.assign({ kind: 'homeprefs' }, homePrefsOf(r)), q = modeTapOf(doc.tourSwitch);
+      if (!q || !modeHeld(q.cal, q.day)) delete doc.tourSwitch;
+      return doc;
+    };
+    homeFly('homeprefs:me', make(S.labels['homeprefs:me']), { fresh: make, failed: function () {} }).then(function () { modeTidying = false; });
+  }
+  var modeTapAt = 0;
+  function modeSwitchTap() {
+    var at = Date.now();
+    if (at - modeTapAt >= 0 && at - modeTapAt < 700) return;
+    if (!modeKnown()) { toast('Your tours are still loading. Try again in a moment.'); return; }
+    var cal = modeNow(), want = modeShown() === 'on' ? 'off' : 'on';
+    if (want === 'on' && !allTourEntries().length) { toast('Make a tour first. Tap + to start one.'); return; }
+    if (want === 'on' && !modeDated()) { toast('Add dates to a tour first.'); return; }
+    modeTapAt = at;
+    var up = document.querySelectorAll ? document.querySelectorAll('.splash-note.mode-note') : [];
+    Array.prototype.forEach.call(up, function (el) { if (el && el.remove) el.remove(); });
+    var tap = want === cal ? null : { mode: want, cal: cal, day: G.tourToday() };
+    var make = function (r) {
+      var doc = Object.assign({ kind: 'homeprefs' }, homePrefsOf(r));
+      if (tap) doc.tourSwitch = tap; else delete doc.tourSwitch;
+      return doc;
+    };
+    homeFly('homeprefs:me', make(S.labels['homeprefs:me']), { fresh: make, failed: function (e) {
+      modeKeep(modeShown());
+      toast(e && e.code === 'offline' ? NO_SIGNAL : 'That didn’t go through. Try again in a moment.');
+      render(true);
+    } });
+    modeKeep(want);
+    hornSplash(want === 'off' ? 'OFF TOUR MODE' : 'ON TOUR MODE', null, 'mode-note');
+    render(true);
+  }
+  function modeSwitch() {
+    if (actingAs() || !notFan()) return null;
+    var on = modeShown() === 'on';
+    return h('button', { class: 'mode-bus' + (on ? ' on' : ''), type: 'button', 'aria-label': on ? 'On tour display' : 'Off tour display',
+      'aria-pressed': on ? 'true' : 'false', onclick: function () { modeSwitchTap(); } },
+      h('img', { class: 'mode-bus-img', src: 'bus-switch.png', alt: '', draggable: 'false' }));
   }
   function modeKnown() {
     var B = window.GR_BACKEND;
@@ -28972,8 +32515,19 @@
     try { r = JSON.parse(lsGet(modeKey()) || 'null'); } catch (e) { r = null; }
     return G.isObj(r) && r.mode ? r : modeHere;
   }
+  function modeSaid(x) {
+    if (!G.isObj(x)) return '';
+    return x.shown === 'on' || x.shown === 'off' ? x.shown : String(x.mode || '');
+  }
+  function modeWord(mode, at) {
+    var cal = modeNow(), doc = { kind: 'modeseen', mode: cal, at: at };
+    if (mode !== cal) doc.shown = mode;
+    return doc;
+  }
   function modePin(mode, unsent, at) {
-    modeHere = unsent ? { mode: mode, unsent: true, at: at || 0 } : { mode: mode, unsent: false };
+    var cal = modeNow();
+    modeHere = unsent ? { mode: cal, unsent: true, at: at || 0 } : { mode: cal, unsent: false };
+    if (mode !== cal) modeHere.shown = mode;
     lsSet(modeKey(), JSON.stringify(modeHere));
   }
   function modeUnsent() { var mine = modeLocal(); return !!(mine && mine.unsent); }
@@ -28983,17 +32537,17 @@
   }
   function modeLast() {
     var mine = modeLocal(), lab = S.labels['modeseen:me'];
-    if (modeOwed(mine, lab)) return mine.mode;
-    return G.isObj(lab) && lab.kind === 'modeseen' ? String(lab.mode || '') : (mine ? mine.mode : '');
+    if (modeOwed(mine, lab)) return modeSaid(mine);
+    return G.isObj(lab) && lab.kind === 'modeseen' ? modeSaid(lab) : (mine ? modeSaid(mine) : '');
   }
   function modeKeep(mode) {
     var at = Date.now();
     modePin(mode, true, at);
     modeSaving = true; modeTried = at;
-    homeFly('modeseen:me', { kind: 'modeseen', mode: mode, at: at }, { failed: function () {   } }).then(function (ok) {
+    homeFly('modeseen:me', modeWord(mode, at), { failed: function () {   } }).then(function (ok) {
       modeSaving = false;
       var mine = modeLocal();
-      if (ok && mine && mine.mode === mode) modePin(mode, false);
+      if (ok && mine && modeSaid(mine) === mode) modePin(mode, false);
     });
   }
   function modeAsk() {
@@ -29006,13 +32560,15 @@
     return document.visibilityState !== 'visible' ||
       !!(document.getElementById('gr-splash') || document.querySelector('.splash-note') || sheet ||
       document.querySelector('.deck') || document.querySelector('.hf') || S.route.name === 'wizard' || S.firstRun || frGateUp() ||
+      document.getElementById('gr-apptour') ||
       document.getElementById('gr-gate') || (fingerDown && Date.now() - fingerDown < 4000));
   }
   function modeWatch() {
     if (modeUp || document.visibilityState !== 'visible' || !modeKnown()) return;
+    modeTidy();
     if (S.firstRun || frGateUp() || document.getElementById('gr-gate') || firstRunDue()) return;
     if (!notFan()) return;
-    var now = modeNow(), last = modeLast(), words = G.modeSplash(last, now, modeHad());
+    var now = modeShown(), last = modeLast(), words = G.modeSplash(last, now, modeHad());
     if (!words) {
       if (last !== now || (modeUnsent() && !modeSaving && Date.now() - modeTried > 30e3)) modeKeep(now);
       return;
@@ -29024,9 +32580,9 @@
       if (modeBusy()) { clear = 0; setTimeout(look, 600); return; }
       if (clear++ < 1) { setTimeout(look, 600); return; }
       modeAsk().then(function (told) {
-        if (modeNow() !== now) { modeUp = false; return; }
+        if (modeShown() !== now) { modeUp = false; return; }
         if (modeBusy()) { clear = 0; setTimeout(look, 600); return; }
-        if (G.isObj(told) && told.kind === 'modeseen' && told.mode === now && !modeOwed(modeLocal(), told)) {
+        if (G.isObj(told) && told.kind === 'modeseen' && modeSaid(told) === now && !modeOwed(modeLocal(), told)) {
           modePin(now, false);
           S.labels['modeseen:me'] = told;
           modeUp = false;
@@ -29040,7 +32596,7 @@
     setTimeout(look, 450);
   }
   if (window.__harness) {
-    window.__harness.modeState = function () { return { now: modeNow(), last: modeLast(), had: modeHad(), known: modeKnown(), notFan: notFan(), unsent: modeUnsent(), up: modeUp, off: offNow(), acting: actingAs() }; };
+    window.__harness.modeState = function () { return { now: modeNow(), shown: modeShown(), forced: modeForced(), last: modeLast(), had: modeHad(), known: modeKnown(), notFan: notFan(), unsent: modeUnsent(), up: modeUp, off: offNow(), acting: actingAs() }; };
     window.__harness.actAs = function (id) { setActingAs(id); render(true); };
   }
   var quickHorns = null;
@@ -30015,15 +33571,16 @@
       });
     }, 500);
   }
-  function openOffDaySheet(tourId, date) {
+  function openOffDaySheet(tourId, date, prefill) {
     var t = getTour(tourId);
     var d0 = offDayFor(t, date);
+    var p0 = G.isObj(prefill) ? prefill : d0;
     var kind = G.keptDayKind(t, date) || 'off';
     var said = kind === 'off' ? 'Off day' : DAY_KIND_WORDS[kind] || 'Off day';
     var f = {
-      city: d0.city || '', hotel: d0.hotel || '', busCall: d0.busCall || '',
-      hotelAddress: d0.hotelAddress || '',
-      flight: d0.flight || '', activities: d0.activities || ''
+      city: p0.city || '', hotel: p0.hotel || '', busCall: p0.busCall || '',
+      hotelAddress: p0.hotelAddress || '',
+      flight: p0.flight || '', activities: p0.activities || ''
     };
     var headName = h('p', { class: 'ds-ed-venue' }, '');
     var headAddr = h('span', { class: 'ds-ed-addr-t' }, '');
@@ -30059,7 +33616,7 @@
           el.style.height = 'auto';
           el.style.height = (el.scrollHeight + 2) + 'px';
         };
-        var ta = h('textarea', { class: 'input', rows: rows, maxlength: 500, value: f[key], placeholder: ph || '',
+        var ta = h('textarea', { class: 'input', rows: rows, maxlength: Math.max(500, String(f[key] || '').length), value: f[key], placeholder: ph || '',
           oninput: function (e) { f[key] = e.target.value; fit(e.target); } });
         requestAnimationFrame(function () { fit(ta); });
         return ta;
@@ -30082,6 +33639,10 @@
         h('h2', { class: 'sh-title clean' }, said),
         head,
         h('p', { class: 'sh-sub clean' }, 'Where the day lands, where everyone sleeps, and what\u2019s planned. Blank fields just don\u2019t show.'),
+        S.sample && canWrite() && canEditTour(tourId) ? h('div', { class: 'ds-upload' }, fileControl({ accept: imageAccept(), cls: 'btn quiet glow block', icon: 'plus',
+          label: 'Upload Day Sheet', ariaLabel: 'Upload a photo of the day sheet and fill the form from it',
+          onFiles: function (files) { readOffDayPhoto(tourId, date, files[0], f); } }),
+          h('p', { class: 'hint ds-upload-hint' }, 'A photo of the day\u2019s sheet: the hotel, bus call, flights, the lot, filled in for you to check.')) : null,
         h('form', { class: 'sh-form ds-editor', onsubmit: submit, novalidate: true },
           field('Hotel', textIn('hotel', 'Hotel name')),
           field('Hotel address', textIn('hotelAddress', '250 W 600 S, Salt Lake City, UT')),
@@ -31835,6 +35396,7 @@
     buyoutBumpUp = true;
     var tries = 0, clear = 0;
     var show = function () {
+      if (document.getElementById('gr-apptour')) { clear = 0; setTimeout(show, 600); return; }
       if (tries++ > 60) { buyoutBumpUp = false; return; }
       if (document.getElementById('gr-splash') || document.querySelector('.splash-note')) { clear = 0; setTimeout(show, 600); return; }
       if (clear++ < 1) { setTimeout(show, 600); return; }
@@ -33653,7 +37215,7 @@
       var emailI = inp('email', 'Email', 120, { inputmode: 'email', 'aria-label': 'Email to invite' });
       var phoneI = inp('tel', 'Phone number', 30, { inputmode: 'tel', 'aria-label': 'Phone number' });
       var ridesBus = true;
-      var busAsk = busOn() ? h('div', { class: 'bus-ask' },
+      var busAsk = busOn() && !G.isStudioDoc(getTour(tourId)) ? h('div', { class: 'bus-ask' },
         h('span', { class: 'bus-ask-l' }, 'Riding on the bus?'),
         segmented(['YES', 'NO'], 0, function (i) { ridesBus = i === 0; }, 'Riding on the bus?')) : null;
       var lvlBox = h('div', null);
@@ -33732,13 +37294,13 @@
       openSheet(function () {
         return [
           h('h2', { class: 'sh-title' }, 'Deleted tours'),
-          h('p', { class: 'sh-sub' }, list.some(function (e) { return G.isShowDoc(e[1]); }) ? WORDS.trashSub : 'A deleted tour waits here, kept as it was. Restore puts it back.'),
+          h('p', { class: 'sh-sub' }, list.some(function (e) { return G.isShowDoc(e[1]) || G.isStudioDoc(e[1]) || G.isPnlDoc(e[1]); }) ? WORDS.trashSub : 'A deleted tour waits here, kept as it was. Restore puts it back.'),
           list.length ? h('div', { class: 'ledger' }, list.map(function (e) {
             var id = e[0], t = e[1];
             return h('div', { class: 'row' },
               h('div', { class: 'row-label' },
                 (t.artist ? t.artist + ' \u2014 ' : '') + tourNameOf(t),
-                h('span', { class: 'hint' }, [G.isShowDoc(t) ? WORDS.trashShow : '', 'Deleted ' + dayMD(G.ymd(new Date(t.deletedAt)))].filter(Boolean).join(' \u00b7 '))),
+                h('span', { class: 'hint' }, [G.isShowDoc(t) ? WORDS.trashShow : G.isStudioDoc(t) ? WORDS.trashStudio : G.isPnlDoc(t) ? WORDS.trashPnl : '', 'Deleted ' + dayMD(G.ymd(new Date(t.deletedAt)))].filter(Boolean).join(' \u00b7 '))),
               h('button', { class: 'btn sm quiet', type: 'button',
                 onclick: async function () {
                   if (await restoreTour(id)) { toast('Restored'); build(); render(); }
@@ -34178,6 +37740,46 @@
     }
     back(merged);
     toast(got ? (make ? WORDS.showFilled : 'Filled from the photo \u2014 give the times a look, then post') : 'Nothing new on that photo');
+  }
+  function offDayPrompt(kind, date) {
+    var what = kind === 'travel' ? 'a travel day' : kind === 'rehearsal' ? 'a rehearsal day' : 'a day off';
+    return [
+      'The attached image is a tour manager\u2019s day sheet for a day with no show on a concert tour (' + what +
+        (G.parseDay(date) ? ', ' + date : '') + '): where everyone sleeps, how they travel, and what the day holds.',
+      'Read it and reply with ONLY a JSON object with these fields (use "" for anything not on the sheet, never guess):',
+      '"city" (the city the band is in or staying in that night: "City, ST" in the US and Canada, "City, Country" elsewhere),',
+      '"hotel" (the hotel\u2019s name only), "hotelAddress" (its street address, as printed),',
+      '"busCall", "lobbyCall" (each a time like "1:30AM" or "10:00AM"; "TBA" if the sheet says so),',
+      '"flight" (every flight on the sheet, one per line, as words: airline, flight number, from and to, departure and arrival times),',
+      '"travel" (any other travel that day, like a drive, a train or a ferry, with its times, hours or miles, as words),',
+      '"activities" (what the day holds: plans, reservations, press, rehearsal and the like, one per line, each with its time when printed),',
+      '"notes" (anything else the crew should know, one or two lines),',
+      '"extras": [{"label": "...", "value": "..."}]: one row for EVERY line that fits none of the fields above (a runner, a gym, laundry, a second hotel, wifi, rooms, and the like). Keep the sheet\u2019s own words; do not drop any line.',
+      'Times are in the local time as printed.'
+    ].join('\n');
+  }
+  async function readOffDayPhoto(tourId, date, file, cur) {
+    if (!S.sample || !file) return;
+    var t = getTour(tourId);
+    if (!t) return;
+    var back = function (fill) { openOffDaySheet(tourId, date, fill); };
+    if (S.imageMax && file.size > S.imageMax) { toast('That photo is too big to read \u2014 try a screenshot of it'); return; }
+    var ctl = new AbortController();
+    busySheet('Reading the day sheet', 'The hotel, bus call, flights: this can take up to a minute.', function () { ctl.abort(); back(cur); });
+    var out = null;
+    try { out = await S.sample.json(offDayPrompt(G.dayKind(t, date), date), { images: file, signal: ctl.signal, cache: false }); }
+    catch (e) {
+      if (e && e.code === 'cancelled') return;
+      if (e && SAMPLE_GONE.indexOf(e.code) >= 0) S.sample = null;
+      back(cur);
+      toast(e && e.code === 'rate_limited' ? 'The reader is busy \u2014 try again in a minute' : 'Couldn\u2019t read that photo');
+      return;
+    }
+    if (!G.isObj(out)) { back(cur); toast('No day sheet found in that photo'); return; }
+    var r = G.offDayFromPhoto(cur, out, 'AM');
+    back(r.fill);
+    toast((r.got ? 'Filled from the photo. Give it a look, then post' : 'Nothing new on that photo') +
+      (r.cut ? '. ' + plural(r.cut, 'line') + ' didn\u2019t fit in Activities' : ''));
   }
   function flyerPrompt() {
     var now = new Date();
@@ -35319,10 +38921,11 @@
     function finishFail(title, msg) { readFail(title, msg, null, null); }
   }
   function artistCatNames(t) {
-    var out = G.extraCatNames(t), artist = artistOf(t).toLowerCase();
+    var out = G.extraCatNames(t), artist = artistOf(t).toLowerCase(), studio = G.isStudioDoc(t);
     if (!artist) return out;
     var take = function (b) {
       if (!b || b === t || b.deletedAt || artistOf(b).toLowerCase() !== artist) return;
+      if (!studio && G.isStudioDoc(b)) return;
       var names = G.extraCatNames(b);
       Object.keys(names).forEach(function (k) { if (!out[k]) out[k] = names[k]; });
     };
@@ -35337,8 +38940,8 @@
       .map(function (k) { return { key: k, label: names[k] }; });
   }
   function builtInOf(t) { return { crew: t && t.crew }; }
-  function chargeCats(t) { return G.chargeCategoriesFor(builtInOf(t)).concat(addedCats(t)); }
-  function typedCats(t) { return G.typedCategoriesFor(builtInOf(t)).concat(addedCats(t)); }
+  function chargeCats(t) { return G.studioCategories(t, G.chargeCategoriesFor(builtInOf(t))).concat(addedCats(t)); }
+  function typedCats(t) { return G.studioCategories(t, G.typedCategoriesFor(builtInOf(t))).concat(addedCats(t)); }
   function catName(t, key) {
     var hit = chargeCats(t).filter(function (c) { return c.key === key; })[0];
     return hit ? hit.label : String(key || '').indexOf('x-') === 0 ? G.extraCatLabel(key) : String(key || '');
@@ -35521,16 +39124,25 @@
     var base = getTour(tourId) || {};
     var baseOff = isOffTour(base);
     var band = artistOf(base);
-    var curTour = baseOff ? (band ? currentTourOf(band) : null) : { id: tourId, name: base.name || 'This tour' };
+    var studioBase = G.isStudioDoc(base), bookWord = studioBase ? 'studio time' : 'tour';
+    var curTour = baseOff ? (band ? currentTourOf(band) : null) : { id: tourId, name: studioBase ? tourNameOf(base) : base.name || 'This tour' };
     var ups = band ? upcomingToursOf(band, tourId) : [];
+    var pasts = baseOff && band ? pastToursOf(band, tourId, feed) : [];
+    var studios = baseOff && band ? studioChoicesOf(band, feed) : [];
     var dests = band ? [
-      ['off', 'Off Tour', ''],
-      ['cur', 'Current Tour', curTour ? '' : 'No tour is running today'],
+      ['off', 'Off Tour', '']
+    ].concat(pasts.length ? [['past', 'Past tour', '']] : [], studios.length ? [['studio', 'Studio time', '']] : [], [
+      ['cur', studioBase ? WORDS.thisStudio : 'Current Tour', curTour ? '' : 'No tour is running today'],
       ['up', 'Upcoming Tour', ups.length ? '' : 'No upcoming tours yet']
-    ] : [];
-    rows.forEach(function (r) { r.pick = false; r.dest = baseOff ? 'off' : 'cur'; r.upTo = ups.length ? ups[0].id : null; });
+    ]) : [];
+    rows.forEach(function (r) {
+      r.pick = false; r.dest = baseOff ? 'off' : 'cur'; r.upTo = ups.length ? ups[0].id : null; r.pastTo = pasts.length ? pasts[0].id : null;
+      r.studioTo = studios.length ? studios[0].id : null;
+    });
     var landsOn = function (r) {
       if (r.dest === 'off') return null;
+      if (r.dest === 'past') return r.pastTo || null;
+      if (r.dest === 'studio') return r.studioTo || null;
       if (r.dest === 'up' && r.upTo) return r.upTo;
       return curTour ? curTour.id : tourId;
     };
@@ -35635,7 +39247,8 @@
         var was = feedBack[x.feedId];
         delete feedBack[x.feedId];
         took[x.feedId] = true; mine[x.feedId] = true;
-        x.pick = false; x.dest = baseOff ? 'off' : 'cur'; x.upTo = ups.length ? ups[0].id : null;
+        x.pick = false; x.dest = baseOff ? 'off' : 'cur'; x.upTo = ups.length ? ups[0].id : null; x.pastTo = pasts.length ? pasts[0].id : null;
+        x.studioTo = studios.length ? studios[0].id : null;
         if (G.isObj(was) && was.category && offered[was.category]) { x.category = was.category; x.source = was.source || 'chosen'; }
         else if (x.category && !offered[x.category]) { x.category = ''; x.source = null; }
         hintWho(x);
@@ -36234,6 +39847,14 @@
         onchange: function (e) { if (!here(r)) return; r.upTo = e.target.value; if (r.drawWho) r.drawWho(); } },
         ups.map(function (u) { return h('option', { value: u.id }, u.name + ' \u00b7 starts ' + dayMD(u.start)); })) : null;
       if (upSel) { upSel.value = r.upTo || ''; upSel.hidden = r.dest !== 'up'; }
+      var pastSel = pasts.length ? h('select', { class: 'input sm rv-upsel rv-pastsel', 'aria-label': 'Which past tour',
+        onchange: function (e) { if (!here(r)) return; r.pastTo = e.target.value; syncCrew(r.pastTo, true); if (r.drawWho) r.drawWho(); } },
+        pasts.map(function (p) { return h('option', { value: p.id }, pastTourWords(p)); })) : null;
+      if (pastSel) { pastSel.value = r.pastTo || ''; pastSel.hidden = r.dest !== 'past'; }
+      var studioSel = studios.length ? h('select', { class: 'input sm rv-upsel rv-pastsel', 'aria-label': 'Which studio time',
+        onchange: function (e) { if (!here(r)) return; r.studioTo = e.target.value; syncCrew(r.studioTo, true); if (r.drawWho) r.drawWho(); } },
+        studios.map(function (p) { return h('option', { value: p.id }, studioChoiceWords(p)); })) : null;
+      if (studioSel) { studioSel.value = r.studioTo || ''; studioSel.hidden = r.dest !== 'studio'; }
       return h('div', { class: 'rv-dwrap' },
         h('div', { class: 'rv-dest', role: 'group', 'aria-label': 'Log ' + r.merchant + ' to' },
           h('span', { class: 'rv-dlabel' }, 'Log to'),
@@ -36248,10 +39869,14 @@
                   b.classList.toggle('on', b === e.currentTarget);
                 });
                 if (upSel) upSel.hidden = r.dest !== 'up';
+                if (pastSel) pastSel.hidden = r.dest !== 'past';
+                if (studioSel) studioSel.hidden = r.dest !== 'studio';
+                if (r.dest === 'past' && r.pastTo) syncCrew(r.pastTo, true);
+                if (r.dest === 'studio' && r.studioTo) syncCrew(r.studioTo, true);
                 if (r.drawWho) r.drawWho();
               } }, d[1]);
           })),
-        upSel);
+        upSel, pastSel, studioSel);
     }
     function chargeRow(r) {
       var wrap = h('div', { class: 'rv-row rv-charge' + (r.pick ? ' on' : '') });
@@ -36387,7 +40012,7 @@
         whoHost,
         destRow(r),
         feed ? h('button', { class: 'linkbtn rv-aside', type: 'button', onclick: function () { file([r], false, asideSay, 'set_aside'); } },
-          'Not a tour charge: set it aside') : null,
+          'Not a ' + bookWord + ' charge: set it aside') : null,
         backs.length ? h('div', { class: 'iv-hit rb-match' }, backs.map(function (a) {
           if (r.rbArm === a.id) {
             var yes = h('button', { class: 'btn sm primary', type: 'button' }, 'Yes');
@@ -36416,7 +40041,7 @@
         var names = G.cardDebts(t2).map(function (c) { return c.label || 'your card'; });
         kids.push(h('button', { class: 'btn quiet block', type: 'button', style: 'margin-top:18px',
           onclick: function () { openBefore = !openBefore; if (!openBefore) live.forEach(function (r) { if (r.preCutoff) r.pick = false; }); draw(); } },
-          (openBefore ? 'Hide ' : 'Show ') + plural(before.length, 'charge') + ' from before the tour started'));
+          (openBefore ? 'Hide ' : 'Show ') + plural(before.length, 'charge') + ' from before the ' + bookWord + ' started'));
         if (openBefore) {
           kids.push(h('p', { class: 'note' }, 'These are already inside ' + (names.length === 1 ? 'the ' + names[0] + ' balance' : 'the card balance') +
             ' you entered, so adding them would count the money twice. Add one only if it isn’t.'));
@@ -36430,9 +40055,9 @@
         if (openDup) {
           if (feed) {
             kids.push(h('p', { class: 'note' }, dup.every(function (r) { return !!r.twin; })
-              ? 'Each of these is the same amount as something you already typed on this tour, within three days. ' +
+              ? 'Each of these is the same amount as something you already typed on this ' + bookWord + ', within three days. ' +
                 'Adding it would count the money twice. Each one names the entry it looks like. Say which it is.'
-              : 'Each of these is the same amount as something already on this tour, within a few days. ' +
+              : 'Each of these is the same amount as something already on this ' + bookWord + ', within a few days. ' +
                 'Adding it would count the money twice. Set it aside unless it really is a second payment.'));
           }
           kids.push(h('div', { class: 'review' }, dup.map(chargeRow)));
@@ -36483,8 +40108,12 @@
   }
   function feedWaitingWhere() {
     var by = {}, out = [];
-    var books = 0;
-    S.tours.forEach(function (t) { if (isOffTour(t) && !t.deletedAt) books += 1; });
+    var inBook = {};
+    ((S.feed && S.feed.items) || []).forEach(function (it) {
+      var t = it.tour_id ? getTour(it.tour_id) : null;
+      if (t && isOffTour(t) && !t.deletedAt) inBook[it.tour_id] = true;
+    });
+    var books = Object.keys(inBook).length;
     ((S.feed && S.feed.items) || []).forEach(function (it) {
       var t = it.tour_id ? getTour(it.tour_id) : null;
       var kind = !it.tour_id ? 'none' : feedTourGone(it.tour_id) ? 'gone' : isOffTour(t) ? 'offtour' : 'tour';
@@ -36630,12 +40259,14 @@
   }
   listenForPlaidBack();
   var DAYBAR_PUSH = true;
-  var HOME_BAR = false;
+  var HOME_BAR = true;
+  var HOME_BAR_LENGTHS = false;
   var DAYBAR_HINT = 'On show days: where the day is, from the day sheet, with a bar to the next thing';
   var DAYBAR_HINT_HOME = 'Where your day is, with a bar to the next thing: the day sheet on show days; your calendar, routines and tasks off tour';
   var BAR_NAMES_HINT = 'Between tours. Off: the bar says Event, Routine, Task or Plan, with the time. No name reaches the bar or Apple’s push.';
   var dayBar = { sig: '', at: 0, soon: null, ticking: false, told: '', telling: '', tellAt: 0,
-    live: null, gone: '', looked: false, homeSent: '', homeTry: '', homeAt: 0, homeAll: false, homeMissing: false, prepared: '', armed: false };
+    live: null, gone: '', looked: false, homeSent: '', homeTry: '', homeAt: 0, homeAll: false, homeMissing: false, prepared: '', armed: false, back: false,
+    offNoted: false };
   function dayBarPlugin() {
     if (!IN_SHELL) return null;
     var cap = window.Capacitor;
@@ -36699,12 +40330,12 @@
     }
     var s = home ? {} : pick.show;
     if (!home && (state.nowKey === 'buscall' || state.nextKey === 'buscall')) state = Object.assign({}, state, barBusWord(pick.tourId));
-    var endAt = Math.floor(((home || pick).tl.end + G.DAY_BAR_GRACE) / 1000);
+    var endAt = Math.floor((home ? G.dayBarEnd(home.tl) : pick.tl.end + G.DAY_BAR_GRACE) / 1000);
     if (home) endAt = Math.min(endAt, Math.floor(homeBarUntil(home.date) / 1000));
     var payload = {
       key: home ? 'home|' + home.date : pick.tourId + '|' + pick.showId,
       place: home ? '' : [String(s.venue || '').trim(), String(s.city || '').trim()].filter(Boolean).join(' · '),
-      url: home ? 'greenroom://daysheet?day=' + home.date : 'greenroom://daysheet?tour=' + encodeURIComponent(pick.tourId) + '&show=' + encodeURIComponent(pick.showId),
+      url: home ? 'greenroom://daysheet?day=' + home.date + '&bar=1' : 'greenroom://daysheet?tour=' + encodeURIComponent(pick.tourId) + '&show=' + encodeURIComponent(pick.showId),
       state: state,
       staleAt: state.nextAt || endAt,
       endAt: endAt,
@@ -36760,6 +40391,7 @@
     var P = dayBarPlugin();
     var d = dayBarDevice();
     var jobs = [];
+    homeUpSet('', '');
     if (P) jobs.push(dayBarCall(P.end, { forget: true }));
     if (d && B && typeof B.dayBarDevice === 'function') {
       var plan = HOME_BAR && typeof B.dayBarHome === 'function' ? B.dayBarHome(d.id, d.secret, null, 0) : Promise.resolve();
@@ -36787,7 +40419,9 @@
     return new Date(d.getFullYear(), d.getMonth(), d.getDate() + 1).getTime();
   }
   function homeBarTl(date, now) {
-    return G.homeBarLine(G.homeTimeline(homeDayFor(date, true)), { until: homeBarUntil(date), now: now, names: homeBarNames(), events: calOnBar() });
+    var line = G.homeTimeline(homeDayFor(date, true));
+    if (!HOME_BAR_LENGTHS) line.steps = line.steps.map(function (s) { if (!('mins' in s)) return s; var c = Object.assign({}, s); delete c.mins; return c; });
+    return G.homeBarLine(line, { until: homeBarUntil(date), now: now, names: homeBarNames(), events: calOnBar() });
   }
   function dayBarHomePick(now) {
     if (modeNow() !== 'off' || !notFan() || !homeBarReady()) return null;
@@ -36817,6 +40451,7 @@
     var road = modeNow() === 'on';
     if (!road && notFan() && !homeBarReady()) return;
     var plan = road ? null : homeBarPlan(now), sig = plan ? JSON.stringify(plan) : 'none';
+    if (!plan && dayBar.live == null) return;
     if (sig === dayBar.homeSent) return;
     if (sig === dayBar.homeTry && now - dayBar.homeAt < 5 * 60e3) return;
     dayBar.homeTry = sig; dayBar.homeAt = now;
@@ -36844,14 +40479,43 @@
     var P = dayBarPlugin();
     if (!HOME_BAR || !P || typeof P.status !== 'function') { if (then) then(); return; }
     dayBarCall(P.status, {}).then(function (st) {
-      var moved = false;
+      var moved = false, shown = homeBarBack(Date.now());
       if (st) {
         var live = st.supported === true && st.enabled === true, gone = String(st.gone || '');
         moved = live !== dayBar.live || gone !== dayBar.gone;
         dayBar.live = live; dayBar.gone = gone;
+        var B = window.GR_BACKEND;
+        if (st.supported === true && st.enabled === false && dayBarOn() && !dayBar.offNoted && B && typeof B.noteError === 'function') {
+          dayBar.offNoted = true;
+          B.noteError('daybar_live', { code: 'off' });
+        }
       }
       if (then) then();
       else if (moved) dayBarSync(true);
+      if (homeBarBack(Date.now()) !== shown && S.loaded && !sheet) render();
+    });
+  }
+  function homeBarBack(now) {
+    var P = dayBarPlugin();
+    if (!HOME_BAR || !P || typeof P.showAgain !== 'function' || !dayBarOn() || dayBar.live !== true || dayBar.back) return false;
+    var date = G.tourToday(now);
+    if (dayBar.gone !== 'home|' + date || now >= homeBarUntil(date)) return false;
+    if (modeNow() !== 'off' || !notFan() || !homeBarReady()) return false;
+    return G.homeBarSteps(homeBarTl(date, now), now).length > 0;
+  }
+  function homeBarBackTap() {
+    var P = dayBarPlugin(), key = 'home|' + G.tourToday(Date.now());
+    if (!P || typeof P.showAgain !== 'function' || dayBar.back) return;
+    dayBar.back = true;
+    render(true);
+    dayBarCall(P.showAgain, { key: key }).then(function (r) {
+      dayBar.back = false;
+      if (r && r.ok === true) {
+        dayBar.gone = String(r.gone || '');
+        dayBar.homeSent = ''; dayBar.homeTry = '';
+        dayBarSync(true);
+      } else toast('Couldn’t bring back the Lock Screen bar. Try again.');
+      render(true);
     });
   }
   function dayBarSoon() {
@@ -36872,13 +40536,8 @@
       try { q[decodeURIComponent(kv[0] || '')] = decodeURIComponent(kv.slice(1).join('=') || ''); } catch (e) {   }
     });
     if (q.day) {
-      whenLoaded(function () {
-        if (sheet) closeSheet(true);
-        var today = G.tourToday();
-        S.homeDate = G.parseDay(q.day) && q.day >= today ? q.day : today;
-        if (modeNow() === 'off') go({ name: 'offtour', view: 'day' });
-        else { var to = overviewRoute(); if (to) go(to); }
-      });
+      var tapped = Date.now();
+      whenLoaded(function () { dayBarDayOpened(q.day, tapped, 0, q.bar === '1'); });
       return true;
     }
     whenLoaded(function () {
@@ -36891,6 +40550,24 @@
       if (i >= 0) { S.dsIndex = i; S.dsTour = q.tour; }
       go({ name: 'tour', id: q.tour, view: 'day' });
     });
+    return true;
+  }
+  function dayBarDayOpened(day, at, tries, bar) {
+    if (!modeKnown() && tries < 40) { setTimeout(function () { dayBarDayOpened(day, at, tries + 1, bar); }, 150); return; }
+    if (sheet) closeSheet(true);
+    var today = G.tourToday();
+    S.homeDate = G.parseDay(day) && day >= today ? day : today;
+    if (modeNow() === 'off') { if (!(bar && homeAwakeTap(day, at))) go({ name: 'offtour', view: 'day', own: true }); }
+    else { var to = overviewRoute(); if (to) go(to); }
+  }
+  function homeAwakeTap(day, at) {
+    if (!notFan() || actingAs() || day !== G.tourToday(at)) return false;
+    if (!G.homeAwakeUp(homeBarTl(day, at), at)) return false;
+    var up = G.homeUpAt(at);
+    homeUpSet(up.date, up.time);
+    homeTodayGo();
+    toast('Good morning. Your day moved to fit.');
+    dayBarSync(true);
     return true;
   }
   var share = { asked: false, wait: null };
@@ -37037,6 +40714,7 @@
     if (alarms.asked) return false;
     if (!items.some(function (it) { return on[it.kind] === true; })) return false;
     if ((sheet && !closing) || S.firstRun || frGateUp() || document.getElementById('gr-gate') || firstRunDue()) return false;
+    if (document.getElementById('gr-apptour')) return false;
     return !appPush.asking && !appPushAskDue();
   }
   function alarmSync(force, closing) {
@@ -37200,7 +40878,7 @@
     var uid = appPushUid();
     if (!IN_SHELL || !uid || !S.loaded || appPush.asking || !appPushPlugin()) return false;
     if (lsGet('gr-push-asked:' + uid) === '1') return false;
-    if (sheet || S.firstRun || frGateUp() || document.getElementById('gr-gate')) return false;
+    if (sheet || S.firstRun || frGateUp() || document.getElementById('gr-gate') || document.getElementById('gr-apptour')) return false;
     return !firstRunDue();
   }
   function appPushAsk() {
@@ -37321,6 +40999,7 @@
     Promise.all([barSt, cap(permP, ''), cap(mineP, { ok: false }), cap(alSt, null)]).then(function (got) {
       var bs = got[0], perm = got[1] || '', mine = G.isObj(got[2]) ? got[2] : { ok: false };
       var on = dayBarOn(), names = HOME_BAR && homeBarNames();
+      var calRow = HOME_BAR && calOn(), barCal = homePrefs().barCal !== false;
       var als = G.isObj(got[3]) ? got[3] : {};
       var alStage = alarmOn('stage'), alBus = alarmOn('bus'), alLast = alarmOn('lastcall');
       var alNote = !AL ? ''
@@ -37366,6 +41045,7 @@
               if (HOME_BAR && names !== homeBarNames()) { homeSavePrefs({ barNames: names }); if (!names) homeBarOff(); }
               dayBarSync(true);
             }
+            if (calRow && barCal !== (homePrefs().barCal !== false)) { homeSavePrefs({ barCal: barCal }); if (!barCal) homeBarOff(); dayBarSoon(); }
             if (AL) {
               lsSet(alarmKey('stage'), alStage ? '1' : '0'); lsSet(alarmKey('bus'), alBus ? '1' : '0');
               lsSet(alarmKey('lastcall'), alLast ? '1' : '0');
@@ -37401,6 +41081,9 @@
             h('div', { class: 'row-label', style: 'flex:1' }, 'Show names on the Lock Screen', h('span', { class: 'hint' }, BAR_NAMES_HINT)),
             segmented(['Off', 'On'], names ? 1 : 0, function (i) { names = i === 1; }, 'Show names on the Lock Screen')) : null,
           HOME_BAR && can ? h('p', { class: 'note' }, 'Show names follows your account, on every iPhone you use.') : null,
+          calRow ? h('div', { class: 'ds-yn', style: 'min-height:48px;margin-top:12px' },
+            h('div', { class: 'row-label', style: 'flex:1' }, 'Show calendar on Lock Screen'),
+            segmented(['Off', 'On'], barCal ? 1 : 0, function (i) { barCal = i === 1; }, 'Show calendar on Lock Screen')) : null,
           barNote ? h('p', { class: 'note' }, barNote) : null,
           AL ? h('div', { class: 'ds-yn', style: 'min-height:48px' },
             h('div', { class: 'row-label', style: 'flex:1' }, 'Stage alarm',
@@ -37427,7 +41110,7 @@
           A && perm === 'denied' ? h('p', { class: 'note' },
             'Alerts are off for Greenroom on this iPhone. To get them, open your iPhone’s Settings, then Apps, then ' +
             'Greenroom, then Notifications, and turn on Allow Notifications.') : null,
-          h('div', { class: 'stack' }, can || A || AL ? saveBtn : null,
+          h('div', { class: 'stack' }, can || A || AL || calRow ? saveBtn : null,
             A && alertsOn ? h('button', { class: 'btn ghost block', type: 'button',
               onclick: async function () {
                 var ok = await appPushOff();
@@ -37435,7 +41118,7 @@
                 toast(ok ? 'Alerts off for this phone — tour alerts too'
                   : 'Couldn’t reach Greenroom. Alerts go off the next time the app opens with a signal.');
               } }, 'Turn all alerts off') : null,
-            h('button', { class: 'btn ghost block', type: 'button', onclick: function () { closeSheet(); } }, can || A || AL ? 'Cancel' : 'Close'))
+            h('button', { class: 'btn ghost block', type: 'button', onclick: function () { closeSheet(); } }, can || A || AL || calRow ? 'Cancel' : 'Close'))
         ];
       }, { label: 'Notifications' });
     });
@@ -37740,9 +41423,9 @@
         });
       }));
     }
-    if (t && !isOffTour(t) && !feedLogs(id) && G.tourStart(t)) {
+    if (t && !isOffTour(t) && !feedLogs(id) && (G.tourStart(t) || G.studioSpan(t))) {
       out.rows.push({ tone: 'ask', text: 'No card dates yet',
-        sub: acctNewFeed(d) ? 'This tour’s bank lines are waiting under Off Tour or are left out.' : 'No bank lines come to this tour until they are set.',
+        sub: acctNewFeed(d) ? 'This ' + tourWord(t) + '’s bank lines are waiting under Off Tour or are left out.' : 'No bank lines come to this ' + tourWord(t) + ' until they are set.',
         act: fpAct('Set dates', cardsSheet) });
     }
     var where = feedWaitingWhere();
@@ -38284,22 +41967,27 @@
     if (placing && G.tourFinished(base)) { toast(G.FINISH_REFUSAL); return; }
     var band = artistOf(base);
     var shut = G.tourFinished(base);
-    var curTour = isOffTour(base) ? (band ? currentTourOf(band) : null) : shut ? null : { id: tourId, name: base.name || 'This tour' };
+    var studioBase = G.isStudioDoc(base);
+    var curTour = isOffTour(base) ? (band ? currentTourOf(band) : null) : shut ? null : { id: tourId, name: studioBase ? tourNameOf(base) : base.name || 'This tour' };
     var ups = band ? upcomingToursOf(band, tourId) : [];
+    var pasts = !placing && isOffTour(base) && band ? pastToursOf(band, tourId, true) : [];
+    var studios = !placing && isOffTour(base) && band ? studioChoicesOf(band, true) : [];
     var dests = band ? [
-      ['off', 'Off Tour', ''],
-      ['cur', 'Current Tour', curTour ? '' : shut ? G.FINISH_REFUSAL : 'No tour is running today'],
+      ['off', 'Off Tour', '']
+    ].concat(pasts.length ? [['past', 'Past tour', '']] : [], studios.length ? [['studio', 'Studio time', '']] : [], [
+      ['cur', studioBase ? WORDS.thisStudio : 'Current Tour', curTour ? '' : shut ? G.FINISH_REFUSAL : 'No tour is running today'],
       ['up', 'Upcoming Tour', ups.length ? '' : 'No upcoming tours yet']
-    ] : [];
+    ]) : [];
     var live = placing ? opts.place.map(function (d) {
       var mk = d.kind === 'merch';
       return { id: String(d.id), date: String(d.date || ''), amount: G.num(d.amount), av: false, payer: '', watch: mk ? 'merch' : 'guarantees',
-        dest: 'pin', pinTour: tourId, upTo: null, place: true, of: G.num(d.of), part: null, partAmt: 0,
+        dest: 'pin', pinTour: tourId, upTo: null, pastTo: null, studioTo: null, place: true, of: G.num(d.of), part: null, partAmt: 0,
         kind: mk ? 'merch' : 'guarantee', show: '', showTouched: false, later: false, armed: false };
     }) : ((S.incomeNew && S.incomeNew.items) || []).map(function (d) {
       var payer = G.depositPayerWord(d.payer) ? String(d.payer) : '';
       return { id: String(d.id), date: String(d.date || ''), amount: G.num(d.amount), av: !!d.atvenu || payer === 'atvenu', watch: String(d.watch || ''),
-        dest: isOffTour(base) ? 'off' : curTour ? 'cur' : 'off', upTo: ups.length ? ups[0].id : null,
+        dest: isOffTour(base) ? 'off' : curTour ? 'cur' : 'off', upTo: ups.length ? ups[0].id : null, pastTo: pasts.length ? pasts[0].id : null,
+        studioTo: studios.length ? studios[0].id : null,
         kind: '', what: '', show: '', showTouched: false, later: false, armed: false,
         how: String(d.how || ''),
         payer: payer };
@@ -38400,12 +42088,14 @@
     function landsOn(r) {
       if (r.dest === 'pin' && r.pinTour) return r.pinTour;
       if (r.dest === 'off') return null;
+      if (r.dest === 'past') return r.pastTo || null;
+      if (r.dest === 'studio') return r.studioTo || null;
       if (r.dest === 'up' && r.upTo) return r.upTo;
       return curTour ? curTour.id : tourId;
     }
     function nightsTour(r) {
       var tid = landsOn(r), t2 = tid ? getTour(tid) : null;
-      return t2 && !isOffTour(t2) ? tid : null;
+      return t2 && !isOffTour(t2) && !G.isStudioDoc(t2) ? tid : null;
     }
     function showChoices(r) {
       var tid = landsOn(r);
@@ -38608,7 +42298,7 @@
         var may = kind === 'merch' ? (r.watch === 'merch' || r.watch === 'both' || !r.watch)
           : !r.av && (r.watch === 'guarantees' || r.watch === 'both' || !r.watch);
         if (!may) return null;
-        var probe = { kind: kind, dest: r.dest, upTo: r.upTo, pinTour: r.pinTour, amount: r.amount, date: r.date };
+        var probe = { kind: kind, dest: r.dest, upTo: r.upTo, pastTo: r.pastTo, studioTo: r.studioTo, pinTour: r.pinTour, amount: r.amount, date: r.date };
         var pc = showChoices(probe);
         var ids = !pc ? [] : kind === 'merch' ? merchLump(probe, pc) : defaultNights(probe, pc);
         if (ids.length < 2) return null;
@@ -38737,7 +42427,7 @@
         : /_later$/.test(pick.kind) ? 'Logged ' + G.moneyCents(r.amount) + ' \u00b7 to sort later'
         : 'Logged ' + G.moneyCents(r.amount) + (parts ? ' across ' + parts.length + ' shows' : '');
       if (out.ok && out.why !== 'done' && !r.place && B.depositUndoReady && B.depositUndoReady()) {
-        var undone = { id: r.id, date: r.date, amount: r.amount, av: r.av, watch: r.watch, dest: r.dest, upTo: r.upTo,
+        var undone = { id: r.id, date: r.date, amount: r.amount, av: r.av, watch: r.watch, dest: r.dest, upTo: r.upTo, pastTo: r.pastTo, studioTo: r.studioTo,
           kind: '', what: '', show: '', showTouched: false, later: false, armed: false, how: r.how, payer: r.payer };
         toastUndo(said, r.id, tid, function () { putBack(undone); });
       } else toast(said);
@@ -38803,6 +42493,16 @@
         onchange: function (e) { r.upTo = e.target.value; r.showTouched = false; r.show = ''; r.shows = []; r.later = false; r.allNights = false; redraw(); } },
         ups.map(function (u) { return h('option', { value: u.id }, u.name + ' · starts ' + dayMD(u.start)); })) : null;
       if (upSel) { upSel.value = r.upTo || ''; upSel.hidden = r.dest !== 'up'; }
+      var pastSel = pasts.length ? h('select', { class: 'input sm rv-upsel rv-pastsel', 'aria-label': 'Which past tour',
+        disabled: r.busy || null,
+        onchange: function (e) { r.pastTo = e.target.value; r.showTouched = false; r.show = ''; r.shows = []; r.later = false; r.allNights = false; redraw(); } },
+        pasts.map(function (p) { return h('option', { value: p.id }, pastTourWords(p)); })) : null;
+      if (pastSel) { pastSel.value = r.pastTo || ''; pastSel.hidden = r.dest !== 'past'; }
+      var studioSel = studios.length ? h('select', { class: 'input sm rv-upsel rv-pastsel', 'aria-label': 'Which studio time',
+        disabled: r.busy || null,
+        onchange: function (e) { r.studioTo = e.target.value; r.showTouched = false; r.show = ''; r.shows = []; r.later = false; r.allNights = false; redraw(); } },
+        studios.map(function (p) { return h('option', { value: p.id }, studioChoiceWords(p)); })) : null;
+      if (studioSel) { studioSel.value = r.studioTo || ''; studioSel.hidden = r.dest !== 'studio'; }
       var pinT = r.pinTour ? getTour(r.pinTour) : null;
       var ds = pinT ? dests.concat([['pin', pinT.name || 'That tour', '']]) : dests;
       return h('div', { class: 'rv-dwrap' },
@@ -38818,14 +42518,14 @@
                 redraw();
               } }, d[1]);
           })),
-        upSel);
+        upSel, pastSel, studioSel);
     }
     function rowEl(r) {
       var wrap = h('div', { class: 'rv-row iv-row' });
       r.el = wrap;
       var row = { redraw: redraw };
       function redraw() {
-        var canLater = !r.place && !!nightsTour({ dest: r.dest, upTo: r.upTo, pinTour: r.pinTour });
+        var canLater = !r.place && !!nightsTour({ dest: r.dest, upTo: r.upTo, pastTo: r.pastTo, studioTo: r.studioTo, pinTour: r.pinTour });
         if (r.later && !canLater) r.later = false;
         var isMerch = r.kind === 'merch';
         var kindSel = h('select', { class: 'input sm', 'aria-label': 'What this deposit was',
@@ -38982,7 +42682,7 @@
           r.busy ? 'Logging…' : 'Log');
         var aside = h('button', { class: 'linkbtn rv-aside', type: 'button', disabled: r.busy || null },
           r.place ? (r.armed ? 'Put it back in New income?' : 'Logged by mistake \u2014 put it back')
-            : r.armed ? 'Clear it for good?' : 'Not tour income — clear it');
+            : r.armed ? 'Clear it for good?' : studioBase ? WORDS.notStudioIncome : 'Not tour income — clear it');
         logBtn.onclick = function () { logOne(r, row); };
         aside.onclick = function () { if (r.place) unparkOne(r, row); else skipOne(r, row); };
         var acct = accountOf(r);
@@ -39024,7 +42724,7 @@
         };
         var approve = function (x) {
           if (r.busy) return;
-          var was = { kind: r.kind, dest: r.dest, upTo: r.upTo, pinTour: r.pinTour || null };
+          var was = { kind: r.kind, dest: r.dest, upTo: r.upTo, pastTo: r.pastTo, studioTo: r.studioTo, pinTour: r.pinTour || null };
           r.kind = x.kind; r.show = x.show.id; r.shows = [x.show.id]; r.later = false; r.showTouched = true; r.hitDone = true;
           if (x.tourId && curTour && x.tourId === curTour.id) r.dest = 'cur';
           else if (x.tourId && ups.some(function (u) { return u.id === x.tourId; })) { r.dest = 'up'; r.upTo = x.tourId; }
@@ -39049,7 +42749,7 @@
               h('button', { class: 'btn sm ghost', type: 'button', disabled: r.busy || null, onclick: function () {
                 var w0 = ap.was || {};
                 r.approved = null; r.hitDone = false; r.kind = w0.kind || ''; r.show = ''; r.shows = []; r.later = false; r.showTouched = false;
-                r.dest = w0.dest || (curTour ? 'cur' : 'off'); r.upTo = w0.upTo || r.upTo; r.pinTour = w0.pinTour || null;
+                r.dest = w0.dest || (curTour ? 'cur' : 'off'); r.upTo = w0.upTo || r.upTo; r.pastTo = w0.pastTo || r.pastTo; r.studioTo = w0.studioTo || r.studioTo; r.pinTour = w0.pinTour || null;
                 redraw(); sayCount();
               } }, 'Back'),
               h('button', { class: 'btn sm primary', type: 'button', disabled: r.busy || null, onclick: function () { logOne(r, row); } },
@@ -39093,7 +42793,7 @@
         var infoMatch = function () {
           var all = suggestTies(r), no = all.length > 0 && !!r.hitDone && !r.approved;
           var lp = all.length && !no ? null : lumpFor({ kind: r.place ? r.kind : '', watch: r.watch, av: r.av,
-            dest: r.dest, upTo: r.upTo, pinTour: r.pinTour, amount: r.amount, date: r.date });
+            dest: r.dest, upTo: r.upTo, pastTo: r.pastTo, studioTo: r.studioTo, pinTour: r.pinTour, amount: r.amount, date: r.date });
           var lumpNo = !!lp && !!r.lumpDone && !(r.shows || []).length;
           return { ties: all, no: no, lump: lp, lumpNo: lumpNo };
         };
@@ -39210,13 +42910,16 @@
     syncCards(id);
     var waiting = feedWaiting(id);
     var cards = tourCards(t);
+    if (isOffTour(t)) cards = cards.filter(function (c) { return !!c.debt || !offCardAway(id, c); });
     if (isOffTour(t) && createdTour(id)) {
-      bookCards().forEach(function (c) { if (!cards.some(function (x) { return x.names.indexOf(c.name) >= 0; })) cards.push(c); });
+      offCardsHere(id, bookCards()).forEach(function (c) { if (!cards.some(function (x) { return x.names.indexOf(c.name) >= 0; })) cards.push(c); });
       cards.sort(function (a, b) { return (a.kind === b.kind ? 0 : a.kind === 'credit' ? -1 : 1) || a.label.localeCompare(b.label); });
     }
+    var linked = isOffTour(t) && createdTour(id) ? bookCards() : [];
     waiting.forEach(function (it) {
       var nm = String(it.account || '').trim();
-      if (nm && !cards.some(function (c) { return c.names.indexOf(nm) >= 0; })) cards.push({ id: nm, name: nm, names: [nm], bank: '', kind: '', debt: null, label: cardLabelFor(t, nm) });
+      var lc = linked.filter(function (c) { return c.names.indexOf(nm) >= 0; })[0];
+      if (nm && !cards.some(function (c) { return c.names.indexOf(nm) >= 0; })) cards.push({ id: nm, name: nm, names: [nm], bank: '', kind: '', debt: null, label: lc ? lc.label : cardLabelFor(t, nm) });
     });
     var P = S.pile && S.pile[id];
     var known = createdTour(id) ? !!(S.feed && S.feed.row && !S.feed.failed) : !!(P && P.lead && !P.failed);
@@ -39250,13 +42953,14 @@
         toast(on ? 'atVenu is on: merch logs itself from the reports' : 'atVenu is off for this tour');
       } });
     avBox.checked = avOn;
-    if (!isOffTour(t)) rows.unshift(h('label', { class: 'row card-line av-link', for: 'av-sync-' + id },
+    var nightless = isOffTour(t) || G.isStudioDoc(t);
+    if (!nightless) rows.unshift(h('label', { class: 'row card-line av-link', for: 'av-sync-' + id },
       h('img', { class: 'brand-logo', src: 'logo-atvenu.png', alt: '' }),
       h('div', { class: 'row-label' }, 'atVenu',
         h('span', { class: 'hint' }, G.tourFinished(t) ? 'Reports are kept until the tour is reopened' : avOn ? 'Merch logs itself from the atVenu reports' : 'Off \u2014 merch is typed by hand on this tour')),
       avBox));
     var rm = receivedFor(id), rmWord = function (m) { return m === 'card' ? 'through card' : 'manually'; };
-    if (S.mode === 'db' && !isOffTour(t) && (rm.asked || (createdTour(id) && tourOpen(t)))) {
+    if (S.mode === 'db' && !nightless && (rm.asked || (createdTour(id) && tourOpen(t)))) {
       var rmInner = [h('div', { class: 'row-label' }, 'Received boxes',
         h('span', { class: 'hint' }, rm.asked ? 'Guarantees: ' + rmWord(rm.guarantee) + ' \u00b7 Merch: ' + rmWord(rm.merch) : 'Not answered yet: ticked manually'))];
       rows.push(createdTour(id) && (tourOpen(t) || rm.asked)
@@ -39276,7 +42980,8 @@
       rows.length ? h('div', { class: 'ledger cards-list' }, rows)
         : entry || loading ? null
         : isOffTour(t) && !createdTour(id) ? h('p', { class: 'note', style: 'margin-top:24px' }, 'The book’s cards are linked on its creator’s account.')
-        : emptyState('No cards linked', isOffTour(t) ? 'Cards linked to the Off Tour book show up here.' : 'Cards linked to this tour show up here.')
+        : emptyState('No cards linked', isOffTour(t) ? 'Cards linked to the Off Tour book show up here.' : 'Cards linked to this tour show up here.'),
+      isOffTour(t) ? offCardConnectNode(id) : null
     ];
   }
   async function loadPile(tourId) {
@@ -39335,8 +43040,8 @@
       h('div', { class: 'feed-bar' }, refreshBtn),
       feedPanel({
         alerts: [P.failed ? again() : null, feedItem],
-        rows: [t && !isOffTour(t) && !feedLogs(id) && G.tourStart(t)
-          ? { tone: 'ask', text: 'No card dates yet', sub: 'No bank lines come to this tour until its creator sets them in the menu (the three lines), Linked Cards.' } : null] }),
+        rows: [t && !isOffTour(t) && !feedLogs(id) && (G.tourStart(t) || G.studioSpan(t))
+          ? { tone: 'ask', text: 'No card dates yet', sub: 'No bank lines come to this ' + tourWord(t) + ' until its creator sets them in the menu (the three lines), Linked Cards.' } : null] }),
       cardActivityButton(id));
   }
   async function tmRefresh(id, btn, label) {
@@ -39946,22 +43651,31 @@
     var st = null;
     var busy = false;
     var had = t && t.cardLog ? t.cardLog : {};
-    var plan = {
+    var stu = t ? G.studioSpan(t) : null;
+    var plan = stu ? {
+      from: G.parseDay(had.from) && had.from !== stu.from ? 'custom' : 'tour',
+      fromDate: G.parseDay(had.from) ? had.from : '',
+      to: G.parseDay(had.to) && had.to !== stu.to ? 'custom' : 'tour',
+      toDate: G.parseDay(had.to) ? had.to : ''
+    } : {
       from: had.from === 'rehearsals' ? 'rehearsals' : G.parseDay(had.from) ? 'custom' : 'tour',
       fromDate: G.parseDay(had.from) ? had.from : '',
       to: G.parseDay(had.to) ? 'custom' : 'tour',
       toDate: G.parseDay(had.to) ? had.to : ''
     };
     function planLog() {
+      if (stu) return { from: plan.from === 'custom' ? plan.fromDate : stu.from, to: plan.to === 'custom' ? plan.toDate : stu.to };
       return { from: plan.from === 'custom' ? plan.fromDate : plan.from, to: plan.to === 'custom' ? plan.toDate : plan.to };
     }
     function planFrom() {
       if (plan.from === 'custom') return G.parseDay(plan.fromDate) ? plan.fromDate : null;
+      if (stu) return stu.from;
       if (plan.from === 'rehearsals' && G.parseDay(t.rehearsalStart)) return t.rehearsalStart;
       return G.tourStart(t);
     }
     function planTo() {
       if (plan.to === 'custom') return G.parseDay(plan.toDate) ? plan.toDate : null;
+      if (stu) return stu.to;
       return G.tourEnd(t);
     }
     function logSection() {
@@ -39984,6 +43698,18 @@
           : 'Pick the last day to log.';
       }
       notes();
+      if (stu) {
+        return [
+          h('h3', { class: 'sh-h3' }, 'How far back would you like to log?'),
+          segmented(['First studio day', 'Custom'], plan.from === 'custom' ? 1 : 0,
+            function (i) { plan.from = i ? 'custom' : 'tour'; notes(); }, 'How far back to log'),
+          fromIn, fromNote,
+          h('h3', { class: 'sh-h3' }, 'When would you like to conclude logging for this studio time?'),
+          segmented(['Last studio day', 'Custom'], plan.to === 'custom' ? 1 : 0,
+            function (i) { plan.to = i ? 'custom' : 'tour'; notes(); }, 'When to stop logging'),
+          toIn, toNote
+        ];
+      }
       return [
         h('h3', { class: 'sh-h3' }, 'How far back would you like to log?'),
         segmented(['Start of tour', 'Start of rehearsals', 'Custom'], ['tour', 'rehearsals', 'custom'].indexOf(plan.from),
@@ -40110,7 +43836,7 @@
       if (st.switchedOn && st.lastStatus && st.lastStatus !== 'ok') parts.push(h('p', { class: 'note lc-warn' }, feedProblem(st.lastStatus)));
       parts.push(feedBankCards(st, tourId), connectBtn('Connect a bank or card'));
       if (!tourId) parts.push(myPayLinkedNode(back));
-      if (t && G.tourStart(t)) {
+      if (t && (G.tourStart(t) || stu)) {
         parts.push(logSection());
         var logsNow = st.switchedOn && feedLogs(tourId);
         parts.push(h('div', { class: 'stack' },
@@ -40158,11 +43884,11 @@
     }, { label: 'Card dates', cls: 'lc-sheet', onClose: function () { sheetBack(back); } });
   }
   function cardDatesNode(back) {
-    var mine = allTourEntries().filter(function (e) { return createdTour(e[0]); });
+    var mine = allTourEntries().concat(studioEntries()).filter(function (e) { return createdTour(e[0]); });
     if (!mine.length) return h('p', { class: 'note' }, 'Each tour has its own card dates. Once you make a tour, they are set here.');
     return h('div', { class: 'lc-dates' },
       h('div', { class: 'ledger feed-accts' }, mine.map(function (e) {
-        var t = e[1], w = G.cardWindow(t), first = G.tourStart(t);
+        var t = e[1], w = G.cardWindow(t), sp = G.studioSpan(t), first = sp ? sp.from : G.tourStart(t);
         var line = !first ? 'Add its shows first' : w ? 'Logging ' + G.sumSpan(w.from, w.to) : 'No card dates yet';
         return h('button', { class: 'row fa-row', type: 'button', onclick: function () { openFeedSheet(e[0], false, back ? { back: back } : null); } },
           h('div', { class: 'row-label' }, tourNameOf(t), h('span', { class: 'hint' + (first && !w ? ' over' : '') }, line)),
@@ -40334,7 +44060,7 @@
     function build() {
       var keys = Object.keys(S.labels).filter(function (k) {
         return k.indexOf('crew:') !== 0 && k.indexOf('alogo:') !== 0 && k.indexOf('artist:') !== 0 && k.indexOf('profile:') !== 0 &&
-          k.indexOf('who:') !== 0 && !homeKey(k);
+          k.indexOf('who:') !== 0 && k.indexOf('offcard:') !== 0 && !homeKey(k);
       }).sort(function (a, b) {
         var an = (S.labels[a].merchant || a).toLowerCase();
         var bn = (S.labels[b].merchant || b).toLowerCase();
