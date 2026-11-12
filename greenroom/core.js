@@ -3254,19 +3254,56 @@
       end: steps.length ? steps[steps.length - 1].ts : null
     };
   }
+  function dayHold(steps) {
+    for (var a = 0; a < steps.length; a++) if (steps[a] && steps[a].key === 'awake' && steps[a].label === HOME_AWAKE_WORD && steps[a].ts != null) break;
+    if (a >= steps.length) return null;
+    var mark = steps[a].ts + HOME_AWAKE_WAIT * 60e3;
+    for (var r = a + 1; r < steps.length; r++) if (steps[r].key !== 'awake' && steps[r].ts != null && steps[r].ts >= mark) break;
+    return r < steps.length ? { a: a, rel: r, end: steps[r].ts } : { a: a, rel: -1, end: mark };
+  }
+  var DAY_STEP_MOST = 240;
+  function dayStepHold(s) {
+    var n = s && typeof s.mins === 'number' && isFinite(s.mins) ? Math.round(s.mins) : 0;
+    return n > 0 && n <= 1440 ? Math.max(DAY_BAR_GRACE, Math.min(n, DAY_STEP_MOST) * 60e3) : DAY_BAR_GRACE;
+  }
   function dayAt(tl, now) {
     var steps = tl && Array.isArray(tl.steps) ? tl.steps : [];
     var t = now == null ? Date.now() : +now;
     var i = -1;
     for (var k = 0; k < steps.length; k++) if (steps[k].ts != null && steps[k].ts <= t) i = k;
     var lastStep = steps[steps.length - 1];
-    return {
+    var hold = dayHold(steps);
+    var lastEnd = lastStep ? lastStep.ts + dayStepHold(lastStep) : null;
+    var at = {
       index: i, before: i < 0 && steps.length > 0,
       current: i >= 0 ? steps[i] : null,
       next: steps[i + 1] || null,
       then: steps[i + 2] || null,
-      over: !!lastStep && i === steps.length - 1 && t >= lastStep.ts + DAY_BAR_GRACE
+      over: !!lastStep && i === steps.length - 1 && t >= (hold && hold.rel < 0 ? Math.max(lastEnd, hold.end) : lastEnd)
     };
+    if (!hold || t >= hold.end) return at;
+    var shows = function (s) { return s.key === 'awake' || s.key === 'event' || s.ts >= hold.end; };
+    if (i < hold.a) {
+      if (i + 1 === hold.a) {
+        var after = steps[hold.a + 1] || null;
+        at.next = after && !shows(after) ? Object.assign({}, after, { label: steps[hold.a].label, sub: steps[hold.a].sub, key: steps[hold.a].key }) : after;
+        at.then = steps[hold.a + 2] || null;
+      } else if (i + 2 === hold.a) at.then = steps[hold.a + 1] || null;
+      return at;
+    }
+    var j = hold.a;
+    for (k = hold.a; k <= i; k++) if (shows(steps[k])) j = k;
+    at.current = Object.assign({}, steps[j], { ts: steps[i].ts });
+    if (at.next && !shows(at.next)) at.next = Object.assign({}, at.next, { label: steps[j].label, sub: steps[j].sub, key: steps[j].key });
+    at.held = hold.a;
+    return at;
+  }
+  function dayBarEnd(tl) {
+    if (!tl || tl.end == null) return null;
+    var steps = Array.isArray(tl.steps) ? tl.steps : [], last = steps[steps.length - 1];
+    var end = tl.end + (last && last.ts === tl.end ? dayStepHold(last) : DAY_BAR_GRACE);
+    var hold = dayHold(steps);
+    return hold && hold.rel < 0 ? Math.max(end, hold.end) : end;
   }
   function dayBarState(tl, now) {
     var t = now == null ? Date.now() : +now;
@@ -3752,6 +3789,87 @@
         { weekday: 'short', month: 'short', day: 'numeric' }).format(parseDay(date));
     }
     return [head].concat(offDayLines(off)).join('\n');
+  }
+  var OFF_FILL_ACTS = 1000;
+  function offDayFromPhoto(cur, out, ampm) {
+    var c = isObj(cur) ? cur : {}, o = isObj(out) ? out : {};
+    var one = function (v, n) { return String(v == null ? '' : v).replace(/\s+/g, ' ').trim().slice(0, n); };
+    var whole = function (v) { return one(v, OFF_FILL_ACTS + 1); };
+    var lines = function (v) {
+      return (Array.isArray(v) ? v : String(v == null ? '' : v).split(/\r?\n/))
+        .map(whole).filter(Boolean);
+    };
+    var fill = {};
+    ['city', 'hotel', 'hotelAddress', 'busCall', 'flight', 'activities'].forEach(function (k) {
+      fill[k] = String(c[k] == null ? '' : c[k]);
+    });
+    var rows = [];
+    [['city', 'City'], ['hotel', 'Hotel'], ['hotelAddress', 'Hotel address']].forEach(function (b) {
+      var v = whole(o[b[0]]);
+      if (!v) return;
+      fill[b[0]] = v.slice(0, 120).trim();
+      if (v.length > 120) rows.push({ label: b[1], value: v });
+    });
+    var bus = whole(o.busCall), busWords = null;
+    if (bus) {
+      var busBox = joinTime(bus, ampm || '');
+      if (!/^\d{1,2}:\d{2}(?:AM|PM)?$/.test(busBox)) {
+        var busTimes = dsTokens(bus).filter(function (t) { return /^T\d/.test(t); });
+        var bt = busTimes.length === 1 ? /^T(\d{1,2}:\d{2})([ap]?)$/.exec(busTimes[0]) : null;
+        busBox = bt ? joinTime(bt[1] + (bt[2] ? bt[2] + 'm' : ''), ampm || '') : bus.slice(0, 40).trim();
+        busWords = { label: /^bus\s*call\b/i.test(bus) ? '' : 'Bus call', value: bus };
+      }
+      fill.busCall = busBox;
+    }
+    var fit = function (list, n, base) {
+      var text = base || '', past = [];
+      list.forEach(function (l) {
+        var next = text.trim() ? text.replace(/\s+$/, '') + '\n' + l : l;
+        if (next.length <= n) text = next; else past.push(l);
+      });
+      return { text: text, past: past };
+    };
+    var cut = 0;
+    var flights = lines(o.flight), flightPast = [];
+    if (flights.length) { var fl = fit(flights, 500, ''); fill.flight = fl.text; flightPast = fl.past; }
+    var acts = lines(o.activities);
+    if (acts.length) { var ac = fit(acts, OFF_FILL_ACTS, ''); fill.activities = ac.text; cut += ac.past.length; }
+    var lobby = whole(o.lobbyCall);
+    if (lobby) rows.push({ label: 'Lobby call', value: cleanTime(lobby) });
+    if (busWords) rows.push(busWords);
+    lines(o.travel).concat(flightPast).forEach(function (l) { rows.push({ label: '', value: l }); });
+    (Array.isArray(o.extras) ? o.extras : []).forEach(function (r) {
+      if (!isObj(r)) return;
+      var label = whole(r.label).replace(/[\s:]+$/, ''), value = whole(r.value);
+      if (label || value) rows.push({ label: label, value: value });
+    });
+    lines(o.notes).forEach(function (l) { rows.push({ label: '', value: l }); });
+    var said = function (r) { return r.label && r.value ? r.label + ': ' + r.value : (r.label || r.value); };
+    var key = function (s) { return String(s).toLowerCase().replace(/\s+/g, ' ').trim(); };
+    var toks = function (label, value) {
+      var lab = dsTokens(label), val = dsTokens(value);
+      return { lab: lab, val: val, all: lab.concat(val) };
+    };
+    var had = String(fill.activities).split(/\r?\n/).filter(function (l) { return l.trim(); });
+    var src = [toks('city', fill.city), toks('hotel', [fill.hotel, fill.hotelAddress, fill.city].join(' ')),
+      toks('hotel address', fill.hotelAddress), toks('bus call', fill.busCall), toks('flight', fill.flight)]
+      .concat(had.map(function (l) { return toks('', l); }))
+      .filter(function (s) { return s.val.length; });
+    var ex = rows.map(function (r) { return toks(r.label, r.value); });
+    var seen = {};
+    had.concat(String(fill.flight).split(/\r?\n/), [fill.city, fill.hotel, fill.hotelAddress])
+      .forEach(function (l) { if (String(l).trim()) seen[key(l)] = true; });
+    var keep = rows.filter(function (r, i) {
+      var e = ex[i], k = key(said(r));
+      if (seen[k]) return false;
+      if (e.all.length && src.some(function (s) { return dsRepeatOf(e, s); })) return false;
+      if (e.all.length && ex.some(function (x, j) { return j !== i && x.all.length && dsRepeatOf(e, x) && (j < i || !dsRepeatOf(x, e)); })) return false;
+      seen[k] = true;
+      return true;
+    }).map(said);
+    if (keep.length) { var add = fit(keep, OFF_FILL_ACTS, fill.activities); fill.activities = add.text; cut += add.past.length; }
+    var got = Object.keys(fill).filter(function (k) { return fill[k] && String(c[k] == null ? '' : c[k]) !== fill[k]; }).length;
+    return { fill: fill, got: got, cut: cut };
   }
   function pickBandNumber(out) {
     var o = isObj(out) ? JSON.parse(JSON.stringify(out)) : {};
@@ -5455,7 +5573,8 @@
         first = a && r ? (r < a ? r : a) : a || r || cpaDay(book.doc.createdAt);
       } else {
         var y0 = bookYears(book.doc)[0] || '';
-        first = parseDay(book.doc.offFrom) && String(book.doc.offFrom).slice(0, 4) === y0 ? book.doc.offFrom : y0 ? y0 + '-01-01' : '';
+        var from = book.doc.offFrom == null ? cpaDay(book.doc.createdAt) : book.doc.offFrom;
+        first = parseDay(from) && String(from).slice(0, 4) === y0 ? from : y0 ? y0 + '-01-01' : '';
       }
       if (!inY(first)) return;
       Object.keys(exp).sort().forEach(function (k) {
@@ -5951,7 +6070,7 @@
     if (!reconcile.holds) check('The year’s money does not add up line by line', 1, 0, 'Tell Greenroom');
     books.forEach(function (bk) {
       var y0 = Y + '-01-01', y1 = Y + '-12-31', s0;
-      if (bk.kind === 'off') s0 = cpaDay(bk.doc.offFrom) || y0;
+      if (bk.kind === 'off') s0 = cpaDay(bk.doc.offFrom == null ? bk.doc.createdAt : bk.doc.offFrom) || y0;
       else {
         var a = tourStart(bk.doc) || '', rh = parseDay(bk.doc.rehearsalStart) ? bk.doc.rehearsalStart : '';
         s0 = a && rh ? (rh < a ? rh : a) : a || rh || y0;
@@ -7011,6 +7130,7 @@
     g.done.sort(function (a, b) { return String(b.doneAt || '').localeCompare(String(a.doneAt || '')) || num(b.createdAt) - num(a.createdAt); });
     return g;
   }
+  var HOME_ORDER = { awake: -1, event: 0, routine: 1, task: 2, extra: 3 };
   function homeDay(o) {
     o = isObj(o) ? o : {};
     var date = o.date, day = isObj(o.day) ? o.day : {};
@@ -7025,7 +7145,7 @@
       var start = homeMins(time), len = Math.round(num(mins));
       var item = { id: id, key: id, kind: kind, title: String(title == null ? '' : title).trim(), sub: sub || '',
         start: start, at: start == null ? null : (start < ROLL ? start + 1440 : start),
-        end: start != null && len > 0 ? (start < ROLL ? start + 1440 : start) + len : null, done: !!done, _o: items.length };
+        end: start != null && len > 0 ? (start < ROLL ? start + 1440 : start) + len : null, mins: len > 0 ? len : 0, done: !!done, _o: items.length };
       if (due) item.due = due;
       items.push(item);
     };
@@ -7046,7 +7166,7 @@
     (Array.isArray(day.extra) ? day.extra : []).forEach(function (x) {
       if (isObj(x)) add('extra', 'extra:' + x.id, x.title, 'Added for today', x.time, x.mins, x.done);
     });
-    var order = { event: 0, routine: 1, task: 2, extra: 3 };
+    var order = HOME_ORDER;
     var timed = items.filter(function (x) { return x.at != null; })
       .sort(function (a, b) { return a.at - b.at || order[a.kind] - order[b.kind] || a._o - b._o; });
     var open = items.filter(function (x) { return x.at == null; })
@@ -7064,6 +7184,156 @@
     var next = (Array.isArray(d.timed) ? d.timed : []).filter(function (x) { return x && x.at > item.at; })[0];
     return t >= when(next ? next.at : item.at);
   }
+  var HOME_AWAKE_WORD = 'AWAKE', HOME_AWAKE_SUB = 'Tap when you’re up', HOME_MORNING_WORD = 'Good morning';
+  var HOME_AWAKE_WAIT = 240;
+  var HOME_FIT_MINS = 30;
+  var HOME_FIT_MAX = 3;
+  var HOME_FIT_AFTER = 30;
+  var HOME_WAKE_FIRST = 300, HOME_WAKE_LAST = 960;
+  function homePlanOff() {
+    return { on: false, wake: '', awake: false, up: '', waiting: false, until: null, bed: null, steps: [], fits: {} };
+  }
+  function homePlan(hd, o) {
+    var d = isObj(hd) ? hd : {}, w = isObj(o) ? o : {};
+    if (isObj(d.plan)) return d;
+    var date = parseDay(d.date) ? d.date : null;
+    var copy = function (x) { return Object.assign({}, x); };
+    var timed = (Array.isArray(d.timed) ? d.timed : []).filter(isObj).map(copy);
+    var open = (Array.isArray(d.open) ? d.open : []).filter(isObj).map(copy);
+    var plan = homePlanOff();
+    var wake = homeMins(w.wake);
+    if (!date || w.fit === false || w.road === true || w.fan === true || wake == null) return { date: date, timed: timed, open: open, plan: plan };
+    var ROLL = ROLLOVER_HOURS * 60;
+    var onDay = function (m) { return m < ROLL ? m + 1440 : m; };
+    var W = onDay(wake);
+    var bed = homeMins(w.bed), B = bed == null ? 1440 : onDay(bed);
+    if (B <= W) B = 1440 + ROLL;
+    plan.on = true; plan.wake = homeTime(wake); plan.bed = B;
+    plan.awake = date === w.today && wake >= HOME_WAKE_FIRST && wake <= HOME_WAKE_LAST;
+    var up = plan.awake ? homeMins(w.up) : null, A = up == null ? null : Math.max(up, ROLL);
+    if (A != null) plan.up = homeTime(up);
+    plan.waiting = plan.awake && A == null;
+    var room = function (x) { var n = Math.round(num(x.mins)); return n > 0 ? n : HOME_FIT_MINS; };
+    var clash = function (a, n, list) { return list.some(function (s) { return s.a < a + n && a < s.b; }); };
+    var free = function (from, n, list) {
+      for (var s = from, again = true; again;) {
+        again = false;
+        for (var k = 0; k < list.length; k++) if (list[k].a < s + n && s < list[k].b) { s = list[k].b; again = true; }
+      }
+      return s;
+    };
+    var move = function (x, s) {
+      if (x.ideal == null && x.start != null) x.ideal = x.start;
+      var n = x.end != null && x.at != null ? x.end - x.at : null;
+      x.at = s; x.start = s % 1440; x.end = n != null ? s + n : null;
+    };
+    var cut = function (x) { x.noRoom = true; x.start = null; x.at = null; x.end = null; };
+    var idx = function (list) { return function (x) { return list.indexOf(x); }; };
+    var events = [], busy = [], moved = [], slept = [], routines = [];
+    var mine = timed.some(function (x) { return x.kind !== 'event'; });
+    timed.forEach(function (x) {
+      var span = { a: x.at, b: x.at + room(x) };
+      if (x.kind === 'event') { events.push(span); busy.push(span); }
+      else if (x.kind === 'routine') routines.push(x);
+      else if (A != null && x.at < A) slept.push(x);
+      else busy.push(span);
+    });
+    var ti = idx(timed), floor = -Infinity;
+    routines.sort(function (a, b) { return a.at - b.at || ti(a) - ti(b); }).forEach(function (r) {
+      var n = room(r), e = A != null ? Math.max(r.at, A) : r.at;
+      if (e === r.at && !clash(r.at, n, events) && !clash(r.at, n, moved)) { busy.push({ a: r.at, b: r.at + n }); return; }
+      var s = free(Math.max(e, floor), n, busy);
+      if (s + n > B) { cut(r); return; }
+      move(r, s); moved.push({ a: s, b: s + n }); busy.push({ a: s, b: s + n }); floor = s + n;
+    });
+    slept.sort(function (a, b) { return a.at - b.at || ti(a) - ti(b); }).forEach(function (x) {
+      var n = room(x), s = free(A, n, busy);
+      if (s + n > B) { cut(x); return; }
+      move(x, s); busy.push({ a: s, b: s + n });
+    });
+    if (plan.awake) {
+      var ranks = {};
+      (Array.isArray(w.assigned) ? w.assigned : []).forEach(function (t, i) {
+        if (isObj(t) && t.key && !(t.key in ranks)) ranks[t.key] = { i: i, due: parseDay(t.due) ? t.due : parseDay(t.date) ? t.date : '' };
+      });
+      var seen = {}, cands = [];
+      open.concat((Array.isArray(w.extra) ? w.extra : []).filter(isObj).map(copy)).forEach(function (x, i) {
+        if (x.kind !== 'task' || x.start != null || !x.id || seen[x.id]) return;
+        seen[x.id] = true;
+        var r = ranks[x.id], artist = x.id.indexOf('todo:') === 0;
+        cands.push({ x: x, line: i < open.length, due: (r && r.due) || x.due || date, g: artist ? 1 : 0, i: artist && r ? r.i : i });
+      });
+      cands.sort(function (a, b) { return a.due < b.due ? -1 : a.due > b.due ? 1 : a.g - b.g || a.i - b.i; });
+      var from = A != null ? A + HOME_FIT_AFTER : W + HOME_AWAKE_WAIT;
+      cands.slice(0, HOME_FIT_MAX).forEach(function (c) {
+        var n = room(c.x), s = free(from, n, busy);
+        if (s + n > B) { if (c.line) c.x.noRoom = true; return; }
+        busy.push({ a: s, b: s + n });
+        plan.fits[c.x.id] = s;
+        if (!c.line) return;
+        c.x.fit = true; c.x.at = s; c.x.start = s % 1440; c.x.end = s + n;
+      });
+      if (!mine && !Object.keys(plan.fits).length) { plan.awake = false; plan.waiting = false; plan.up = ''; A = null; }
+    }
+    var lines = timed.concat(open);
+    timed = lines.filter(function (x) { return x.at != null; });
+    open = lines.filter(function (x) { return x.at == null; });
+    var li = idx(lines);
+    timed.sort(function (a, b) { return a.at - b.at || HOME_ORDER[a.kind] - HOME_ORDER[b.kind] || li(a) - li(b); });
+    open.sort(function (a, b) { return HOME_ORDER[a.kind] - HOME_ORDER[b.kind] || li(a) - li(b); });
+    if (plan.awake && A != null) plan.steps.push({ at: A, title: HOME_MORNING_WORD, sub: '' });
+    if (plan.waiting) {
+      var mark = W + HOME_AWAKE_WAIT, then = timed.filter(function (x) { return x.at >= mark && x.at < 1440; })[0];
+      plan.until = then ? then.at : mark;
+      plan.steps.push({ at: W, title: HOME_AWAKE_WORD, sub: HOME_AWAKE_SUB });
+      var spans = timed.filter(function (x) { return x.kind === 'event'; }).map(function (x) { return { a: x.at, b: x.at + room(x) }; });
+      var backs = {};
+      spans.forEach(function (e) {
+        if (e.a < W || e.b <= W || e.b >= plan.until || backs[e.b]) return;
+        if (spans.some(function (f) { return f.a <= e.b && e.b < f.b; })) return;
+        backs[e.b] = true;
+        plan.steps.push({ at: e.b, title: HOME_AWAKE_WORD, sub: HOME_AWAKE_SUB, back: true });
+      });
+      plan.steps.sort(function (a, b) { return a.at - b.at; });
+    }
+    return { date: date, timed: timed, open: open, plan: plan };
+  }
+  function homeDayPlan(day, p) {
+    var o = isObj(day) ? day : {}, w = Object.assign({}, isObj(p) ? p : {}, { today: o.today });
+    var off = w.fit === false || w.road === true || w.fan === true || homeMins(w.wake) == null;
+    if (off || !parseDay(o.date) || o.date !== o.today) return homePlan(homeDay(o), w);
+    var hd = homeDay(Object.assign({}, o, { keepDone: true })), have = {};
+    hd.timed.concat(hd.open).forEach(function (x) { have[x.id] = true; });
+    var rest = (Array.isArray(w.assigned) ? w.assigned : []).filter(function (t) { return isObj(t) && t.key && !have[t.key]; });
+    var hide = isObj(o.day) && Array.isArray(o.day.hide) ? o.day.hide : [];
+    var extra = rest.length ? homeDay({ date: o.date, today: o.today, tasks: rest, day: { hide: hide }, keepDone: true }).open : [];
+    var out = homePlan(hd, Object.assign({}, w, { extra: extra }));
+    if (o.keepDone) return out;
+    var kept = {}, base = homeDay(o);
+    base.timed.concat(base.open).forEach(function (x) { kept[x.id] = true; });
+    out.timed = out.timed.filter(function (x) { return kept[x.id] || x.fit; });
+    out.open = out.open.filter(function (x) { return kept[x.id]; });
+    return out;
+  }
+  function homeUpAt(ms) {
+    var at = ms == null ? Date.now() : +ms, d = new Date(at);
+    if (!isFinite(at) || isNaN(d.getTime())) return { date: '', time: '' };
+    return { date: tourToday(at), time: pad(d.getHours()) + ':' + pad(d.getMinutes()) };
+  }
+  function homeAwakeUp(tl, now, early) {
+    var steps = isObj(tl) && Array.isArray(tl.steps) ? tl.steps : [];
+    var t = now == null ? Date.now() : +now, hold = dayHold(steps);
+    if (!hold || !(t < hold.end)) return false;
+    if (early !== true) return dayAt({ steps: steps }, t).held != null;
+    var at = new Date(t);
+    return tourToday(t) === tl.date && at.getHours() * 60 + at.getMinutes() >= ROLLOVER_HOURS * 60;
+  }
+  function homeUpCap(date, time, now) {
+    var at = homeUpAt(now), m = homeMins(time), n = homeMins(at.time), R = ROLLOVER_HOURS * 60;
+    if (m == null || n == null || at.date !== date) return time;
+    var on = function (x) { return x < R ? x + 1440 : x; };
+    return on(m) > on(n) ? at.time : time;
+  }
   function modeSplash(last, now, had) {
     if (last === now) return '';
     if (!last && !(now === 'off' && had)) return '';
@@ -7073,10 +7343,23 @@
     var o = isObj(opts) ? opts : {};
     var d = isObj(hd) ? hd : {};
     var day = parseDay(d.date), tz = typeof o.tz === 'string' ? o.tz : '';
-    var steps = (Array.isArray(d.timed) ? d.timed : []).filter(function (x) { return x && x.at != null; }).map(function (x) {
+    var items = (Array.isArray(d.timed) ? d.timed : []).filter(function (x) { return x && x.at != null; });
+    var wake = isObj(d.plan) && Array.isArray(d.plan.steps) ? d.plan.steps.filter(function (x) { return isObj(x) && x.at != null; }) : [];
+    if (wake.length) {
+      items = wake.map(function (x) {
+        return { kind: 'awake', title: x.title, sub: x.sub || '', at: x.at, id: 'awake:' + x.at, done: false, back: !!x.back };
+      }).concat(items).map(function (x, i) { return { x: x, i: i }; })
+        .sort(function (a, b) { return a.x.at - b.x.at || (a.x.kind === 'awake' ? 0 : 1) - (b.x.kind === 'awake' ? 0 : 1) || a.i - b.i; })
+        .map(function (y) { return y.x; });
+    }
+    var steps = items.map(function (x) {
       var z = day && tz ? zoneMoment(d.date, x.at, tz) : null;
-      return { key: x.kind, label: x.title, sub: x.sub || '', name: x.title, band: '', mine: false, at: x.at, id: x.id, done: !!x.done,
+      var s = { key: x.kind, label: x.title, sub: x.sub || '', name: x.title, band: '', mine: false, at: x.at, id: x.id, done: !!x.done,
         ts: z != null ? z : day ? new Date(day.getFullYear(), day.getMonth(), day.getDate(), 0, x.at).getTime() : null };
+      if (x.back) s.back = true;
+      var len = x.kind !== 'event' && typeof x.mins === 'number' && isFinite(x.mins) ? Math.round(x.mins) : 0;
+      if (len > 0 && len <= 1440) s.mins = len;
+      return s;
     });
     return { date: day ? d.date : null, steps: steps, start: steps.length ? steps[0].ts : null, end: steps.length ? steps[steps.length - 1].ts : null };
   }
@@ -7129,7 +7412,7 @@
     return date === tourToday(at) && ymd(new Date(at)) !== date && !homeSmallHours(time) ? addDays(date, 1) : date;
   }
   var HOME_BAR_NAMES_DEFAULT = true;
-  var HOME_BAR_WORD = { event: 'Event', routine: 'Routine', task: 'Task', extra: 'Plan' };
+  var HOME_BAR_WORD = { event: 'Event', routine: 'Routine', task: 'Task', extra: 'Plan', awake: 'AWAKE' };
   function homeBarText(s, max) {
     var t = String(s == null ? '' : s).replace(/[\uD800-\uDBFF][\uDC00-\uDFFF]|[\uD800-\uDFFF]|[\u0000-\u001F\u007F\u2028\u2029]/g,
       function (m) { return m.length === 2 ? m : ' '; }).replace(/\s+/g, ' ').trim();
@@ -7138,22 +7421,31 @@
   function homeBarLine(tl, o) {
     var w = isObj(o) ? o : {}, t = isObj(tl) ? tl : {};
     var steps = (Array.isArray(t.steps) ? t.steps : []).filter(function (s) {
-      return s && s.ts != null && s.ts < w.until && (w.events === true || s.key !== 'event') && !(s.done && s.ts > w.now);
+      return s && s.ts != null && s.ts < w.until && (w.events === true || (s.key !== 'event' && !(s.key === 'awake' && s.back))) && !(s.done && s.ts > w.now)
+        && !(s.key === 'awake' && s.label === HOME_MORNING_WORD && s.ts > w.now);
     }).map(function (s) {
+      if (s.key === 'awake') {
+        var morning = s.label === HOME_MORNING_WORD;
+        return Object.assign({}, s, { label: morning ? HOME_MORNING_WORD : HOME_AWAKE_WORD, name: morning ? HOME_MORNING_WORD : HOME_AWAKE_WORD, sub: morning ? '' : HOME_AWAKE_SUB });
+      }
       var word = HOME_BAR_WORD[s.key] || 'Event';
       var label = w.names === true ? homeBarText(s.label, 60) || word : word;
       var sub = s.key === 'event' ? 'Calendar' : w.names === true ? homeBarText(s.sub, 30) : '';
       return Object.assign({}, s, { label: label, name: label, sub: sub });
     });
+    var live = steps.filter(function (s) { return !s.done; }), hold = dayHold(live);
+    if (hold) steps = steps.filter(function (s) { return !s.done || s.ts < live[hold.a].ts || s.ts >= hold.end; });
     return { date: t.date || null, steps: steps, start: steps.length ? steps[0].ts : null, end: steps.length ? steps[steps.length - 1].ts : null };
   }
   function homeBarSteps(tl, now) {
     var steps = isObj(tl) && Array.isArray(tl.steps) ? tl.steps : [];
     var at = dayAt({ steps: steps }, now);
     if (!steps.length || at.over) return [];
-    var from = Math.max(at.index, 0);
+    var from = Math.max(at.held != null ? at.held : at.index, 0);
     return steps.slice(from, from + 40).map(function (s) {
-      return { ts: Math.floor(s.ts / 1000), key: s.key, label: s.label, sub: s.sub };
+      var out = { ts: Math.floor(s.ts / 1000), key: s.key, label: s.label, sub: s.sub };
+      if (s.mins > 0) out.mins = s.mins;
+      return out;
     });
   }
   function homeCountdown(today, start, first) {
@@ -8472,7 +8764,7 @@
     DS_AMENITIES: DS_AMENITIES, daySheetSections: daySheetSections, daySheetLines: daySheetLines, daySheetText: daySheetText,
     splitTime: splitTime, joinTime: joinTime, cleanTime: cleanTime, timeSpan: timeSpan, dsExtras: dsExtras, dsExtrasDistinct: dsExtrasDistinct, dsMoreLines: dsMoreLines,
     nightMins: nightMins, nightNow: nightNow, busCallLeft: busCallLeft,
-    DAY_BAR_GRACE: DAY_BAR_GRACE, dayClock: dayClock, dayChangeOver: dayChangeOver, dayTimeline: dayTimeline, dayAt: dayAt, dayBarState: dayBarState,
+    DAY_BAR_GRACE: DAY_BAR_GRACE, dayClock: dayClock, dayChangeOver: dayChangeOver, dayTimeline: dayTimeline, dayAt: dayAt, dayHold: dayHold, DAY_STEP_MOST: DAY_STEP_MOST, dayStepHold: dayStepHold, dayBarEnd: dayBarEnd, dayBarState: dayBarState,
     ALARM_STAGE_LEAD: ALARM_STAGE_LEAD, ALARM_LASTCALL_LEAD: ALARM_LASTCALL_LEAD, showAlarms: showAlarms, dayStepDone: dayStepDone,
     ALARM_BUS20_LEAD: ALARM_BUS20_LEAD,
     LAST_CALL_BEFORE: LAST_CALL_BEFORE, LAST_CALL_MAX: LAST_CALL_MAX, lastCallRule: lastCallRule, dayFirstSet: dayFirstSet,
@@ -8484,7 +8776,7 @@
     homeBillCats: homeBillCats, homeBill: homeBill, royaltyIncome: royaltyIncome,
     summaryPdf: summaryPdf, summaryXlsx: summaryXlsx, xlsxBytes: xlsxBytes, zipBytes: zipBytes, crc32: crc32, bytesBase64: bytesBase64,
     pdfEnc: pdfEnc, pdfWidth: pdfWidth, pdfWrap: pdfWrap, sumSpan: sumSpan, paidSoFar: paidSoFar, otherIncomeLabel: otherIncomeLabel,
-    offDayLines: offDayLines, offDayText: offDayText,
+    offDayLines: offDayLines, offDayText: offDayText, offDayFromPhoto: offDayFromPhoto,
     GUEST_PASSES: GUEST_PASSES, guestSummary: guestSummary, guestListText: guestListText,
     parseGuestList: parseGuestList,
     normalizeTourImport: normalizeTourImport, mergeDaySheet: mergeDaySheet,
@@ -8512,6 +8804,9 @@
     cpaSpanWords: cpaSpanWords, cpaPlain: cpaPlain, cpaConfirmWords: cpaConfirmWords, cpaStateRules: cpaStateRules, CPA_PDF_STEPS: CPA_PDF_STEPS,
     parseTaskWords: parseTaskWords, homeTaskRead: homeTaskRead, homeClockDay: homeClockDay, homeNightDay: homeNightDay, splitPastedList: splitPastedList, HOME_LIST_MAX: HOME_LIST_MAX, routineOn: routineOn, taskOn: taskOn, taskDone: taskDone,
     taskLate: taskLate, taskNext: taskNext, taskBucket: taskBucket, homeTimeKey: homeTimeKey, homeGroups: homeGroups, homeDay: homeDay, homeRowOver: homeRowOver, homeTimeline: homeTimeline, homeCalEvents: homeCalEvents, homeEventAt: homeEventAt, homeEventDay: homeEventDay, HOME_BAR_NAMES_DEFAULT: HOME_BAR_NAMES_DEFAULT, homeBarText: homeBarText, homeBarLine: homeBarLine, homeBarSteps: homeBarSteps,
+    homePlan: homePlan, homeDayPlan: homeDayPlan, homeUpAt: homeUpAt, homeUpCap: homeUpCap, homeAwakeUp: homeAwakeUp, HOME_ORDER: HOME_ORDER, HOME_AWAKE_WORD: HOME_AWAKE_WORD,
+    HOME_AWAKE_SUB: HOME_AWAKE_SUB, HOME_MORNING_WORD: HOME_MORNING_WORD, HOME_AWAKE_WAIT: HOME_AWAKE_WAIT, HOME_FIT_MINS: HOME_FIT_MINS, HOME_FIT_MAX: HOME_FIT_MAX,
+    HOME_FIT_AFTER: HOME_FIT_AFTER, HOME_WAKE_FIRST: HOME_WAKE_FIRST, HOME_WAKE_LAST: HOME_WAKE_LAST,
     modeSplash: modeSplash, homeCountdown: homeCountdown, homeMonth: homeMonth, homeMonthShift: homeMonthShift, homeMins: homeMins, homeTime: homeTime, homeClock: homeClock,
     homeSpan: homeSpan, whose: whose, homeMinsWords: homeMinsWords, homeDateWords: homeDateWords, homeWhen: homeWhen, homeRepeatWords: homeRepeatWords,
     homeDaysWords: homeDaysWords, homeDow: homeDow, HOME_DOW: HOME_DOW, HOME_KEYS: HOME_KEYS, HOME_MONTHS: HOME_MONTHS,

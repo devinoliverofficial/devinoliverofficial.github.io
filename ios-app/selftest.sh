@@ -35,6 +35,8 @@ echo "// pdf" > "$D/vendor/pdf.min.mjs"; echo "// worker" > "$D/vendor/pdf.worke
 echo x > "$D/sw.js"; echo x > "$D/classic.html"; echo x > "$D/app.html"; echo x > "$D/add-20260101-000000.html"
 echo x > "$D/add-classic-20260101-000000.html"; echo x > "$D/icontest.html"; echo x > "$D/icon-test.png"; touch "$D/.nojekyll"
 echo x > "$D/logo-full.png"; echo x > "$D/manifest.webmanifest"
+# The app's tour: its cards and a picture, in their own folder (build.py copies src/tour there).
+mkdir -p "$D/tour"; echo '{"cards":[]}' > "$D/tour/cards.json"; echo x > "$D/tour/welcome.png"
 
 # ---- a made-up generated iOS project ---------------------------------------------------
 A="$T/repo/ios-app/ios/App/App"
@@ -151,6 +153,7 @@ bad() { echo "  FAIL  $1"; fail=1; }
 [ -f www/vendor/pdf.min.js ] && [ -f www/vendor/pdf.worker.min.js ] && [ ! -e www/vendor/pdf.min.mjs ] && ok "PDF reader files renamed to .js" || bad "PDF reader files not renamed"
 ! grep -q '\.mjs' www/app.js && grep -q "vendor/pdf.min.js" www/app.js && grep -q "vendor/pdf.worker.min.js" www/app.js && ok "app.js copy names the renamed files" || bad "app.js copy not rewritten"
 [ -f "$D/vendor/pdf.min.mjs" ] && grep -q "pdf.min.mjs" "$D/app.js" && ok "the website's own files are untouched" || bad "the website's files changed"
+cmp -s www/tour/cards.json "$D/tour/cards.json" && [ -f www/tour/welcome.png ] && ok "the app's tour (its cards and pictures) is in the app copy" || bad "the app's tour is missing from the app copy"
 grep -q "default-src 'self' capacitor://localhost;" www/index.html && grep -q "connect-src 'self' capacitor://localhost https://example.supabase.co" www/index.html && ok "the app copy's policy names capacitor://localhost" || bad "policy not extended"
 ! grep -q "capacitor://localhost" "$D/index.html" && ok "the website's own policy is untouched" || bad "the website's policy changed"
 python3 -c "import json;c=json.load(open('capacitor.config.json'));assert c['appId']=='com.example.selftest' and c['appName']=='Self Test: Tour Crew' and c['webDir']=='www' and 'server' not in c" && ok "capacitor.config.json carries the names" || bad "capacitor.config.json wrong"
@@ -449,6 +452,185 @@ grep -B3 'guard let a = info\["alarms"\] as? \[String: Any\]' "$AP2" | grep -q '
 DP="$HERE/native/App/DayBarPlugin.swift"
 grep -q 'CAPPluginMethod(name: "prepare"' "$DP" && grep -q 'CAPPluginMethod(name: "arm"' "$DP" && grep -q 'guard key.hasPrefix("home|") else { return }' "$DP" \
   && grep -q 'MorningMarker.forget()' "$DP" && ok "the day bar's new methods, the swipe watcher for your own day alone, the wake's marker cleared on forget" || bad "DayBarPlugin home changes"
+# Show locked bar (Nov 10 2026): showAgain is a method of the plugin, and it lets go only the swiped mark of the day it is given.
+grep -q 'CAPPluginMethod(name: "showAgain", returnType: CAPPluginReturnPromise)' "$DP" && grep -q 'guard !key.isEmpty, key == self.key() else { return }' "$DP" \
+  && [ "$(grep -c 'DayBarGone.forget(' "$DP")" = "1" ] && ok "Show locked bar: showAgain lets go only that day's swiped mark, from that tap alone" || bad "DayBarPlugin showAgain"
+# Nov 11 2026 ("The lock bar did not show up this morning"): the start token. Once pushToStartTokenUpdates gave one this launch, every
+# report sends that one, never an older read of the property; a launch reads the property again 2 seconds on (Apple's advice before
+# iOS 26), once, only when the updates gave nothing, and only a token not sent already. The same post as ever (kind "start").
+grep -q 'let read = given == nil ? Activity<DayBarAttributes>.pushToStartToken.map({ hex($0) }) : nil' "$DP" \
+  && grep -q 'let tok = startGiven ?? read' "$DP" \
+  && grep -q 'self.startFromUpdates(self.hex(data))' "$DP" && grep -q 'let send = self.startGiven == nil && self.startSent != tok' "$DP" \
+  && grep -q 'Thread.sleep(forTimeInterval: 2)' "$DP" \
+  && [ "$(grep -c 'DayBarRunner.shared.startTokenAgain()' "$DP")" = "1" ] \
+  && [ "$(grep -c 'DayBarReport.send(kind: "start", token: tok, show: "", started: nil) { over.signal() }' "$DP")" = "1" ] \
+  && [ "$(grep -c 'DayBarReport.send(kind: "start"' "$DP")" = "1" ] \
+  && ! grep -q 'DayBarReport.send(kind: "start", token: hex(data)' "$DP" \
+  && ok "the start token: the updates' own once given, the property read again 2 seconds into a launch, the same post" || bad "DayBarRunner start token"
+# Two start-token reports crossing (Nov 11 review): every start post goes through startQueue, one at a time, each taking the newest
+# token waiting, and DayBarReport.send says "then" once its post is over: after the answer or 25 seconds, at once when iOS refused the
+# time or there is nowhere to post, and never from iOS's second, expired call while the post is under way (that call does nothing, as
+# before, for every kind of post).
+if grep -qF 'static func send(kind: String, token: String, show: String, started: Date?, then: (@Sendable () -> Void)? = nil) {' "$DP" \
+  && grep -qF 'guard let r = saved(), let u = r["url"], let url = URL(string: u), let key = r["key"] else { then?(); return }' "$DP" \
+  && python3 - "$DP" <<'PYX'
+import sys
+s = open(sys.argv[1]).read()
+i = s.index('    static func send(kind: String, token: String, show: String, started: Date?, then:')
+body = s[i:s.index('\n    }\n', i)]
+want = ['        let once = Once()', '            guard once.take() else { return }', '            if expired { then?(); return }',
+        '            URLSession.shared.dataTask(with: request) { _, _, _ in done.signal() }.resume()', '            _ = done.wait(timeout: .now() + 25)',
+        '            then?()']
+at = [body.index(w + '\n') for w in want]
+assert at == sorted(at), 'order'
+assert body.count('then?()') == 3, 'then said in three places'
+assert s.count('DayBarReport.send(') == 3, 'gone, activity, start, and no other'
+PYX
+then ok "a start post is over when DayBarReport.send says so: once, after the answer, or at once when it cannot post" ; else bad "DayBarReport.send then"; fi
+if command -v swiftc >/dev/null; then
+  if python3 - "$DP" "$T/starts.swift" <<'PYX'
+import sys
+s = open(sys.argv[1]).read()
+def cut(head):
+    i = s.index(head)
+    j, d = s.index('{', i), 0
+    while True:
+        d += {'{': 1, '}': -1}.get(s[j], 0)
+        if d == 0: break
+        j += 1
+    return s[i:j + 1]
+a = s.index('    private var startGiven: String? = nil\n')
+b = s.index('    private var startLookedAgain = false\n') + len('    private var startLookedAgain = false\n')
+assert '    private let lock = NSLock()\n' in s[b:b + 200]
+parts = [cut('\n    func reportStartToken() {'), cut('\n    private func startFromUpdates(_ tok: String) {'), cut('\n    private func queueStart(_ tok: String) {'),
+         cut('\n    private func postStart() {'), cut('\n    func startTokenAgain() {')]
+open(sys.argv[2], 'w').write('''import Dispatch
+import Darwin
+// Stand-ins: the lock, Thread.sleep (a tenth as long), iOS's expiring activity (its block on another thread), the property, and the post
+// (begin, then landed at the server; a slow one takes 400 ms; "then" once landed).
+final class NSLock { private let s = DispatchSemaphore(value: 1); func lock() { s.wait() }; func unlock() { s.signal() } }
+enum Thread { static func sleep(forTimeInterval t: Double) { usleep(useconds_t(t * 100_000)) } }
+final class ProcessInfo { static let processInfo = ProcessInfo()
+    func performExpiringActivity(withReason r: String, using block: @escaping (Bool) -> Void) { DispatchQueue.global().async { block(false) } } }
+struct DayBarAttributes {}
+let box = NSLock()
+var property: String? = nil
+var onRead: (() -> Void)? = nil
+var slow: Set<String> = []
+var events: [String] = []
+func note(_ e: String) { box.lock(); events.append(e); box.unlock() }
+func take() -> String { box.lock(); defer { events = []; box.unlock() }; return events.joined(separator: ",") }
+enum Activity<A> { static var pushToStartToken: String? { box.lock(); let h = onRead; onRead = nil; let v = property; box.unlock(); h?(); return v } }
+enum DayBarReport {
+    static func send(kind: String, token: String, show: String, started: Int?, then: (@Sendable () -> Void)? = nil) {
+        box.lock(); let late = slow.contains(token); box.unlock()
+        note("begin:" + token)
+        DispatchQueue.global().async { if late { usleep(400_000) }; note("land:" + token); then?() }
+    }
+}
+final class Runner {
+''' + s[a:b] + '''    private let lock = NSLock()
+    private func hex(_ t: String) -> String { t }''' + ''.join(parts) + '''
+}
+extension Runner { func give(_ t: String) { startFromUpdates(t) } }
+func wait(_ ms: UInt32) { usleep(ms * 1000) }
+var out: [String] = []
+// The review's case: the page's report reads the property (OLD) while the updates hand over NEW. OLD is never posted.
+property = "OLD"; slow = ["OLD"]
+var r = Runner()
+let rr = r
+onRead = { let g = DispatchSemaphore(value: 0); DispatchQueue.global().async { rr.give("NEW"); g.signal() }; _ = g.wait(timeout: .now() + 2) }
+r.reportStartToken(); wait(900)
+out.append(take())
+// Decided OLD, then NEW: NEW's post begins once OLD's has landed. Three while the first is under way: the newest lands last.
+r = Runner(); r.reportStartToken(); wait(20); r.give("NEW"); wait(900)
+out.append(take())
+property = "A"; slow = ["A"]
+r = Runner(); r.reportStartToken(); wait(20); r.give("B"); wait(20); r.give("C"); wait(900)
+out.append(take())
+// The late read: nothing from the updates, A sent, the property now A2: A2 goes, once a launch; once the updates gave one, never.
+slow = []
+r = Runner(); r.reportStartToken(); wait(200); _ = take(); property = "A2"; r.startTokenAgain(); wait(500); r.startTokenAgain(); wait(500)
+out.append(take())
+r = Runner(); r.give("B"); wait(200); _ = take(); r.startTokenAgain(); wait(500)
+out.append("[" + take() + "]")
+print(out.joined(separator: "|"))
+''')
+PYX
+  then
+    [ "$(swiftc -o "$T/starts" "$T/starts.swift" 2>/dev/null && "$T/starts")" = "begin:NEW,land:NEW,begin:NEW,land:NEW|begin:OLD,land:OLD,begin:NEW,land:NEW|begin:A,land:A,begin:C,land:C|begin:A2,land:A2|[]" ] \
+      && ok "two start-token reports crossing: an older read never posted once the updates gave one, and the newest token always lands last" \
+      || bad "DayBarRunner start posts in order"
+  else
+    bad "DayBarRunner's start-token functions not found as expected"
+  fi
+else
+  echo "  skip  two start-token reports crossing (no swiftc on this Mac)"
+fi
+# The server's quiet wake after a start nobody answered (notify HOME_RECOVER) is { aps: { content-available: 1 } } and nothing else.
+# GreenroomAlarms.remote, the text builds 223 to 226 carry (AlarmsPlugin.swift and CalendarPlugin.swift unchanged since Nov 1), cut out
+# with the morning wake's own first guard and run against stand-ins that say when they are reached: that push is answered "no data" at
+# once and reaches nothing (no alarm, no plan, no post). The same push with "homeday" or "alarms" in it does reach them.
+if command -v swiftc >/dev/null; then
+  if python3 - "$HERE/native/App/AlarmsPlugin.swift" "$HERE/native/App/CalendarPlugin.swift" "$T/quietwake.swift" <<'PYX'
+import sys
+s, c = open(sys.argv[1]).read(), open(sys.argv[2]).read()
+def cut(text, head):
+    i = text.index(head)
+    j, d = text.index('{', i), 0
+    while True:
+        d += {'{': 1, '}': -1}.get(text[j], 0)
+        if d == 0: break
+        j += 1
+    return text[i:j + 1]
+remote = cut(s, '\n    static func remote(_ info: [AnyHashable: Any], _ done: @escaping (UIBackgroundFetchResult) -> Void) {')
+head = '\n    static func morning(_ info: [AnyHashable: Any], _ done: @escaping (UIBackgroundFetchResult) -> Void) -> Bool {\n'
+first = '        guard let h = info["homeday"] as? [String: Any] else { return false }\n'
+i = c.index(head)
+assert c[i + len(head):].startswith(first), 'the morning wake no longer starts with its homeday guard'
+open(sys.argv[3], 'w').write('''
+var touched: [String] = []
+enum UIBackgroundFetchResult { case newData, noData, failed }
+struct PlanStub { var uid: String }
+enum AlarmPlan { static func load() -> PlanStub? { touched.append("plan"); return nil } }
+enum BusAnswer { static func saved() -> [String: String]? { touched.append("bus"); return nil }
+    static func forgetWhere() { touched.append("forget") } }
+struct AlarmItem { var tour: String; init?(js: [String: Any]) { touched.append("item"); return nil } }
+enum DayBarJS { static func num(_ v: Any?) -> Double { 0 } }
+final class Desk { func handOver(u: String, t: String, v: Double, fresh: [AlarmItem]) async -> Bool { touched.append("handover"); return false } }
+enum GreenroomCalendar {''' + head + first + '''        touched.append("morning:" + String(h.count))
+        done(.noData)
+        return true
+    }
+}
+enum GreenroomAlarms {
+    static let desk = Desk()''' + remote + '''
+}
+func run(_ info: [AnyHashable: Any]) -> String {
+    touched = []
+    var said: [String] = []
+    GreenroomAlarms.remote(info) { said.append("\\($0)") }
+    return said.joined(separator: ",") + "|" + touched.joined(separator: ",")
+}
+print(run(["aps": ["content-available": 1]]))
+print(run(["aps": ["content-available": 1], "homeday": ["u": "x"]]))
+// (The hand-over itself runs later, on its own: only that it was reached is read.)
+print(run(["aps": ["content-available": 1], "alarms": ["u": "x", "t": "t1"]]).contains("plan") ? "alarms reached" : "alarms not reached")
+''')
+PYX
+  then
+    want="noData|
+noData|morning:1
+alarms reached"
+    [ "$(swiftc -o "$T/quietwake" "$T/quietwake.swift" 2>/dev/null && "$T/quietwake")" = "$want" ] \
+      && ok "the server's quiet wake (content-available alone): builds 223 to 226 answer no data at once and touch no alarm, plan or post" \
+      || bad "GreenroomAlarms.remote with the quiet wake"
+  else
+    bad "GreenroomAlarms.remote or GreenroomCalendar.morning not found as expected"
+  fi
+else
+  echo "  skip  the quiet wake (no swiftc on this Mac)"
+fi
 # How a title is cleaned (GreenroomCalendar.clean), cut out of the plugin and run (plain Swift, no SDK): a control character and a line
 # break become a space, a joined emoji stays whole, and the length is in characters.
 if command -v swiftc >/dev/null; then

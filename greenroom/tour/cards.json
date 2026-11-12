@@ -1,0 +1,1215 @@
+{
+  "version": 1,
+  "about": "The app's tour (appTourOpen in src/app.js): Devin's card deck, one card for each part of the app. Made from the card script (MODELXOFFTOUR/app-tour/cards.json), in its order. Each card: id, chapter, title, body, who ('all', 'fan' or 'crew'), tm (true: marked Tour managers), iphone (true: the iPhone app only), web (true: the website only), needs ('' or what it waits on, e.g. 'studio'), img (its picture in this folder: the real app in the example world, I See Stars' made-up The Afterglow Tour, at 390 x 844), ring ({ x, y, w, h } in % of the picture, or null).",
+  "cards": [
+    {
+      "id": "pf-welcome",
+      "chapter": "Your profile",
+      "title": "Welcome to Greenroom",
+      "body": "Here’s the whole app, one card at a time. Swipe or tap Next. Skip a chapter, or the whole tour, any time.",
+      "who": "all",
+      "tm": false,
+      "iphone": false,
+      "web": false,
+      "needs": "",
+      "img": "pf-welcome.jpg",
+      "ring": null
+    },
+    {
+      "id": "pf-analytics",
+      "chapter": "Your profile",
+      "title": "Your analytics",
+      "body": "Your analytics! All the tours, shows, countries and cities you’ve worked, counted around your photo. Your followers and who you follow sit right under it.",
+      "who": "crew",
+      "tm": false,
+      "iphone": false,
+      "web": false,
+      "needs": "",
+      "img": "pf-analytics.jpg",
+      "ring": {
+        "x": 4.1,
+        "y": 15.5,
+        "w": 91.8,
+        "h": 14.5
+      }
+    },
+    {
+      "id": "pf-fan-profile",
+      "chapter": "Your profile",
+      "title": "Your page",
+      "body": "This is your page: your photo, your followers and who you follow. Tap your photo on the bottom bar from anywhere to come back here.",
+      "who": "fan",
+      "tm": false,
+      "iphone": false,
+      "web": false,
+      "needs": "",
+      "img": "pf-fan-profile.jpg",
+      "ring": {
+        "x": 4.1,
+        "y": 12.8,
+        "w": 91.8,
+        "h": 20.7
+      }
+    },
+    {
+      "id": "pf-bus",
+      "chapter": "Your profile",
+      "title": "ON TOUR and OFF TOUR",
+      "body": "Tap the bus to switch between ON TOUR and OFF TOUR. You rarely need to: the app switches by itself when a tour starts or ends. It glows on tour and greys out off tour.",
+      "who": "crew",
+      "tm": false,
+      "iphone": false,
+      "web": false,
+      "needs": "",
+      "img": "pf-bus.jpg",
+      "ring": {
+        "x": 3.6,
+        "y": 10.5,
+        "w": 13.8,
+        "h": 5.2
+      }
+    },
+    {
+      "id": "pf-flowers",
+      "chapter": "Your profile",
+      "title": "Flowers",
+      "body": "Everyone gets 10 flowers a year to give the people they tour with for their hard work. This is how many you’ve been given. Send some and show your appreciation.",
+      "who": "crew",
+      "tm": false,
+      "iphone": false,
+      "web": false,
+      "needs": "",
+      "img": "pf-flowers.jpg",
+      "ring": {
+        "x": 28.1,
+        "y": 31.4,
+        "w": 19.5,
+        "h": 2.1
+      }
+    },
+    {
+      "id": "pf-trophy",
+      "chapter": "Your profile",
+      "title": "The trophy",
+      "body": "The trophy counts your credits: every artist that has verified you really worked for them. Reach Bronze with one credit and you get the green check by your name.",
+      "who": "crew",
+      "tm": false,
+      "iphone": false,
+      "web": false,
+      "needs": "",
+      "img": "pf-trophy.jpg",
+      "ring": {
+        "x": 52.2,
+        "y": 31.4,
+        "w": 19.7,
+        "h": 2.1
+      }
+    },
+    {
+      "id": "pf-status",
+      "chapter": "Your profile",
+      "title": "Your status",
+      "body": "Green is where everyone starts. Bronze at 50 shows, Silver at 250, Gold at 500, Diamond at 1,000. Legacy takes 1,500 shows, 50 tours, 30 countries and 250 cities, all together.",
+      "who": "crew",
+      "tm": false,
+      "iphone": false,
+      "web": false,
+      "needs": "",
+      "img": "pf-status.jpg",
+      "ring": {
+        "x": 4.6,
+        "y": 40.2,
+        "w": 90.8,
+        "h": 2.5
+      }
+    },
+    {
+      "id": "pf-editview",
+      "chapter": "Your profile",
+      "title": "Edit, View and Messages",
+      "body": "Edit changes your photo, name, @username, roles and bio. View shows your page the way everyone else sees it. Messages holds your direct messages.",
+      "who": "all",
+      "tm": false,
+      "iphone": false,
+      "web": false,
+      "needs": "",
+      "img": "pf-editview.jpg",
+      "ring": {
+        "x": 4.1,
+        "y": 44.3,
+        "w": 66.1,
+        "h": 3.8
+      }
+    },
+    {
+      "id": "pf-tasks",
+      "chapter": "Your profile",
+      "title": "Tasks",
+      "body": "Tour managers: Tasks glows when something needs you, one card at a time. Today’s day sheet, pre-sale, buyouts, guarantees, merch, requests, new charges and more. Swipe right to handle it, left for later.",
+      "who": "crew",
+      "tm": true,
+      "iphone": false,
+      "web": false,
+      "needs": "",
+      "img": "pf-tasks.jpg",
+      "ring": {
+        "x": 4.1,
+        "y": 17.5,
+        "w": 91.8,
+        "h": 54.6
+      }
+    },
+    {
+      "id": "pf-artists",
+      "chapter": "Your profile",
+      "title": "Artists",
+      "body": "The artists you work with. Verified ✓ with a trophy means that artist vouched for you. Requests you’ve sent wait here until they answer.",
+      "who": "crew",
+      "tm": false,
+      "iphone": false,
+      "web": false,
+      "needs": "",
+      "img": "pf-artists.jpg",
+      "ring": {
+        "x": 4.6,
+        "y": 57.8,
+        "w": 90.8,
+        "h": 22.5
+      }
+    },
+    {
+      "id": "pf-tours",
+      "chapter": "Your profile",
+      "title": "Tours",
+      "body": "Every tour you’ve played or worked. Tap one and its dates drop down, each with its day sheet. The one you’re on right now says Currently on.",
+      "who": "crew",
+      "tm": false,
+      "iphone": false,
+      "web": false,
+      "needs": "",
+      "img": "pf-tours.jpg",
+      "ring": {
+        "x": 4.6,
+        "y": 12.8,
+        "w": 90.8,
+        "h": 74.4
+      }
+    },
+    {
+      "id": "pf-fan-shows",
+      "chapter": "Your profile",
+      "title": "Shows you’ve been to",
+      "body": "Shows attended counts every show you’ve said you were at. Tap it to see them artist by artist, or to find an artist and add more.",
+      "who": "fan",
+      "tm": false,
+      "iphone": false,
+      "web": false,
+      "needs": "",
+      "img": "pf-fan-shows.jpg",
+      "ring": {
+        "x": 4.6,
+        "y": 59.2,
+        "w": 90.8,
+        "h": 5.5
+      }
+    },
+    {
+      "id": "pf-todo",
+      "chapter": "Your profile",
+      "title": "To Do List",
+      "body": "Stay on top of things with your team. Make a list, invite people onto it and hand out tasks. Type it like you’d say it: “Send the stage plot tomorrow at 2”.",
+      "who": "crew",
+      "tm": false,
+      "iphone": false,
+      "web": false,
+      "needs": "",
+      "img": "pf-todo.jpg",
+      "ring": {
+        "x": 5.6,
+        "y": 14.3,
+        "w": 88.7,
+        "h": 62.9
+      }
+    },
+    {
+      "id": "pf-spots",
+      "chapter": "Your profile",
+      "title": "Spots",
+      "body": "Save your favorite restaurants, coffee shops, bars and more, on or off tour. Share one with your tour and it shows on the day sheet next time you’re in that city, with your photo on it.",
+      "who": "all",
+      "tm": false,
+      "iphone": false,
+      "web": false,
+      "needs": "",
+      "img": "pf-spots.jpg",
+      "ring": {
+        "x": 86.7,
+        "y": 59.1,
+        "w": 8.7,
+        "h": 4.0
+      }
+    },
+    {
+      "id": "pf-top10",
+      "chapter": "Your profile",
+      "title": "Top 10",
+      "body": "Pick your Top 10 artists and put them in order. Anyone who opens your page can see them.",
+      "who": "all",
+      "tm": false,
+      "iphone": false,
+      "web": false,
+      "needs": "",
+      "img": "pf-top10.jpg",
+      "ring": {
+        "x": 5.1,
+        "y": 4.5,
+        "w": 89.7,
+        "h": 83.4
+      }
+    },
+    {
+      "id": "off-today",
+      "chapter": "Off Tour",
+      "title": "Today, off tour",
+      "body": "Off tour, Today is your own day: what’s assigned to you, your schedule and your to-dos, built from your routines and your calendar. It counts down to your next tour too.",
+      "who": "crew",
+      "tm": false,
+      "iphone": false,
+      "web": false,
+      "needs": "",
+      "img": "off-today.jpg",
+      "ring": {
+        "x": 4.6,
+        "y": 22.4,
+        "w": 90.8,
+        "h": 26.7
+      }
+    },
+    {
+      "id": "off-lockbar",
+      "chapter": "Off Tour",
+      "title": "Your Lock Screen bar",
+      "body": "Your day lives on your Lock Screen with a bar to the next thing: the day sheet on show days, your own day off tour. Mornings it says AWAKE. Tap it when you’re up and your day moves to fit.",
+      "who": "crew",
+      "tm": false,
+      "iphone": true,
+      "web": false,
+      "needs": "",
+      "img": "off-lockbar.jpg",
+      "ring": {
+        "x": 2.1,
+        "y": 66.4,
+        "w": 95.9,
+        "h": 15.9
+      }
+    },
+    {
+      "id": "off-showlocked",
+      "chapter": "Off Tour",
+      "title": "Show locked bar",
+      "body": "Swiped the bar off your Lock Screen by mistake? Show locked bar lights up green on Today. Tap it and the bar comes back.",
+      "who": "crew",
+      "tm": false,
+      "iphone": true,
+      "web": false,
+      "needs": "",
+      "img": "off-showlocked.jpg",
+      "ring": {
+        "x": 4.6,
+        "y": 70.7,
+        "w": 90.8,
+        "h": 6.2
+      }
+    },
+    {
+      "id": "off-routines",
+      "chapter": "Off Tour",
+      "title": "Routines",
+      "body": "Set the things you want to stay consistent with every day, at your ideal time. Off tour, Greenroom makes room for them on your day sheet, around your calendar and when you get up.",
+      "who": "crew",
+      "tm": false,
+      "iphone": false,
+      "web": false,
+      "needs": "",
+      "img": "off-routines.jpg",
+      "ring": {
+        "x": 4.6,
+        "y": 43.2,
+        "w": 90.8,
+        "h": 27.6
+      }
+    },
+    {
+      "id": "off-calendar",
+      "chapter": "Off Tour",
+      "title": "Your calendar",
+      "body": "Off tour, Overview shows your next tour up top. Run an artist or play in one? Your calendar sits right under it: a green dot for a show, a grey one for travel, rehearsal or a day off.",
+      "who": "crew",
+      "tm": false,
+      "iphone": false,
+      "web": false,
+      "needs": "",
+      "img": "off-calendar.jpg",
+      "ring": {
+        "x": 5.1,
+        "y": 45.7,
+        "w": 89.7,
+        "h": 40.3
+      }
+    },
+    {
+      "id": "off-tap-date",
+      "chapter": "Off Tour",
+      "title": "Tap a date",
+      "body": "Tap any date to see what’s on it and open its day sheet, or to add a show or start a tour from that day.",
+      "who": "crew",
+      "tm": false,
+      "iphone": false,
+      "web": false,
+      "needs": "",
+      "img": "off-tap-date.jpg",
+      "ring": {
+        "x": 4.6,
+        "y": 75.4,
+        "w": 90.8,
+        "h": 22.3
+      }
+    },
+    {
+      "id": "off-create",
+      "chapter": "Off Tour",
+      "title": "+ Create",
+      "body": "Or tap + Create at the bottom to make a tour or a one-off show. Pick the artist if you have more than one, and Greenroom walks you through the rest.",
+      "who": "crew",
+      "tm": false,
+      "iphone": false,
+      "web": false,
+      "needs": "",
+      "img": "off-create.jpg",
+      "ring": {
+        "x": 4.1,
+        "y": 73.2,
+        "w": 45.5,
+        "h": 18.7
+      }
+    },
+    {
+      "id": "off-studio",
+      "chapter": "Off Tour",
+      "title": "Studio time",
+      "body": "Booked studio time? Add it from a date or from + Create and it goes on your calendar. While you’re in the studio, the Overview changes to fit.",
+      "who": "crew",
+      "tm": false,
+      "iphone": false,
+      "web": false,
+      "needs": "studio",
+      "img": "",
+      "ring": null
+    },
+    {
+      "id": "off-connect-cal",
+      "chapter": "Off Tour",
+      "title": "Connect Calendar",
+      "body": "Connect your iPhone’s calendar and its events show up in your day and on your day sheet. Greenroom only adds or changes an event when you tell it to.",
+      "who": "crew",
+      "tm": false,
+      "iphone": true,
+      "web": false,
+      "needs": "",
+      "img": "off-connect-cal.jpg",
+      "ring": {
+        "x": 51.3,
+        "y": 86.7,
+        "w": 44.6,
+        "h": 5.2
+      }
+    },
+    {
+      "id": "on-today",
+      "chapter": "On Tour",
+      "title": "Today, on tour",
+      "body": "On tour, Today shows just the parts of the day sheet for your band: load in, sound check, VIP, doors, set times and bus call. Days left on tour top left, days until a day off top right.",
+      "who": "crew",
+      "tm": false,
+      "iphone": false,
+      "web": false,
+      "needs": "",
+      "img": "on-today.jpg",
+      "ring": {
+        "x": 4.6,
+        "y": 42.4,
+        "w": 90.8,
+        "h": 50.0
+      }
+    },
+    {
+      "id": "on-buyout",
+      "chapter": "On Tour",
+      "title": "Buyout",
+      "body": "On show days, Buyout glows green while yours is waiting. Tap it to bump the tour manager, or mark it received. Tour managers see everyone’s and mark each one received.",
+      "who": "crew",
+      "tm": false,
+      "iphone": false,
+      "web": false,
+      "needs": "",
+      "img": "on-buyout.jpg",
+      "ring": {
+        "x": 77.0,
+        "y": 71.1,
+        "w": 15.2,
+        "h": 2.6
+      }
+    },
+    {
+      "id": "on-buscheck",
+      "chapter": "On Tour",
+      "title": "Bus Check",
+      "body": "In the hour before bus call, Bus Check glows. Tap it, then On Bus, so everyone knows you’re aboard. Once the whole list is on, it says WE ARE A BUS. On iPhone you can answer from the Lock Screen too.",
+      "who": "crew",
+      "tm": false,
+      "iphone": false,
+      "web": false,
+      "needs": "",
+      "img": "on-buscheck.jpg",
+      "ring": {
+        "x": 74.4,
+        "y": 74.3,
+        "w": 20.5,
+        "h": 2.6
+      }
+    },
+    {
+      "id": "on-alarms",
+      "chapter": "On Tour",
+      "title": "Alarms",
+      "body": "Greenroom rings like an alarm 30 minutes before your set, at bus call (with a 20 minute warning first) and 15 minutes before guest list last call. Turn any of them off in Notifications.",
+      "who": "crew",
+      "tm": false,
+      "iphone": true,
+      "web": false,
+      "needs": "",
+      "img": "on-alarms.jpg",
+      "ring": {
+        "x": 4.6,
+        "y": 43.0,
+        "w": 90.8,
+        "h": 23.1
+      }
+    },
+    {
+      "id": "on-overview",
+      "chapter": "On Tour",
+      "title": "Overview, on tour",
+      "body": "On a tour or a show day, Overview is today: the city, the venue and its address, the tour manager’s message and the pre-sale. Under it: the calendar, the setlist, supplies and the crew.",
+      "who": "crew",
+      "tm": false,
+      "iphone": false,
+      "web": false,
+      "needs": "",
+      "img": "on-overview.jpg",
+      "ring": {
+        "x": 4.6,
+        "y": 13.3,
+        "w": 90.8,
+        "h": 21.2
+      }
+    },
+    {
+      "id": "on-pencil",
+      "chapter": "On Tour",
+      "title": "The pencil",
+      "body": "Tour managers, managers and band members: tap the pencil to post tonight’s pre-sale or a message the whole tour sees on the Overview.",
+      "who": "crew",
+      "tm": true,
+      "iphone": false,
+      "web": false,
+      "needs": "",
+      "img": "on-pencil.jpg",
+      "ring": {
+        "x": 85.6,
+        "y": 12.8,
+        "w": 11.3,
+        "h": 5.2
+      }
+    },
+    {
+      "id": "on-calendar",
+      "chapter": "On Tour",
+      "title": "View calendar",
+      "body": "Every date of the tour in one list. Tap Day sheet on any date and it takes you straight to that day’s sheet.",
+      "who": "crew",
+      "tm": false,
+      "iphone": false,
+      "web": false,
+      "needs": "",
+      "img": "on-calendar.jpg",
+      "ring": {
+        "x": 40.1,
+        "y": 29.3,
+        "w": 18.3,
+        "h": 3.0
+      }
+    },
+    {
+      "id": "on-rate",
+      "chapter": "On Tour",
+      "title": "Rate the show",
+      "body": "An hour after your set, the band is asked to rate the show, or taps Rate on the calendar. Keep a venue accountable and remember the crowd and the room for next time. Only the band sees it.",
+      "who": "crew",
+      "tm": false,
+      "iphone": false,
+      "web": false,
+      "needs": "",
+      "img": "on-rate.jpg",
+      "ring": {
+        "x": 61.0,
+        "y": 30.3,
+        "w": 10.8,
+        "h": 3.0
+      }
+    },
+    {
+      "id": "on-vote",
+      "chapter": "On Tour",
+      "title": "Vote on days off",
+      "body": "Tour managers can post a poll for a day off with all the options. Everyone votes, so everyone gets a say. Voting closes at noon the day before.",
+      "who": "crew",
+      "tm": false,
+      "iphone": false,
+      "web": false,
+      "needs": "",
+      "img": "on-vote.jpg",
+      "ring": {
+        "x": 83.9,
+        "y": 49.6,
+        "w": 11.0,
+        "h": 3.0
+      }
+    },
+    {
+      "id": "on-requests",
+      "chapter": "On Tour",
+      "title": "Special requests",
+      "body": "Need something on a show day? Tap Requests and ask. Everyone on the tour sees it, and the tour manager marks it accepted or denied, so nothing goes unheard.",
+      "who": "crew",
+      "tm": false,
+      "iphone": false,
+      "web": false,
+      "needs": "",
+      "img": "on-requests.jpg",
+      "ring": {
+        "x": 77.4,
+        "y": 29.3,
+        "w": 17.5,
+        "h": 3.0
+      }
+    },
+    {
+      "id": "bud-mypay",
+      "chapter": "Budget",
+      "title": "My Pay",
+      "body": "My Pay is yours: your pay as the band logs it, plus your own spending and cards, on and off tour. Nobody else on the crew sees it.",
+      "who": "crew",
+      "tm": false,
+      "iphone": false,
+      "web": false,
+      "needs": "",
+      "img": "bud-mypay.jpg",
+      "ring": {
+        "x": 5.1,
+        "y": 21.3,
+        "w": 89.7,
+        "h": 22.7
+      }
+    },
+    {
+      "id": "bud-reimburse",
+      "chapter": "Budget",
+      "title": "Paid for the band?",
+      "body": "Spotted the band for something? On My Pay, tap Need a Reimbursement? and fill it in. It goes straight to the band’s managers, and stays on their Tasks until you’re paid back.",
+      "who": "crew",
+      "tm": false,
+      "iphone": false,
+      "web": false,
+      "needs": "",
+      "img": "bud-reimburse.jpg",
+      "ring": {
+        "x": 8.5,
+        "y": 79.4,
+        "w": 83.1,
+        "h": 4.0
+      }
+    },
+    {
+      "id": "bud-book",
+      "chapter": "Budget",
+      "title": "Red to green",
+      "body": "Managers see the tour’s whole budget. The big number is how far you are from breaking even. Watch it go from red to green, and see where you’re spending too much.",
+      "who": "crew",
+      "tm": true,
+      "iphone": false,
+      "web": false,
+      "needs": "",
+      "img": "bud-book.jpg",
+      "ring": {
+        "x": 4.6,
+        "y": 14.2,
+        "w": 90.8,
+        "h": 49.5
+      }
+    },
+    {
+      "id": "bud-expenses",
+      "chapter": "Budget",
+      "title": "Expenses",
+      "body": "Every category with what you planned and what you’ve paid, by credit, debit or cash. Tap a line to add a charge by hand, or link a card and they come in by themselves.",
+      "who": "crew",
+      "tm": true,
+      "iphone": false,
+      "web": false,
+      "needs": "",
+      "img": "bud-expenses.jpg",
+      "ring": {
+        "x": 4.9,
+        "y": 1.7,
+        "w": 90.3,
+        "h": 48.8
+      }
+    },
+    {
+      "id": "bud-cards",
+      "chapter": "Budget",
+      "title": "Cards/Links",
+      "body": "Link a bank or card through Plaid and charges come in on their own. It’s read-only: Greenroom sees charges and can never move money. Tap Refresh Card for the newest.",
+      "who": "crew",
+      "tm": true,
+      "iphone": false,
+      "web": false,
+      "needs": "",
+      "img": "bud-cards.jpg",
+      "ring": {
+        "x": 4.6,
+        "y": 14.2,
+        "w": 90.8,
+        "h": 6.2
+      }
+    },
+    {
+      "id": "bud-categorize",
+      "chapter": "Budget",
+      "title": "Sort new charges",
+      "body": "Tap All New Card Activity. For each charge, pick its category and where it goes: Off Tour, the tour you’re on or an upcoming one. From Off Tour, a tour that just ended is offered too. Tap Add. Greenroom remembers the category for next time.",
+      "who": "crew",
+      "tm": true,
+      "iphone": false,
+      "web": false,
+      "needs": "",
+      "img": "bud-categorize.jpg",
+      "ring": {
+        "x": 4.6,
+        "y": 63.4,
+        "w": 90.8,
+        "h": 21.4
+      }
+    },
+    {
+      "id": "bud-income",
+      "chapter": "Budget",
+      "title": "Income",
+      "body": "Log each show’s guarantee and merch, on tour and off. Mark it received when the money lands, by hand or from a linked account. Greenroom only suggests matches. Nothing’s logged until you say yes.",
+      "who": "crew",
+      "tm": true,
+      "iphone": false,
+      "web": false,
+      "needs": "",
+      "img": "bud-income.jpg",
+      "ring": {
+        "x": 49.9,
+        "y": 57.5,
+        "w": 24.2,
+        "h": 3.8
+      }
+    },
+    {
+      "id": "bud-projects",
+      "chapter": "Budget",
+      "title": "Switch projects",
+      "body": "Off tour, Budget keeps each artist’s own book. Run more than one? Tap the slim pills at the top to switch projects. On tour, tap the tour’s name for all your tours.",
+      "who": "crew",
+      "tm": true,
+      "iphone": false,
+      "web": false,
+      "needs": "",
+      "img": "bud-projects.jpg",
+      "ring": {
+        "x": 3.8,
+        "y": 6.8,
+        "w": 65.9,
+        "h": 4.3
+      }
+    },
+    {
+      "id": "bud-connect",
+      "chapter": "Budget",
+      "title": "Connect a card",
+      "body": "On a project’s Cards/Links, Connect a card moves one of your linked cards onto that project. A card belongs to one project at a time.",
+      "who": "crew",
+      "tm": true,
+      "iphone": false,
+      "web": false,
+      "needs": "",
+      "img": "bud-connect.jpg",
+      "ring": {
+        "x": 4.6,
+        "y": 40.0,
+        "w": 90.8,
+        "h": 6.2
+      }
+    },
+    {
+      "id": "bud-summary",
+      "chapter": "Budget",
+      "title": "Summary and P&L",
+      "body": "When a tour’s over, open its Summary from Budget History: what came in, what went out, and a P&L for your business manager as a PDF or spreadsheet. Tap Finish to lock it.",
+      "who": "crew",
+      "tm": true,
+      "iphone": false,
+      "web": false,
+      "needs": "",
+      "img": "bud-summary.jpg",
+      "ring": {
+        "x": 4.6,
+        "y": 45.0,
+        "w": 90.8,
+        "h": 10.7
+      }
+    },
+    {
+      "id": "bud-merchroom",
+      "chapter": "Budget",
+      "title": "Merchroom",
+      "body": "On the website, Merchroom connects your band’s Square reader, so every sale at the merch table lands on its night, tips and all. It’s in test mode for now.",
+      "who": "crew",
+      "tm": true,
+      "iphone": false,
+      "web": true,
+      "needs": "",
+      "img": "bud-merchroom.jpg",
+      "ring": {
+        "x": 4.6,
+        "y": 11.4,
+        "w": 90.8,
+        "h": 14.6
+      }
+    },
+    {
+      "id": "ds-read",
+      "chapter": "Day sheet and Guest list",
+      "title": "Day sheet",
+      "body": "Every day of the tour is along the top. Tap one for the venue, the schedule, wifi, parking and TOUR SPOTS from the people on your tour.",
+      "who": "crew",
+      "tm": false,
+      "iphone": false,
+      "web": false,
+      "needs": "",
+      "img": "ds-read.jpg",
+      "ring": {
+        "x": 4.6,
+        "y": 7.1,
+        "w": 90.8,
+        "h": 6.8
+      }
+    },
+    {
+      "id": "ds-upload",
+      "chapter": "Day sheet and Guest list",
+      "title": "Upload a photo",
+      "body": "Upload a photo of a day sheet and the app does the rest. Check it, post it, and the whole tour has it. You can also punch it in by hand.",
+      "who": "crew",
+      "tm": true,
+      "iphone": false,
+      "web": false,
+      "needs": "",
+      "img": "ds-upload.jpg",
+      "ring": {
+        "x": 4.6,
+        "y": 32.2,
+        "w": 90.8,
+        "h": 10.2
+      }
+    },
+    {
+      "id": "ds-offtour",
+      "chapter": "Day sheet and Guest list",
+      "title": "Your day sheet, off tour",
+      "body": "Off tour, your day sheet builds itself: your routines at their ideal times, fitted around your calendar and when you got up. Tap the pencil to add something. Slide a line left to take it off today.",
+      "who": "crew",
+      "tm": false,
+      "iphone": false,
+      "web": false,
+      "needs": "",
+      "img": "ds-offtour.jpg",
+      "ring": {
+        "x": 4.6,
+        "y": 24.1,
+        "w": 90.8,
+        "h": 59.8
+      }
+    },
+    {
+      "id": "gl-add",
+      "chapter": "Day sheet and Guest list",
+      "title": "Add a guest",
+      "body": "Pick the night along the bottom and tap Add guest. Anyone on the tour can add names.",
+      "who": "crew",
+      "tm": false,
+      "iphone": false,
+      "web": false,
+      "needs": "",
+      "img": "gl-add.jpg",
+      "ring": {
+        "x": 4.6,
+        "y": 88.0,
+        "w": 29.8,
+        "h": 3.9
+      }
+    },
+    {
+      "id": "gl-import",
+      "chapter": "Day sheet and Guest list",
+      "title": "Import a list",
+      "body": "Got a list sent to you? Tap Import list, paste the whole thing and let the app sort out the names, plus-ones and all.",
+      "who": "crew",
+      "tm": false,
+      "iphone": false,
+      "web": false,
+      "needs": "",
+      "img": "gl-import.jpg",
+      "ring": {
+        "x": 63.7,
+        "y": 88.0,
+        "w": 31.7,
+        "h": 3.9
+      }
+    },
+    {
+      "id": "gl-share",
+      "chapter": "Day sheet and Guest list",
+      "title": "Share the list",
+      "body": "Tap Share to send the night’s list to the promoter, the tour manager or anyone who needs it, by text, email or copy.",
+      "who": "crew",
+      "tm": false,
+      "iphone": false,
+      "web": false,
+      "needs": "",
+      "img": "gl-share.jpg",
+      "ring": {
+        "x": 37.5,
+        "y": 88.0,
+        "w": 23.2,
+        "h": 3.9
+      }
+    },
+    {
+      "id": "team-list",
+      "chapter": "Team and Chat",
+      "title": "Team",
+      "body": "Everyone on the tour with their role. Tap someone for their phone, email and stats, and call, text or email them from there. Off tour, Team shows the people of each of your artists.",
+      "who": "crew",
+      "tm": false,
+      "iphone": false,
+      "web": false,
+      "needs": "",
+      "img": "team-list.jpg",
+      "ring": {
+        "x": 4.6,
+        "y": 7.3,
+        "w": 90.8,
+        "h": 51.7
+      }
+    },
+    {
+      "id": "team-flowers",
+      "chapter": "Team and Chat",
+      "title": "Send flowers",
+      "body": "To send flowers, tap someone on Team, then Give flowers.",
+      "who": "crew",
+      "tm": false,
+      "iphone": false,
+      "web": false,
+      "needs": "",
+      "img": "team-flowers.jpg",
+      "ring": {
+        "x": 4.6,
+        "y": 68.6,
+        "w": 90.8,
+        "h": 6.2
+      }
+    },
+    {
+      "id": "team-give",
+      "chapter": "Team and Chat",
+      "title": "Pick how many",
+      "body": "Pick how many flowers and what they’re for: Talent, Hustle, Morale and more. Add a quick note if you like, then tap Give. You get 10 a year.",
+      "who": "crew",
+      "tm": false,
+      "iphone": false,
+      "web": false,
+      "needs": "",
+      "img": "team-give.jpg",
+      "ring": {
+        "x": 4.6,
+        "y": 31.2,
+        "w": 90.8,
+        "h": 11.6
+      }
+    },
+    {
+      "id": "team-invite",
+      "chapter": "Team and Chat",
+      "title": "Invite your crew",
+      "body": "Tour managers: tap + Invite crew on the Overview to bring people onto the tour. Crew see the day to day. Managers see everything, money included.",
+      "who": "crew",
+      "tm": true,
+      "iphone": false,
+      "web": false,
+      "needs": "",
+      "img": "team-invite.jpg",
+      "ring": {
+        "x": 33.8,
+        "y": 84.7,
+        "w": 32.5,
+        "h": 3.9
+      }
+    },
+    {
+      "id": "chat-ari",
+      "chapter": "Team and Chat",
+      "title": "Chat and Ari",
+      "body": "One group chat for the whole tour. Ari is your tour’s helper: she sends the day’s reminders, like load in, set time and bus call. Managers tap ARI for her merch and settlement readings.",
+      "who": "crew",
+      "tm": false,
+      "iphone": false,
+      "web": false,
+      "needs": "",
+      "img": "chat-ari.jpg",
+      "ring": {
+        "x": 4.6,
+        "y": 6.8,
+        "w": 23.3,
+        "h": 4.0
+      }
+    },
+    {
+      "id": "chat-bell",
+      "chapter": "Team and Chat",
+      "title": "The bell",
+      "body": "Tour managers tap the bell to send a Tour Alert to every phone on the tour at once, like “Bus call moved to 11:30”. On the website, the bell also turns tour alerts on.",
+      "who": "crew",
+      "tm": true,
+      "iphone": false,
+      "web": false,
+      "needs": "",
+      "img": "chat-bell.jpg",
+      "ring": {
+        "x": 84.1,
+        "y": 6.2,
+        "w": 11.3,
+        "h": 5.2
+      }
+    },
+    {
+      "id": "chat-notifs",
+      "chapter": "Team and Chat",
+      "title": "Notifications",
+      "body": "Pick exactly what buzzes your phone: load in, set time, bus call, day sheets, flowers, messages and more. Open the three lines, then Notifications. Everyone picks their own.",
+      "who": "crew",
+      "tm": false,
+      "iphone": false,
+      "web": false,
+      "needs": "",
+      "img": "chat-notifs.jpg",
+      "ring": {
+        "x": 4.6,
+        "y": 31.5,
+        "w": 90.8,
+        "h": 65.8
+      }
+    },
+    {
+      "id": "pp-search",
+      "chapter": "Pages and people",
+      "title": "Search",
+      "body": "Find people, artists, tours and venues. Before you type, it shows who you follow, the people you tour with, your artists and your tours.",
+      "who": "all",
+      "tm": false,
+      "iphone": false,
+      "web": false,
+      "needs": "",
+      "img": "pp-search.jpg",
+      "ring": {
+        "x": 4.6,
+        "y": 1.8,
+        "w": 90.8,
+        "h": 5.2
+      }
+    },
+    {
+      "id": "pp-person",
+      "chapter": "Pages and people",
+      "title": "Someone’s page",
+      "body": "Tap anyone to see their page: their numbers, the artists they’ve worked with, their tours and their Top 10. Follow them, message them, or see their contact if you tour together.",
+      "who": "all",
+      "tm": false,
+      "iphone": false,
+      "web": false,
+      "needs": "",
+      "img": "pp-person.jpg",
+      "ring": {
+        "x": 4.1,
+        "y": 44.7,
+        "w": 91.8,
+        "h": 3.8
+      }
+    },
+    {
+      "id": "pp-artist",
+      "chapter": "Pages and people",
+      "title": "Artist pages",
+      "body": "Every artist has a page: its members, its crew and every tour it’s played. Tap Fan to follow them. The fans at the most shows make Top Fans.",
+      "who": "all",
+      "tm": false,
+      "iphone": false,
+      "web": false,
+      "needs": "",
+      "img": "pp-artist.jpg",
+      "ring": {
+        "x": 4.1,
+        "y": 35.8,
+        "w": 91.8,
+        "h": 3.8
+      }
+    },
+    {
+      "id": "pp-claim",
+      "chapter": "Pages and people",
+      "title": "Claim a page",
+      "body": "Nobody runs your band’s page yet? Tap Claim this page, say your role and add a link. Put the short code in your Instagram bio or website, and Greenroom checks it by hand.",
+      "who": "crew",
+      "tm": false,
+      "iphone": false,
+      "web": false,
+      "needs": "",
+      "img": "pp-claim.jpg",
+      "ring": {
+        "x": 50.9,
+        "y": 45.7,
+        "w": 45.0,
+        "h": 3.8
+      }
+    },
+    {
+      "id": "pp-workfor",
+      "chapter": "Pages and people",
+      "title": "Say you work for an artist",
+      "body": "On an artist’s page, tap I worked for and their name to ask to be listed as crew, or as a band member. Once they say yes and verify you, you get your trophy.",
+      "who": "crew",
+      "tm": false,
+      "iphone": false,
+      "web": false,
+      "needs": "",
+      "img": "pp-workfor.jpg",
+      "ring": {
+        "x": 4.1,
+        "y": 50.5,
+        "w": 91.8,
+        "h": 3.8
+      }
+    },
+    {
+      "id": "pp-worked",
+      "chapter": "Pages and people",
+      "title": "Worked a show?",
+      "body": "On an artist’s Tours tab, band members see Played ✓ by every tour. Tap it to take off one you missed. Crew the artist has verified see Worked Tour? and Worked Show? instead, to add them to your page.",
+      "who": "crew",
+      "tm": false,
+      "iphone": false,
+      "web": false,
+      "needs": "",
+      "img": "pp-worked.jpg",
+      "ring": {
+        "x": 69.6,
+        "y": 55.3,
+        "w": 17.0,
+        "h": 3.3
+      }
+    },
+    {
+      "id": "pp-attend",
+      "chapter": "Pages and people",
+      "title": "Been to a show?",
+      "body": "On any artist’s Tours tab, tap Attended? next to a tour or show you went to. It adds to Shows attended on your page.",
+      "who": "all",
+      "tm": false,
+      "iphone": false,
+      "web": false,
+      "needs": "",
+      "img": "pp-attend.jpg",
+      "ring": {
+        "x": 67.9,
+        "y": 60.1,
+        "w": 18.8,
+        "h": 3.3
+      }
+    },
+    {
+      "id": "menu",
+      "chapter": "Pages and people",
+      "title": "The menu",
+      "body": "The three lines at the top right hold your Contact Card, Notifications and Settings. Crew and bands also get Linked Cards and Budget History. Artists and band members get Create a tour and Create a show.",
+      "who": "all",
+      "tm": false,
+      "iphone": false,
+      "web": false,
+      "needs": "",
+      "img": "menu.jpg",
+      "ring": {
+        "x": 4.1,
+        "y": 13.7,
+        "w": 91.8,
+        "h": 63.3
+      }
+    },
+    {
+      "id": "end-crew",
+      "chapter": "Pages and people",
+      "title": "You’re all set",
+      "body": "That’s the whole app. Watch this tour again any time from Settings. Greenroom now opens in the mode you’re in: ON TOUR or OFF TOUR.",
+      "who": "crew",
+      "tm": false,
+      "iphone": false,
+      "web": false,
+      "needs": "",
+      "img": "end-crew.jpg",
+      "ring": {
+        "x": 3.6,
+        "y": 10.5,
+        "w": 13.8,
+        "h": 5.2
+      }
+    },
+    {
+      "id": "end-fan",
+      "chapter": "Pages and people",
+      "title": "You’re all set",
+      "body": "That’s everything. Watch this tour again any time from Settings. Now go find your favorite artists.",
+      "who": "fan",
+      "tm": false,
+      "iphone": false,
+      "web": false,
+      "needs": "",
+      "img": "end-fan.jpg",
+      "ring": null
+    }
+  ]
+}
