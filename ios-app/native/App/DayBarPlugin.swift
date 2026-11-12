@@ -19,6 +19,9 @@
 //                                                       bar otherwise gives the server nothing to start one with
 //   arm({ report }) -> { ok }                           the same, from the first plan the server kept this launch (app.js homeBarSend),
 //                                                       when there is certainly a signal to report a token over
+//   showAgain({ key }) -> { ok, gone }                  Show locked bar on Today (Devin, Nov 10 2026): the day's swiped mark is let go
+//                                                       (only when it is that key), so the page can put the bar up again; gone: the
+//                                                       mark kept now ("" once let go)
 // The page decides everything the bar says (src/core.js dayBarState); this file only hands it to iOS.
 //
 // Pushes (switched on Oct 22: the GitHub variable DAYBAR_PUSH = 1 gives the app target aps-environment = production,
@@ -46,7 +49,8 @@ public class DayBarPlugin: CAPPlugin, CAPBridgedPlugin {
         CAPPluginMethod(name: "show", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "end", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "prepare", returnType: CAPPluginReturnPromise),
-        CAPPluginMethod(name: "arm", returnType: CAPPluginReturnPromise)
+        CAPPluginMethod(name: "arm", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "showAgain", returnType: CAPPluginReturnPromise)
     ]
 
     override public func load() {
@@ -141,6 +145,18 @@ public class DayBarPlugin: CAPPlugin, CAPBridgedPlugin {
         ready(call)
     }
 
+    /// Show locked bar (Devin, Nov 10 2026: "If it's swiped a way have a button that says "show locked bar" light up green - only if its
+    /// swiped away"). The page's button, tapped: a swipe not looked at yet is judged first (so it cannot mark the day again after this), then
+    /// that day's mark is let go. The page then puts the bar up as a fresh one, and its token tells the server (daybar_report 'activity').
+    @objc func showAgain(_ call: CAPPluginCall) {
+        let key = call.getString("key") ?? ""
+        #if canImport(ActivityKit)
+        if #available(iOS 16.2, *) { DayBarRunner.shared.swipedWhileAway() }
+        #endif
+        DayBarGone.forget(key)
+        call.resolve(["ok": true, "gone": DayBarGone.key()])
+    }
+
     /// Where tokens go kept, the phone listens for them and hands over the one it has. Each launch does this again, which undoes a
     /// sign-out's forget, and leaves the report the morning wake posts with.
     private func ready(_ call: CAPPluginCall) {
@@ -157,34 +173,93 @@ enum DayBarGone {
     private static let name = "greenroom.daybar.gone"
     /// The home bars this phone has seen up, by id: a killed app sees no swipe, so the next launch looks for the ones missing.
     private static let upName = "greenroom.daybar.homeup"
+    /// The build of the app that saw each of those up, by id. Updating the app (TestFlight or the App Store) or installing it again takes its
+    /// bars down, and the new build hears of it only at its first launch: a bar noted by another build, or by one that noted no build (223 and
+    /// 224 did not), went with the update. Nobody swiped it.
+    private static let upBuildName = "greenroom.daybar.homeupbuild"
     /// When the bar of a day is due down, as the page last said, by its key (one day at a time): a bar gone after that is over, not swiped.
     private static let endName = "greenroom.daybar.homeend"
+    /// One lock for the two lists above (the bars up, and the build that saw each): every read, change and write of them is one step.
+    /// They are changed from more than one thread (a bar followed, a bar noted down, the look at launch), and a bar that kept its key
+    /// but lost its build would have a real swipe of it let go as an update.
+    private static let lock = NSLock()
 
     static func key() -> String { UserDefaults.standard.string(forKey: name) ?? "" }
     static func mark(_ key: String) {
         UserDefaults.standard.set(key, forKey: name)
         DayBarReport.send(kind: "gone", token: "", show: key, started: nil)
     }
+    /// Show locked bar: the day's mark let go, only when it is that day's (any other key is left as it is). A swipe after this marks it again.
+    static func forget(_ key: String) {
+        guard !key.isEmpty, key == self.key() else { return }
+        UserDefaults.standard.removeObject(forKey: name)
+    }
     static func clear() {
+        lock.lock()
+        defer { lock.unlock() }
         UserDefaults.standard.removeObject(forKey: name)
         UserDefaults.standard.removeObject(forKey: upName)
+        UserDefaults.standard.removeObject(forKey: upBuildName)
         UserDefaults.standard.removeObject(forKey: endName)
+    }
+    /// This app's build (CFBundleVersion). Every TestFlight and App Store upload has a new one.
+    static func build() -> String { Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "" }
+    /// (The two lists as they are kept. Read only while holding the lock.)
+    private static func upKeys() -> [String: String] { UserDefaults.standard.dictionary(forKey: upName) as? [String: String] ?? [:] }
+    private static func upBuilds() -> [String: String] { UserDefaults.standard.dictionary(forKey: upBuildName) as? [String: String] ?? [:] }
+    /// Was this bar noted up by the build running now? No (another build, or none noted): the update or the reinstall ended it.
+    static func sameBuild(_ id: String) -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return upBuilds()[id] == build()
     }
     static func noteEnd(_ key: String, _ at: Date) { UserDefaults.standard.set([key: at.timeIntervalSince1970], forKey: endName) }
     static func over(_ key: String) -> Bool {
         let all = UserDefaults.standard.dictionary(forKey: endName) as? [String: Double] ?? [:]
         return all[key].map { Date().timeIntervalSince1970 >= $0 } ?? false
     }
-    static func up() -> [String: String] { UserDefaults.standard.dictionary(forKey: upName) as? [String: String] ?? [:] }
+    static func up() -> [String: String] {
+        lock.lock()
+        defer { lock.unlock() }
+        return upKeys()
+    }
     static func noteUp(_ id: String, _ key: String) {
-        var all = up()
+        lock.lock()
+        defer { lock.unlock() }
+        var all = upKeys()
         all[id] = key
         UserDefaults.standard.set(all, forKey: upName)
+        var builds = upBuilds()
+        builds[id] = build()
+        UserDefaults.standard.set(builds, forKey: upBuildName)
     }
     static func noteDown(_ id: String) {
-        var all = up()
+        lock.lock()
+        defer { lock.unlock() }
+        var all = upKeys()
         all[id] = nil
         UserDefaults.standard.set(all, forKey: upName)
+        var builds = upBuilds()
+        builds[id] = nil
+        UserDefaults.standard.set(builds, forKey: upBuildName)
+    }
+    /// The look at launch, in one step: each bar noted up that iOS no longer lists as up (stillUp: the ids it does), noted down here and
+    /// handed back with its key and whether this build noted it (read before it is let go). Two looks at once never both take one bar.
+    static func takeMissing(_ stillUp: Set<String>) -> [(id: String, key: String, sameBuild: Bool)] {
+        lock.lock()
+        defer { lock.unlock() }
+        var all = upKeys()
+        var builds = upBuilds()
+        let now = build()
+        let gone = all.filter { !stillUp.contains($0.key) }.map { (id: $0.key, key: $0.value, sameBuild: builds[$0.key] == now) }
+        if gone.isEmpty { return [] }
+        for g in gone {
+            all[g.id] = nil
+            builds[g.id] = nil
+        }
+        UserDefaults.standard.set(all, forKey: upName)
+        UserDefaults.standard.set(builds, forKey: upBuildName)
+        return gone
     }
 }
 
@@ -198,6 +273,7 @@ enum DayBarLaunch {
         #if canImport(ActivityKit)
         if #available(iOS 16.2, *), DayBarReport.saved() != nil {
             DayBarRunner.shared.watchTokens()
+            DayBarRunner.shared.startTokenAgain()
         }
         #endif
     }
@@ -238,9 +314,10 @@ enum DayBarReport {
     static func saved() -> [String: String]? { store.dictionary(forKey: name) as? [String: String] }
 
     /// kind "start": the phone's push-to-start token; "activity": one bar's update token (show: its key). The request
-    /// is given time to finish even when iOS woke the app in the background only for this.
-    static func send(kind: String, token: String, show: String, started: Date?) {
-        guard let r = saved(), let u = r["url"], let url = URL(string: u), let key = r["key"] else { return }
+    /// is given time to finish even when iOS woke the app in the background only for this. then: said once this post is over (answered,
+    /// 25 seconds gone, or never sent), so the start token's posts can go one at a time (DayBarRunner.postStart).
+    static func send(kind: String, token: String, show: String, started: Date?, then: (@Sendable () -> Void)? = nil) {
+        guard let r = saved(), let u = r["url"], let url = URL(string: u), let key = r["key"] else { then?(); return }
         var req = URLRequest(url: url)
         req.httpMethod = "POST"
         req.timeoutInterval = 20
@@ -253,11 +330,28 @@ enum DayBarReport {
         ]
         req.httpBody = try? JSONSerialization.data(withJSONObject: body)
         let request = req
+        // (iOS can call this a second time, expired, while the post is under way: that call does nothing, as before.)
+        let once = Once()
         ProcessInfo.processInfo.performExpiringActivity(withReason: "Greenroom day bar token") { expired in
-            if expired { return }
+            guard once.take() else { return }
+            if expired { then?(); return }
             let done = DispatchSemaphore(value: 0)
             URLSession.shared.dataTask(with: request) { _, _, _ in done.signal() }.resume()
             _ = done.wait(timeout: .now() + 25)
+            then?()
+        }
+    }
+
+    /// Yes the first time only, from any thread.
+    private final class Once: @unchecked Sendable {
+        private let lock = NSLock()
+        private var used = false
+        func take() -> Bool {
+            lock.lock()
+            defer { lock.unlock() }
+            let first = !used
+            used = true
+            return first
         }
     }
 }
@@ -269,11 +363,22 @@ final class DayBarRunner {
     private var watched = Set<String>()
     private var reported = Set<String>()
     private var watchingStart = false
-    /// Bars this app ended itself: going away is no swipe.
-    private var closing = Set<String>()
+    /// The push-to-start token iOS last handed this launch through pushToStartTokenUpdates, and the last start token sent from here, both
+    /// hex (Nov 11 2026, "The lock bar did not show up this morning"). A read of the property can be older than what the updates gave, so
+    /// once they gave one every report of the start token sends theirs. Read and changed only under lock.
+    private var startGiven: String? = nil
+    private var startSent: String? = nil
+    /// The start token waiting to be posted: the newest decided. Its posts go through startQueue one at a time, each taking the newest
+    /// waiting, so an older token can never reach the server after a newer one, however two reports cross. Under lock.
+    private var startNext: String? = nil
+    private let startQueue = DispatchQueue(label: "greenroom.daybar.start")
+    private var startLookedAgain = false
     private let lock = NSLock()
     /// When each bar went up (Apple ends a bar 8 hours after), by its id.
     private let startedName = "greenroom.daybar.started"
+    /// Bars this app ended itself, by id, with when: going away is no swipe. Kept on the phone, not only in memory, so the next launch after
+    /// the app was closed still knows them (a day is plenty).
+    private let closingName = "greenroom.daybar.closing"
 
     private func hex(_ data: Data) -> String { data.map { String(format: "%02x", $0) }.joined() }
     private func live(_ a: Activity<DayBarAttributes>) -> Bool {
@@ -283,11 +388,32 @@ final class DayBarRunner {
         let all = UserDefaults.standard.dictionary(forKey: startedName) as? [String: Double] ?? [:]
         return all[id].map { Date(timeIntervalSince1970: $0) }
     }
-    private func closeBar(_ a: Activity<DayBarAttributes>) async {
+    private func closingAll() -> [String: Double] {
+        UserDefaults.standard.dictionary(forKey: closingName) as? [String: Double] ?? [:]
+    }
+    private func noteClosing(_ id: String) {
         lock.lock()
-        closing.insert(a.id)
-        lock.unlock()
+        defer { lock.unlock() }
+        let now = Date().timeIntervalSince1970
+        var all = closingAll().filter { now - $0.value < 24 * 3600 }
+        all[id] = now
+        UserDefaults.standard.set(all, forKey: closingName)
+    }
+    private func closeBar(_ a: Activity<DayBarAttributes>) async {
+        noteClosing(a.id)
         await a.end(nil, dismissalPolicy: .immediate)
+    }
+    /// Did this app end that bar itself? take: and forget it now (the follow, which hears of each bar's end once).
+    private func closedByUs(_ id: String, take: Bool) -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        var all = closingAll()
+        guard all[id] != nil else { return false }
+        if take {
+            all[id] = nil
+            UserDefaults.standard.set(all, forKey: closingName)
+        }
+        return true
     }
     private func markStarted(_ id: String) {
         var all = UserDefaults.standard.dictionary(forKey: startedName) as? [String: Double] ?? [:]
@@ -372,10 +498,72 @@ final class DayBarRunner {
         DayBarReport.send(kind: "activity", token: tok, show: a.attributes.key, started: startedAt(a.id))
     }
 
-    /// The phone's push-to-start token (iOS 17.2+), as it is now.
+    /// The phone's push-to-start token (iOS 17.2+): the one the updates last gave this launch, else the property as it is now.
     func reportStartToken() {
-        if #available(iOS 17.2, *), let data = Activity<DayBarAttributes>.pushToStartToken {
-            DayBarReport.send(kind: "start", token: hex(data), show: "", started: nil)
+        guard #available(iOS 17.2, *) else { return }
+        lock.lock()
+        let given = startGiven
+        lock.unlock()
+        let read = given == nil ? Activity<DayBarAttributes>.pushToStartToken.map({ hex($0) }) : nil
+        // (Decided under the lock: when the updates gave one while the property was being read, theirs goes, not the read.)
+        lock.lock()
+        let tok = startGiven ?? read
+        if let t = tok { queueStart(t) }
+        lock.unlock()
+        if tok != nil { postStart() }
+    }
+
+    /// A start token the updates gave: kept as theirs (and as the one sent), then sent.
+    private func startFromUpdates(_ tok: String) {
+        lock.lock()
+        startGiven = tok
+        queueStart(tok)
+        lock.unlock()
+        postStart()
+    }
+
+    /// Under lock: tok is the start token to send, the newest decided (the one sent from here, and the one waiting to be posted).
+    private func queueStart(_ tok: String) {
+        startSent = tok
+        startNext = tok
+    }
+
+    /// Posts the start token waiting, if one still is, once every start post before it is over: startQueue runs one at a time and each
+    /// run takes the newest waiting, so the last post to reach the server is the newest token. The same post as ever (kind "start").
+    private func postStart() {
+        startQueue.async { [weak self] in
+            guard let self = self else { return }
+            self.lock.lock()
+            let next = self.startNext
+            self.startNext = nil
+            self.lock.unlock()
+            guard let tok = next else { return }
+            let over = DispatchSemaphore(value: 0)
+            DayBarReport.send(kind: "start", token: tok, show: "", started: nil) { over.signal() }
+            _ = over.wait(timeout: .now() + 30)
+        }
+    }
+
+    /// Apple's advice for a launch before iOS 26, whose updates can hand over nothing at app start: the property read again about 2
+    /// seconds after the launch (DayBarLaunch.start, which runs with no page too), and sent only when the updates still gave nothing this
+    /// launch and it is not the token sent last. Once a launch.
+    func startTokenAgain() {
+        guard #available(iOS 17.2, *) else { return }
+        lock.lock()
+        let first = !startLookedAgain
+        startLookedAgain = true
+        lock.unlock()
+        guard first else { return }
+        ProcessInfo.processInfo.performExpiringActivity(withReason: "Greenroom day bar token") { [weak self] expired in
+            if expired { return }
+            Thread.sleep(forTimeInterval: 2)
+            guard let self = self, let data = Activity<DayBarAttributes>.pushToStartToken else { return }
+            let tok = self.hex(data)
+            self.lock.lock()
+            let send = self.startGiven == nil && self.startSent != tok
+            if send { self.queueStart(tok) }
+            self.lock.unlock()
+            if send { self.postStart() }
         }
     }
 
@@ -403,6 +591,9 @@ final class DayBarRunner {
     private func follow(_ a: Activity<DayBarAttributes>) {
         let key = a.attributes.key
         guard key.hasPrefix("home|") else { return }
+        // (A bar already gone when this app first sees it, such as one an update took down that iOS still lists, is never noted up
+        // with this build nor followed: the look at launch has judged it already.)
+        guard a.activityState != .dismissed else { return }
         DayBarGone.noteUp(a.id, key)
         Task { [weak self] in
             for await st in a.activityStateUpdates {
@@ -413,9 +604,7 @@ final class DayBarRunner {
                 }
                 if st == .dismissed {
                     DayBarGone.noteDown(a.id)
-                    self.lock.lock()
-                    let ours = self.closing.remove(a.id) != nil
-                    self.lock.unlock()
+                    let ours = self.closedByUs(a.id, take: true)
                     if !ours && self.swiped(a.id, key) { DayBarGone.mark(key) }
                     return
                 }
@@ -438,14 +627,14 @@ final class DayBarRunner {
     }
 
     /// The same look at launch, and each time the page asks: a home bar noted up and now gone went while the app was not running, or was
-    /// asleep. It saw nothing, so it counts as swiped, by the test above. A bar this app is closing is no swipe.
+    /// asleep. It saw nothing, so it counts as swiped, by the test above. A bar this app is closing, or closed before a relaunch, is no swipe.
+    /// Nor is a bar noted by another build of the app (or by one that noted none): the update or the reinstall took it down. It is let go
+    /// with no word to the server, so this same open starts the day's bar again, as on a phone with none up.
     func swipedWhileAway() {
-        let bars = Activity<DayBarAttributes>.activities
-        for (id, key) in DayBarGone.up() where !bars.contains(where: { $0.id == id && $0.activityState != .dismissed }) {
-            DayBarGone.noteDown(id)
-            lock.lock()
-            let ours = closing.contains(id)
-            lock.unlock()
+        let up = Set(Activity<DayBarAttributes>.activities.filter { $0.activityState != .dismissed }.map { $0.id })
+        for (id, key, same) in DayBarGone.takeMissing(up) {
+            if !same { continue }
+            let ours = closedByUs(id, take: false)
             if !ours && swiped(id, key) { DayBarGone.mark(key) }
         }
     }
@@ -462,13 +651,15 @@ final class DayBarRunner {
             Task { [weak self] in
                 for await data in Activity<DayBarAttributes>.pushToStartTokenUpdates {
                     guard let self = self else { return }
-                    DayBarReport.send(kind: "start", token: self.hex(data), show: "", started: nil)
+                    self.startFromUpdates(self.hex(data))
                 }
             }
         }
         Task { [weak self] in
             for await a in Activity<DayBarAttributes>.activityUpdates {
                 guard let self = self else { return }
+                // (A bar already swiped or taken down is nothing to watch, and no reason to close a live bar of its day.)
+                if a.activityState == .dismissed { continue }
                 // (A bar of a day you swiped away, started by the server before it heard: ended as soon as this phone runs.)
                 if a.attributes.key == DayBarGone.key() {
                     await self.closeBar(a)
