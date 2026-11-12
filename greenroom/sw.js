@@ -1,6 +1,6 @@
-var CACHE = 'greenroom-20261108-153610';
+var CACHE = 'greenroom-20261111-165530';
 var SHELL = ['./', 'index.html', 'core.js', 'statements.js', 'app.js',
-  'manifest.webmanifest', 'icon-180.png', 'icon-512.png', 'logo-full.png'];
+  'manifest.webmanifest', 'icon-180.png', 'icon-512.png', 'logo-full.png', 'bus-switch.png'];
 self.addEventListener('install', function (e) {
   e.waitUntil(
     caches.open(CACHE).then(function (c) {
