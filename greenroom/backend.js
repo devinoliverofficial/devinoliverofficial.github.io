@@ -395,6 +395,26 @@
     if (q.error) throw fnMissing(q.error) ? err('unavailable') : signalError(q.error);
     return q.data;
   }
+  var LINK_PLATFORMS = ['instagram', 'facebook', 'youtube', 'tiktok', 'apple', 'deezer', 'spotify', 'soundcloud'];
+  var LINK_SIGN_IN = { instagram: 'https://www.instagram.com/oauth/authorize?', facebook: 'https://www.facebook.com/v27.0/dialog/oauth?',
+    youtube: 'https://accounts.google.com/o/oauth2/v2/auth?', tiktok: 'https://www.tiktok.com/v2/auth/authorize/?' };
+  var LINK_CATALOG = ['apple', 'deezer', 'spotify', 'soundcloud'];
+  var LINK_UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+  async function linkCall(body) {
+    if (!sb || !session) throw err('unavailable');
+    var res;
+    try { res = await callFn('link', { method: 'POST', body: JSON.stringify(body) }); }
+    catch (e) { throw err('unavailable'); }
+    if (!res || res.status === 404) throw err('unavailable');
+    if (res.status === 401 || res.status === 403) throw err('session_expired');
+    if (res.status === 429) throw err('rate_limited');
+    if (!res.ok) throw err('unavailable');
+    var out;
+    try { out = await res.json(); } catch (e) { throw err('unavailable'); }
+    if (!isObj(out)) throw err('unavailable');
+    if (out.error) throw err(/^[a-z_]{1,40}$/.test(String(out.error)) ? String(out.error) : 'failed');
+    return out;
+  }
   async function reimburseCall(fn, args) {
     if (!sb || !session || !session.user) return { ok: false, why: 'unavailable' };
     var q = null;
@@ -451,6 +471,11 @@
   function keptClear() {
     try {
       Object.keys(localStorage).forEach(function (k) { if (/^gr-keep-(crew|fw):|^gr-card:|^gr-off-pick:/.test(k)) localStorage.removeItem(k); });
+    } catch (e) {   }
+    try { if (typeof window !== 'undefined' && typeof window.GR_SIGNAL_FORGET === 'function') window.GR_SIGNAL_FORGET(); } catch (e) {   }
+    try { if (typeof indexedDB !== 'undefined' && indexedDB) indexedDB.deleteDatabase('gr-signal'); } catch (e) {   }
+    try {
+      Object.keys(localStorage).forEach(function (k) { if (/^gr\.signal\./.test(k)) localStorage.removeItem(k); });
     } catch (e) {   }
   }
   function suggestClear() {
@@ -1954,6 +1979,82 @@
       var fn = Object.prototype.hasOwnProperty.call(SIGNAL_DELETES, kind) ? SIGNAL_DELETES[kind] : '';
       if (!fn || !id) throw err('invalid');
       return (await signalRpc(fn, { p_id: String(id) })) === true;
+    },
+    signalAnalyze: async function (req, opts) {
+      var o = opts || {};
+      if (!sb || !session) throw err('unavailable');
+      if (window.GR_AI_CONSENT && !(await window.GR_AI_CONSENT('signal'))) throw err('cancelled');
+      var ctl = typeof AbortController === 'function' ? new AbortController() : null;
+      var stop = function () { if (ctl) ctl.abort(); };
+      if (o.signal && o.signal.addEventListener) o.signal.addEventListener('abort', stop);
+      var timer = ctl ? setTimeout(stop, 95000) : 0;
+      var res;
+      try {
+        res = await callFn('signal', { method: 'POST', signal: ctl ? ctl.signal : undefined, body: JSON.stringify(isObj(req) ? req : {}) });
+      } catch (e) {
+        if (o.signal && o.signal.aborted) throw err('cancelled');
+        throw err('unavailable');
+      } finally { if (timer) clearTimeout(timer); }
+      if (!res || res.status === 404) throw err('unavailable');
+      if (res.status === 401 || res.status === 403) throw err('session_expired');
+      if (res.status === 429) throw err('rate_limited');
+      if (!res.ok) throw err('unavailable');
+      var out;
+      try { out = await res.json(); } catch (e) { throw err('unavailable'); }
+      if (!isObj(out)) throw err('unavailable');
+      if (out.error) throw err(String(out.error));
+      return out;
+    },
+    signalLinks: async function () {
+      if (!sb || !session) return null;
+      var q;
+      try { q = await sgLimit(sb.rpc('signal_links'), 20000); }
+      catch (e) { throw e && e.code === 'offline' ? e : err('offline'); }
+      if (q.error) { if (fnMissing(q.error)) return null; throw signalError(q.error); }
+      return Array.isArray(q.data) ? q.data.filter(function (x) {
+        return isObj(x) && LINK_PLATFORMS.indexOf(x.platform) >= 0 && typeof x.id === 'string';
+      }) : null;
+    },
+    signalLinkStatus: async function () {
+      try {
+        var out = await linkCall({ action: 'status' });
+        return { on: (Array.isArray(out.on) ? out.on : []).filter(function (p) { return LINK_PLATFORMS.indexOf(p) >= 0; }) };
+      } catch (e) { return { on: [] }; }
+    },
+    signalLinkStart: async function (platform, account, shell) {
+      var p = String(platform || '');
+      if (!Object.prototype.hasOwnProperty.call(LINK_SIGN_IN, p)) throw err('bad_request');
+      var out = await linkCall({ action: 'start', platform: p, account: String(account || '').slice(0, 120), shell: shell === true });
+      var url = typeof out.url === 'string' ? out.url : '';
+      if (url.indexOf(LINK_SIGN_IN[p]) !== 0 || /[\s"'<>]/.test(url) || url.length > 4000) throw err('failed');
+      return url;
+    },
+    signalLinkSync: async function (id) {
+      if (!LINK_UUID.test(String(id || ''))) throw err('bad_request');
+      return await linkCall({ action: 'sync_now', link_id: String(id) });
+    },
+    signalLinkUnlink: async function (id) {
+      if (!LINK_UUID.test(String(id || ''))) throw err('bad_request');
+      return await linkCall({ action: 'unlink', link_id: String(id) });
+    },
+    signalLinkSearch: async function (platform, q) {
+      var p = String(platform || '');
+      if (LINK_CATALOG.indexOf(p) < 0) throw err('bad_request');
+      var term = String(q || '').trim().slice(0, 100);
+      if (term.length < 2) throw err('bad_request');
+      var out = await linkCall({ action: 'search', platform: p, q: term });
+      return (Array.isArray(out.results) ? out.results : []).filter(isObj).map(function (r) {
+        return { ext_id: String(r.ext_id || '').slice(0, 80), name: String(r.name || '').slice(0, 120),
+          image: typeof r.image === 'string' && /^https:\/\/[^\s"'<>]+$/.test(r.image) ? r.image : '',
+          fans: typeof r.fans === 'number' && isFinite(r.fans) ? r.fans : null };
+      }).filter(function (r) { return r.ext_id && r.name; }).slice(0, 10);
+    },
+    signalLinkPick: async function (platform, extId, artistId) {
+      var p = String(platform || '');
+      if (LINK_CATALOG.indexOf(p) < 0 || !extId) throw err('bad_request');
+      if (artistId != null && artistId !== '' && !LINK_UUID.test(String(artistId))) throw err('bad_request');
+      return await linkCall({ action: 'pick', platform: p, ext_id: String(extId).slice(0, 80),
+        artist_id: artistId == null || artistId === '' ? null : String(artistId) });
     },
     reportSet: async function (id, act) {
       if (!sb || !session) throw err('unavailable');

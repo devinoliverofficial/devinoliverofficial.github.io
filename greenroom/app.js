@@ -159,6 +159,7 @@
     moon: '<path d="M20 14.5A8.5 8.5 0 0 1 9.5 4a8.5 8.5 0 1 0 10.5 10.5z"/>',
     history: '<path d="M3 12a9 9 0 1 0 3-6.7M3 4v4h4"/><path d="M12 8v4.5l3 1.8"/>',
     check: '<path d="M4.5 12.5l5 5 10-11"/>',
+    ring: '<circle cx="12" cy="12" r="8"/>',
     heart: '<path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"/>',
     star: '<path d="M12 2.8l2.8 5.9 6.4.9-4.7 4.4 1.2 6.4L12 17.3l-5.7 3.1 1.2-6.4-4.7-4.4 6.4-.9z"/>',
     clock: '<circle cx="12" cy="12" r="8.5"/><path d="M12 7.5V12l3 2"/>',
@@ -167,7 +168,20 @@
     up: '<path d="M12 19V5.5"/><path d="M6 11l6-6 6 6"/>',
     cash: '<rect x="2.5" y="6" width="19" height="12" rx="2"/><circle cx="12" cy="12" r="2.6"/><path d="M6 9.5v.01M18 14.5v.01"/>',
     refresh: '<path d="M20 11a8 8 0 0 0-14.6-4.4L4 8.5"/><path d="M4 3.5v5h5"/><path d="M4 13a8 8 0 0 0 14.6 4.4l1.4-1.9"/><path d="M20 20.5v-5h-5"/>',
-    lock: '<rect x="5" y="10.5" width="14" height="10" rx="2.2"/><path d="M8.5 10.5V7.5a3.5 3.5 0 0 1 7 0v3"/>'
+    lock: '<rect x="5" y="10.5" width="14" height="10" rx="2.2"/><path d="M8.5 10.5V7.5a3.5 3.5 0 0 1 7 0v3"/>',
+    sgBars: '<path d="M5 19v-3M10 19v-6.5M15 19v-10M20 19V5.5"/>',
+    sgGrid: '<circle cx="7.5" cy="7.5" r="2.6"/><circle cx="16.5" cy="7.5" r="2.6"/><circle cx="7.5" cy="16.5" r="2.6"/><circle cx="16.5" cy="16.5" r="2.6"/>',
+    sgPlay: '<circle cx="12" cy="12" r="8.6"/><path d="M10.3 8.9v6.2l4.9-3.1z"/>',
+    sgPlayOnly: '<path d="M8 5.8v12.4l9.8-6.2z" fill="currentColor"/>',
+    sgAt: '<circle cx="12" cy="12" r="3.3"/><path d="M15.3 9.2v4.3a2.4 2.4 0 0 0 4.8 0V12a8.1 8.1 0 1 0-3.3 6.5"/>',
+    sgStack: '<circle cx="5.5" cy="12" r="2.2" fill="currentColor"/><circle cx="12" cy="12" r="2.2"/><circle cx="18.5" cy="12" r="2.2"/>',
+    sgPin: '<path d="M9 3.8h6M10 3.8l-.6 5.6L6.8 12h10.4l-2.6-2.6L14 3.8M12 12v8.2"/>',
+    sgUp: '<path d="M12 19V5.5M6.5 11 12 5.5l5.5 5.5"/>',
+    sgDown: '<path d="M12 5v13.5M6.5 13l5.5 5.5 5.5-5.5"/>',
+    sgLink: '<path d="M10.3 13.7a3.8 3.8 0 0 0 5.4 0l2.9-2.9a3.8 3.8 0 0 0-5.4-5.4l-.9.9"/><path d="M13.7 10.3a3.8 3.8 0 0 0-5.4 0l-2.9 2.9a3.8 3.8 0 0 0 5.4 5.4l.9-.9"/>',
+    sgChev: '<path d="m7 9.5 5 5 5-5"/>',
+    sgTarget: '<circle cx="12" cy="12" r="8.5"/><circle cx="12" cy="12" r="4.8"/><circle cx="12" cy="12" r="1.3" fill="currentColor" stroke="none"/>',
+    sgImage: '<rect x="3.5" y="5" width="17" height="14" rx="2.5"/><circle cx="9" cy="10" r="1.8"/><path d="m4 17.2 5-4.4 3.8 3.2 3-2.4 4.2 3.6"/>'
   };
   function icon(name, size) {
     var s = size || 22;
@@ -6006,13 +6020,28 @@
     var shape = h('button', { class: 'pt-next hm-up hm-ideal', type: 'button', onclick: function () { openHomeTimes(); } },
       G.homeMins(prefs.wake) != null ? 'Ideal wake-up ' + G.homeClock(prefs.wake) + ' · Bed ' + G.homeClock(G.homeMins(prefs.bed) != null ? prefs.bed : '00:00')
         : 'Set your wake-up time and Greenroom fits your day around it.');
-    var fit = h('div', { class: 'ledger hm-calbar hm-fit' }, h('div', { class: 'row' },
-      h('span', { class: 'row-label' }, 'Fit my day', h('span', { class: 'hint' }, 'Your routines move to fit when you get up and your calendar')),
-      segmented(['Off', 'On'], prefs.fit !== false ? 1 : 0, function (i) { homeSavePrefs({ fit: i === 1 }); dayBarSoon(); }, 'Fit my day')));
+    var fitOn = function () { return homePrefs().fit !== false; };
+    var fitLook = function (b) {
+      var on = fitOn();
+      b.className = 'add-pill hm-fit' + (on ? ' on' : '');
+      b.setAttribute('aria-pressed', String(on));
+      b.replaceChildren(icon(on ? 'check' : 'ring', 16), 'Fit my day');
+      return b;
+    };
+    var fit = fitLook(h('button', { class: 'add-pill hm-fit', type: 'button', onclick: function () {
+      var was = fitOn();
+      homeSavePrefs({ fit: !was });
+      if (fitOn() === was) return;
+      dayBarSoon();
+      fitLook(fit);
+      toast(was ? 'Fit my day is off: every routine stays at its own time.'
+        : 'Fit my day is on: your routines move to fit when you get up and your calendar.', 4000);
+    } }));
     return [
-      routines.length ? h('div', { class: 'ds-page pt-ds hm-rts ht-room' }, shape, fit,
+      routines.length ? h('div', { class: 'ds-page pt-ds hm-rts ht-room' }, shape,
         h('section', { class: 'ds-sec' }, h('div', { class: 'ledger hm-ledger' }, routines.map(row))),
-        h('div', { class: 'am-more ht-plan-more' }, h('button', { class: 'add-pill', type: 'button', onclick: function () { openHomeFlow({}); } }, icon('sun', 16), 'Plan your day')))
+        h('div', { class: 'am-more ht-plan-more hm-pair' },
+          h('button', { class: 'add-pill', type: 'button', onclick: function () { openHomeFlow({}); } }, icon('sun', 16), 'Plan your day'), fit))
         : h('div', { class: 'ht-room' }, homeCalm('No routines yet',
             'A routine is something you do on set days, like stretching at 8 or practice at 3. It shows on your day sheet each time it comes round.',
             [h('button', { class: 'btn primary block', type: 'button', onclick: function () { openHomeFlow({}); } }, icon('sun', 18), 'Plan your day')])),
@@ -12836,6 +12865,9 @@
       var was = S.signalOk === true;
       S.signalOk = yes;
       if (was !== yes && S.route && (S.route.name === 'mainmenu' || S.route.name === 'signal')) render(true);
+      var pend = S.sigLinkPending;
+      S.sigLinkPending = null;
+      if (pend && yes) signalLinkShow(pend.p, pend.r);
     };
     Promise.resolve().then(function () { return B.signalMay(); })
       .then(function (v) { heard(v === true); }, function () { heard(false); });
@@ -13193,20 +13225,44 @@
       return h('div', { class: 'page home profile menu-page has-tabs' }, menuHead('', { menu: true }), dbBanner(), socialBar(''));
     }
     var c = signalRoomInfo();
-    var tab = SIGNAL_TABS.some(function (t) { return t[0] === S.signalTab; }) ? S.signalTab : 'week';
+    signalLinksInfo();
     var room = G.isObj(c.room) ? c.room : null;
-    var body = !window.GSIG ? h('p', { class: 'note' }, 'SIGNAL’s rules didn’t load. Close the app and open it again.')
-      : room ? (tab === 'releases' ? signalReleasesTab(room) : tab === 'posts' ? signalPostsTab(room)
-        : tab === 'songs' ? signalSongsTab(room) : tab === 'audience' ? signalAudienceTab(room)
-        : tab === 'facts' ? signalFactsTab(room) : signalWeekTab(room))
-      : c.failed || c.at ? [
+    var waiting = !window.GSIG ? h('p', { class: 'note' }, 'SIGNAL’s rules didn’t load. Close the app and open it again.')
+      : room ? null : c.failed || c.at ? [
         h('p', { class: 'note' }, c.failed ? 'Couldn’t open SIGNAL just now.' : 'SIGNAL has nothing to show yet.'),
         h('div', { class: 'stack' }, h('button', { class: 'btn primary block' + cfCls(true), type: 'button',
           onclick: function () { signalRoomInfo(true); render(); } }, 'Try again'))]
       : h('p', { class: 'note' }, 'Loading…');
+    if (S.signalV1) return signalV1Room(room, waiting);
+    var s = signalV2();
+    return h('div', { class: 'page home profile menu-page has-tabs sig-room sg-room' },
+      menuHead('SIGNAL', { menu: true }),
+      dbBanner(),
+      h('div', { class: 'sg-ptabs', role: 'tablist', 'aria-label': 'SIGNAL' }, SIGNAL_PLATS.map(function (t) {
+        var on = t[0] === s.plat;
+        return h('button', { class: 'sg-ptab' + (on ? ' on' : ''), type: 'button', role: 'tab', 'aria-selected': on ? 'true' : 'false',
+          onclick: function () {
+            signalLeave(function () {
+              if (s.plat === t[0]) delete s.acct[t[0]];
+              s.plat = t[0]; s.post = null;
+              signalTop(); render();
+            });
+          } }, t[1]);
+      })),
+      h('div', { class: 'sg-body', role: 'tabpanel' }, waiting || signalPlatBody(room, s)),
+      socialBar(''));
+  }
+  function signalV1Room(room, waiting) {
+    var tab = SIGNAL_TABS.some(function (t) { return t[0] === S.signalTab; }) ? S.signalTab : 'week';
+    var body = waiting || (tab === 'releases' ? signalReleasesTab(room) : tab === 'posts' ? signalPostsTab(room)
+      : tab === 'songs' ? signalSongsTab(room) : tab === 'audience' ? signalAudienceTab(room)
+      : tab === 'facts' ? signalFactsTab(room) : signalWeekTab(room));
+    var plat = SIGNAL_PLATS.filter(function (p) { return p[0] === signalV2().plat; })[0] || SIGNAL_PLATS[0];
     return h('div', { class: 'page home profile menu-page has-tabs sig-room' },
       menuHead('SIGNAL', { menu: true }),
       dbBanner(),
+      h('button', { class: 'sig-back sg-v1back', type: 'button', onclick: function () { S.signalV1 = null; S.signalOpen = null; signalTop(); render(); } },
+        icon('back', 18), 'Back to ' + plat[1]),
       h('div', { class: 'vp-tabs pt-tabs six', role: 'tablist', 'aria-label': 'SIGNAL' }, SIGNAL_TABS.map(function (t) {
         var on = t[0] === tab;
         return h('button', { class: 'vp-tab pt-tab' + (on ? ' on' : ''), type: 'button', role: 'tab', 'aria-selected': on ? 'true' : 'false',
@@ -13577,13 +13633,14 @@
     }
     render(true);
   }
-  function openSignalRelease(room, rel) {
+  function openSignalRelease(room, rel, o) {
     var f = rel ? { title: rel.title || '', artists: rel.artists || '', artist_ids: (rel.artist_ids || []).slice(), kind: rel.kind || 'single',
       release_day: rel.release_day || '', video_day: rel.video_day || '', distributor: rel.distributor || '', status: rel.status || 'planning',
       isrc: rel.isrc || '', upc: rel.upc || '', note: rel.note || '' }
       : { title: '', artists: '', artist_ids: [], kind: 'single', release_day: '', video_day: '', distributor: '', status: 'planning', isrc: '', upc: '', note: '' };
     var arts = signalRows(room, 'artists');
-    if (!rel && arts.length === 1) { f.artist_ids = [arts[0].id]; f.artists = arts[0].name; f.distributor = arts[0].distributor || ''; }
+    var pre = !rel && o && o.artist ? o.artist : !rel && arts.length === 1 ? arts[0] : null;
+    if (pre) { f.artist_ids = [pre.id]; f.artists = pre.name; f.distributor = pre.distributor || ''; }
     openSheet(function () {
       return [
         h('h2', { class: 'sh-title' }, rel ? 'Edit the release' : 'Add a release'),
@@ -13656,38 +13713,27 @@
   }
   function signalMeterPanel(res, platform) {
     var X = window.GSIG;
+    var fixes = res.moves.map(function (m) { return { pts: m.pts, words: m.hint + (m.you ? ' (a tick for you below)' : '') }; });
     return [
-      h('div', { class: 'sig-scorecard' },
-        h('div', { class: 'sig-scoreline' }, h('span', { class: 'sig-score tone-' + res.band.tone }, String(res.total)), h('span', { class: 'sig-of' }, '/100'),
-          h('span', { class: 'sig-band tone-' + res.band.tone }, res.band.name)),
-        h('p', { class: 'sig-say' }, res.band.say),
-        platform && platform !== 'spotify' ? h('p', { class: 'hint' }, 'The meter is built for Spotify pitches. For ' + (X.PLATFORMS[platform] || 'this platform') + ', read it as a guide.') : null),
+      signalMeter({ score: res.total, why: fixes[0] ? fixes[0].words : '', fixes: fixes, peak: 'It’s at Peak. Send it as it is.',
+        items: res.crits.map(function (c) { return { label: c.name, got: c.pts, max: c.max }; }) }),
+      platform && platform !== 'spotify' ? h('p', { class: 'hint sg-guide' }, 'The meter is built for Spotify pitches. For ' + (X.PLATFORMS[platform] || 'this platform') + ', read it as a guide.') : null,
       res.needsApproval ? h('p', { class: 'sig-warn' }, 'It says something personal. It can’t go in until everyone it describes has OK’d it: tick that below once they have.') : null,
       res.caps.map(function (c) { return h('p', { class: 'sig-warn' }, c); }),
       res.pen.length ? h('ul', { class: 'sig-moves' }, res.pen.map(function (p) {
         return h('li', { class: 'neg' }, h('span', { class: 'sig-gain neg' }, String(p.pts)), h('span', null, p.label));
       })) : null,
-      h('p', { class: 'sig-subh' }, 'What to change'),
-      res.moves.length ? h('ul', { class: 'sig-moves' }, res.moves.slice(0, 6).map(function (m) {
-        return h('li', null, h('span', { class: 'sig-gain' }, '+' + m.pts), h('span', null, m.hint + (m.you ? ' (a tick for you below)' : '') + '.'));
-      })) : h('p', { class: 'note' }, 'Nothing left to fix.'),
-      h('details', { class: 'sig-parts' }, h('summary', null, 'Every part of the score'),
-        h('div', { class: 'sig-bars' }, res.crits.map(function (c) {
-          var pct = c.max ? Math.round(100 * c.pts / c.max) : 0;
-          return h('div', { class: 'sig-bar' }, h('span', { class: 'sig-bar-n' }, c.name),
-            h('span', { class: 'sig-bar-t' }, h('i', { style: 'width:' + pct + '%', class: pct >= 100 ? 'full' : pct >= 50 ? 'half' : 'low' })),
-            h('span', { class: 'sig-bar-p' }, c.pts + '/' + c.max));
-        })),
-        h('p', { class: 'sig-subh' }, 'Not scored yet, so check these by eye'),
+      h('details', { class: 'sig-parts' }, h('summary', null, 'Not scored yet, so check these by eye'),
         h('ul', { class: 'sig-plain' }, X.PitchScore.NOT_YET.map(function (n) { return h('li', null, n.words); })))
     ];
   }
-  function openSignalPitch(room, rel, pitch) {
+  function openSignalPitch(room, rel, pitch, o) {
     var X = window.GSIG, tags = G.isObj(pitch && pitch.tags) ? JSON.parse(JSON.stringify(pitch.tags)) : {};
     var art = Array.isArray(rel.artist_ids) ? signalById(room, 'artists', rel.artist_ids[0]) : null;
     var done = {};
     signalStepsOf(room, rel.id).forEach(function (s) { if (s.status === 'done' && s.rule) done[s.rule] = true; });
-    var f = { platform: pitch ? pitch.platform : 'spotify', who: pitch ? pitch.who : 'me', body: pitch ? String(pitch.body || '') : '',
+    var start = !pitch && o && o.platform && window.GSIG.PLATFORMS[o.platform] ? o.platform : 'spotify';
+    var f = { platform: pitch ? pitch.platform : start, who: pitch ? pitch.who : SIGNAL_PITCH_BY[start] || 'me', body: pitch ? String(pitch.body || '') : '',
       status: pitch ? pitch.status : 'draft', sent: signalWhen(pitch && pitch.sent_at) ? signalWhen(pitch.sent_at).date : '',
       outcome: pitch ? pitch.outcome || '' : '', outcomeNote: pitch ? String(pitch.outcome_note || '') : '',
       facts: pitch && Array.isArray(pitch.fact_ids) ? pitch.fact_ids.slice() : [] };
@@ -13744,6 +13790,7 @@
           h('div', { class: 'field' }, h('span', { class: 'field-label sig-lab' }, 'The words', count),
             text = signalArea({ value: f.body, max: 4000, rows: 7, label: 'The words', k: 'sig-pitch-body', ph: 'Open with the sound, then what it is about, who made it, and a dated plan.',
               on: function (v) { f.body = v; paint(); } })),
+          host,
           facts.length ? [h('p', { class: 'field-label' }, 'Your facts'), h('div', { class: 'sig-facts' }, facts.map(function (x) {
             var ok = x.status === 'approved', on = f.facts.indexOf(x.id) >= 0;
             if (!ok && on) {
@@ -13795,7 +13842,6 @@
           h('div', { class: 'fa-ticks' }, SIGNAL_PITCH_PROFILE.map(function (q) {
             return signalTick(q[1], !!tags.profile[q[0]], function (v) { tags.profile[q[0]] = v; paint(); });
           })),
-          host,
           field('Where it stands', signalChips(Object.keys(SIGNAL_PITCH_WORDS).map(function (k) { return [k, SIGNAL_PITCH_WORDS[k]]; }), f.status,
             function (v) { f.status = v || 'draft'; }, 'Where it stands')),
           field('Day it was sent', signalInput({ type: 'date', value: f.sent, label: 'Day it was sent', on: function (v) { f.sent = v; } })),
@@ -14218,7 +14264,7 @@
       return [
         h('p', { class: 'sig-over' }, (SIGNAL_FORMAT_WORDS[post.format] || 'Post') + (post.account ? ' · @' + post.account : '')),
         h('h2', { class: 'sh-title' }, 'The ' + words + ' results'),
-        h('p', { class: 'sh-sub' }, 'From Instagram’s insights. Leave out any you don’t have.'),
+        h('p', { class: 'sh-sub' }, 'From ' + (post.platform === 'tiktok' ? 'TikTok’s' : 'Instagram’s') + ' insights. Leave out any you don’t have.'),
         h('form', { onsubmit: async function (e) {
           e.preventDefault();
           var row = { post_id: post.id, checkpoint: cp, boosted: f.boosted, note: f.note };
@@ -14603,16 +14649,18 @@
   var SIGNAL_FILE_KINDS = { songs: 'Songs', cities: 'Cities', playlists: 'Playlists', timeline: 'Audience over time', unknown: 'Not sure yet' };
   function openSignalFile(room) {
     var X = window.GSIG, st = { text: null, name: '', read: null, map: {}, kind: '', source: 'spotify', covers: 'week',
-      week: X.addDays(X.mondayOf(signalToday()), -7), busy: false };
+      week: X.addDays(X.mondayOf(signalToday()), -7), busy: false, art: '' };
     var host = h('div', { class: 'sig-file' });
     var arts = signalRows(room, 'artists');
+    st.art = arts[0] ? arts[0].id : '';
+    var artName = function () { var a = arts.filter(function (x) { return x.id === st.art; })[0] || arts[0]; return a ? String(a.name || '') : ''; };
     var again = function () {
       if (st.text !== null) st.read = X.readCsv(st.text, { map: st.map, kind: st.kind || undefined });
       paint();
     };
     var paint = function () {
       var r = st.read;
-      var rows = r && r.ok ? signalFileRows(r, { source: st.source, week: st.week, covers: st.covers, room: room, artist: arts[0] ? arts[0].name : '' }) : [];
+      var rows = r && r.ok ? signalFileRows(r, { source: st.source, week: st.week, covers: st.covers, room: room, artist: artName() }) : [];
       fillEl(host, [
         h('label', { class: 'btn ghost block sig-pick' + cfCls(false) }, icon('up', 18), st.name ? 'Pick another file' : 'Pick the file',
           h('input', { type: 'file', class: 'sr', accept: '.csv,.tsv,.txt,text/csv,text/tab-separated-values,text/plain', onchange: async function (e) {
@@ -14647,6 +14695,8 @@
               h('button', { class: 'pf-btn', type: 'button', 'aria-label': 'A week earlier', onclick: function () { st.week = X.addDays(st.week, -7); paint(); } }, '‹'),
               h('span', { class: 'sig-weekw' }, 'Week of ' + signalDay(st.week)),
               h('button', { class: 'pf-btn', type: 'button', 'aria-label': 'A week later', onclick: function () { st.week = X.addDays(st.week, 7); paint(); } }, '›'))),
+          r.kind === 'timeline' && arts.length > 1 ? field('Which project it’s for', signalChips(arts.map(function (a) { return [a.id, String(a.name || '')]; }), st.art,
+            function (v) { st.art = v || st.art; paint(); }, 'Which project it’s for')) : null,
           r.kind === 'songs' ? field('How long it covers', signalChips([['week', 'That week'], ['year', 'The last 12 months']], st.covers, function (v) { st.covers = v || 'week'; paint(); }, 'How long it covers')) : null,
           rows.length ? [h('p', { class: 'sig-subh' }, rows.length + (rows.length === 1 ? ' row' : ' rows') + ' to save'),
             h('ul', { class: 'sig-plain sig-preview-rows' }, rows.slice(0, 5).map(function (x) {
@@ -14675,6 +14725,1961 @@
     };
     openSheet(function () { paint(); return [h('h2', { class: 'sh-title' }, 'Add this week’s files'), host]; },
       { label: 'Add this week’s files', onClose: function () { st.text = null; st.read = null; } });
+  }
+  var SIGNAL_PLATS = [['instagram', 'Instagram'], ['tiktok', 'TikTok'], ['spotify', 'Spotify'], ['apple', 'Apple Music']];
+  var SIGNAL_SOCIAL = { instagram: 'Instagram', tiktok: 'TikTok' };
+  var SIGNAL_THUMBS = { urls: {}, loaded: false, loading: false, db: null };
+  function signalV2() {
+    var s = S.sig2;
+    if (!G.isObj(s)) s = S.sig2 = { plat: 'instagram', acct: {}, post: null, create: null, gtab: {}, last: {} };
+    if (!SIGNAL_PLATS.some(function (p) { return p[0] === s.plat; })) s.plat = 'instagram';
+    ['acct', 'gtab', 'last'].forEach(function (k) { if (!G.isObj(s[k])) s[k] = {}; });
+    return s;
+  }
+  function signalTop() { try { if (typeof window.scrollTo === 'function') window.scrollTo(0, 0); } catch (e) {   } }
+  function signalPlatBody(room, s) {
+    var plat = s.plat;
+    if (!SIGNAL_SOCIAL[plat]) return signalDspBody(room, s, plat);
+    var handle = s.acct[plat];
+    if (handle && !signalAccounts(room, plat).some(function (x) { return x.toLowerCase() === String(handle).toLowerCase(); })) { delete s.acct[plat]; handle = null; }
+    if (!handle) return signalChooser(room, plat);
+    if (s.create && s.create.plat === plat) return signalCreatePage(room, s.create);
+    if (s.post) {
+      var post = signalById(room, 'posts', s.post);
+      if (post) return signalPostView(room, plat, handle, post);
+      s.post = null;
+    }
+    return plat === 'tiktok' ? signalTikTokMain(room, handle) : signalIgProfile(room, handle);
+  }
+  function signalHandle(v) { return String(v == null ? '' : v).trim().replace(/^@+/, '').replace(/\s+/g, ''); }
+  function signalAllAccounts(room) {
+    var st = room && G.isObj(room.settings) ? room.settings : null;
+    return (st && Array.isArray(st.accounts) ? st.accounts : []).filter(G.isObj).map(function (a) {
+      return { platform: String(a.platform || ''), handle: signalHandle(a.handle) };
+    }).filter(function (a) { return a.platform && a.handle; });
+  }
+  function signalAccounts(room, plat) {
+    return signalAllAccounts(room).filter(function (a) { return a.platform === plat; }).map(function (a) { return a.handle; });
+  }
+  function signalLastAcct(plat) {
+    var s = signalV2();
+    if (s.last[plat] == null) s.last[plat] = lsGet('gr.signal.last.' + plat) || '';
+    return s.last[plat];
+  }
+  function signalOpenAcct(plat, handle) {
+    signalLeave(function () {
+      var s = signalV2();
+      s.acct[plat] = handle; s.post = null; s.last[plat] = handle;
+      lsSet('gr.signal.last.' + plat, handle);
+      signalTop(); render();
+    });
+  }
+  function signalPostMs(p) {
+    var t = Date.parse(String(p.posted_at || p.planned_at || p.created_at || ''));
+    return isFinite(t) ? t : 0;
+  }
+  function signalAcctPosts(room, plat, handle) {
+    var who = String(handle || '').toLowerCase(), first = (signalAccounts(room, plat)[0] || '').toLowerCase() === who;
+    return signalRows(room, 'posts').filter(function (p) {
+      if ((p.platform || 'instagram') !== plat || p.format === 'story') return false;
+      var a = signalHandle(p.account).toLowerCase();
+      return a ? a === who : first;
+    }).sort(function (a, b) { return signalPostMs(b) - signalPostMs(a); });
+  }
+  function signalScoreOf(p) { return p && typeof p.score === 'number' && isFinite(p.score) ? p.score : null; }
+  function signalPinned(p) { return !!(p && G.isObj(p.answers) && p.answers.pinned === true); }
+  function signalCard(room, plat, handle) {
+    var key = plat + ':' + String(handle || '').toLowerCase();
+    return signalRows(room, 'assets').filter(function (a) {
+      return !a.release_id && G.isObj(a.details) && String(a.details.profile || '').toLowerCase() === key;
+    }).sort(function (a, b) { return String(b.updated_at || '').localeCompare(String(a.updated_at || '')); })[0] || null;
+  }
+  function signalShort(n) {
+    if (typeof n !== 'number' || !isFinite(n)) return '?';
+    if (n < 10000) return signalCount(n);
+    if (n < 1e6) return String(Math.round(n / 100) / 10).replace(/\.0$/, '') + 'K';
+    return String(Math.round(n / 1e5) / 10).replace(/\.0$/, '') + 'M';
+  }
+  function signalThumbDb() {
+    var T = SIGNAL_THUMBS;
+    if (T.db) return T.db;
+    T.db = new Promise(function (ok) {
+      try {
+        var idb = window.indexedDB;
+        if (!idb) { ok(null); return; }
+        var rq = idb.open('gr-signal', 1);
+        rq.onupgradeneeded = function () { try { rq.result.createObjectStore('thumbs'); } catch (e) {   } };
+        rq.onsuccess = function () { var db = rq.result; try { db.onversionchange = function () { try { db.close(); } catch (e) {   } }; } catch (e) {   } ok(db); };
+        rq.onerror = function () { ok(null); };
+        rq.onblocked = function () { ok(null); };
+      } catch (e) { ok(null); }
+    });
+    return T.db;
+  }
+  function signalForget() {
+    var T = SIGNAL_THUMBS, had = T.db;
+    try { Object.keys(T.urls).forEach(function (k) { var u = T.urls[k]; if (/^blob:/.test(String(u))) URL.revokeObjectURL(u); }); } catch (e) {   }
+    T.urls = {}; T.loaded = false; T.loading = false; T.db = null;
+    try { if (had && typeof had.then === 'function') had.then(function (db) { try { if (db) db.close(); } catch (e) {   } }); } catch (e) {   }
+    try { if (window.indexedDB) window.indexedDB.deleteDatabase('gr-signal'); } catch (e) {   }
+    try {
+      var ls = window.localStorage, keys = [];
+      for (var i = 0; ls && i < ls.length; i++) { var k = ls.key(i); if (/^gr\.signal\./.test(String(k))) keys.push(k); }
+      keys.forEach(function (k) { try { ls.removeItem(k); } catch (e) {   } });
+    } catch (e) {   }
+    if (G.isObj(S.sig2)) { var s = S.sig2; if (s.draft) signalDropDraft(); S.sig2 = null; }
+  }
+  window.GR_SIGNAL_FORGET = signalForget;
+  function signalBlobUrl(b) {
+    try {
+      if (typeof b === 'string') return /^(data:image\/|blob:)/.test(b) ? b : null;
+      return b && window.URL && typeof URL.createObjectURL === 'function' ? URL.createObjectURL(b) : null;
+    } catch (e) { return null; }
+  }
+  function signalThumbsLoad() {
+    var T = SIGNAL_THUMBS;
+    if (T.loaded || T.loading) return;
+    T.loading = true;
+    signalThumbDb().then(function (db) {
+      if (!db) return {};
+      return new Promise(function (ok) {
+        try {
+          var out = {}, cur = db.transaction('thumbs', 'readonly').objectStore('thumbs').openCursor();
+          cur.onsuccess = function () { var c = cur.result; if (c) { out[String(c.key)] = c.value; c.continue(); } else ok(out); };
+          cur.onerror = function () { ok(out); };
+        } catch (e) { ok({}); }
+      });
+    }).then(function (all) {
+      var n = 0;
+      Object.keys(all || {}).forEach(function (k) { if (!T.urls[k]) { var u = signalBlobUrl(all[k]); if (u) { T.urls[k] = u; n += 1; } } });
+      T.loaded = true; T.loading = false;
+      if (n && S.route && S.route.name === 'signal') render();
+    }, function () { T.loaded = true; T.loading = false; });
+  }
+  function signalThumb(key) { signalThumbsLoad(); return key ? SIGNAL_THUMBS.urls[key] || null : null; }
+  async function signalThumbPut(key, blob) {
+    var u = signalBlobUrl(blob);
+    if (u) SIGNAL_THUMBS.urls[key] = u;
+    var db = await signalThumbDb();
+    if (!db) return false;
+    return await new Promise(function (ok) {
+      try {
+        var tx = db.transaction('thumbs', 'readwrite');
+        tx.objectStore('thumbs').put(blob, key);
+        tx.oncomplete = function () { ok(true); };
+        tx.onerror = function () { ok(false); };
+      } catch (e) { ok(false); }
+    });
+  }
+  async function signalSquareJpeg(file, side) {
+    try {
+      var img = null, url = null;
+      if (typeof window.createImageBitmap === 'function') { try { img = await window.createImageBitmap(file); } catch (e) { img = null; } }
+      if (!img) {
+        url = URL.createObjectURL(file);
+        img = await new Promise(function (ok, no) { var i = new Image(); i.onload = function () { ok(i); }; i.onerror = no; i.src = url; });
+      }
+      var w = img.width, hgt = img.height, cut = Math.min(w, hgt);
+      var cv = document.createElement('canvas');
+      cv.width = side; cv.height = side;
+      cv.getContext('2d').drawImage(img, (w - cut) / 2, (hgt - cut) / 2, cut, cut, 0, 0, side, side);
+      if (url) URL.revokeObjectURL(url);
+      return await new Promise(function (ok) { cv.toBlob(function (b) { ok(b || null); }, 'image/jpeg', 0.82); });
+    } catch (e) { return null; }
+  }
+  function signalInitials(name) {
+    var w = String(name || '').replace(/^@+/, '').trim().split(/[\s._-]+/).filter(Boolean);
+    return ((w[0] || '?').charAt(0) + (w.length > 1 ? w[1].charAt(0) : '')).toUpperCase();
+  }
+  function signalAvatar(key, name, size, cls) {
+    var url = signalThumb(key);
+    return h('span', { class: 'sg-av' + (url ? '' : ' none') + (cls ? ' ' + cls : ''), style: 'width:' + size + 'px;height:' + size + 'px;font-size:' + Math.round(size * 0.36) + 'px', 'aria-hidden': 'true' },
+      url ? h('img', { src: url, alt: '' }) : signalInitials(name));
+  }
+  function signalAvatarPick(plat, handle, name, size) {
+    var key = 'avatar:' + plat + ':' + String(handle).toLowerCase();
+    return h('label', { class: 'sg-avpick', 'aria-label': 'Pick a photo for this account' },
+      signalAvatar(key, name || handle, size),
+      h('span', { class: 'sg-avplus', 'aria-hidden': 'true' }, icon('plus', 14)),
+      h('input', { type: 'file', accept: 'image/*', class: 'sg-file', onchange: async function (e) {
+        var f = e.target.files && e.target.files[0];
+        if (!f) return;
+        var b = await signalSquareJpeg(f, 240);
+        if (!b) { toast('That photo couldn’t be read.'); return; }
+        await signalThumbPut(key, b);
+        render();
+      } }));
+  }
+  var SIGNAL_ZONES = [['weak', 'Weak'], ['moderate', 'Moderate'], ['strong', 'Strong'], ['peak', 'Peak']];
+  function signalBadge(score, o) {
+    o = o || {};
+    var X = window.GSIG, big = (o.big ? ' big' : '') + (o.inrow ? ' inrow' : '');
+    if (typeof score !== 'number' || !isFinite(score)) {
+      return h('span', { class: 'sg-badge sg-none' + big, role: 'img', 'aria-label': 'Not scored yet' }, icon('sgBars', o.big ? 15 : 12), h('b', null, '?'));
+    }
+    var b = X.meterBand(score);
+    return h('span', { class: 'sg-badge sg-' + b.key + big, role: 'img', 'aria-label': 'Score ' + b.score + ' out of 100, ' + b.name },
+      icon('sgBars', o.big ? 15 : 12), h('b', null, String(b.score)), o.of ? h('small', null, '/100') : null);
+  }
+  function signalMeter(o) {
+    var X = window.GSIG;
+    if (o.compact) return signalBadge(o.score);
+    var b = X.meterBand(o.score), lit = b.score <= 0 ? 0 : Math.min(20, Math.floor(b.score / 5) + 1);
+    var segs = [];
+    for (var i = 1; i <= 20; i++) {
+      var z = X.meterBand((i - 1) * 5).key;
+      segs.push(h('i', { class: 'sg-seg sg-z-' + z + (i <= lit ? ' on' : '') + (i === lit ? ' tip' : '') }));
+    }
+    var fixes = (o.fixes || []).filter(function (f) { return f && f.pts > 0; }).slice().sort(function (a, c) { return c.pts - a.pts; });
+    var peak = b.score >= 100, top = o.top > 0 ? o.top : 3;
+    var whyWords = peak ? String(o.peak || 'It’s at Peak. After you post, answer comments in the first few hours to keep it there.')
+      : String(o.why || (fixes[0] ? fixes[0].words : '') || 'Every part counts. Tap a fix below to see what it adds.');
+    var fixRow = function (f) {
+      return h('li', { class: 'sg-fix' }, h('span', { class: 'sg-pts' }, '+' + f.pts), h('span', { class: 'sg-fix-t' }, f.words));
+    };
+    var items = (o.items || []).filter(function (it) { return it && it.max > 0; });
+    return h('section', { class: 'sg-meter sg-' + b.key, role: 'meter', 'aria-valuemin': '0', 'aria-valuemax': '100', 'aria-valuenow': String(b.score),
+      'aria-label': 'Score ' + b.score + ' out of 100, ' + b.name },
+      h('div', { class: 'sg-m-over' }, icon('sgBars', 13), 'SIGNAL'),
+      h('div', { class: 'sg-m-top' }, h('span', { class: 'sg-m-score' }, String(b.score)), h('span', { class: 'sg-m-of' }, '/100'),
+        h('span', { class: 'sg-m-band' }, b.name)),
+      h('div', { class: 'sg-m-segs', 'aria-hidden': 'true' }, segs),
+      h('div', { class: 'sg-m-zones', 'aria-hidden': 'true' }, SIGNAL_ZONES.map(function (zz) {
+        return h('span', { class: zz[0] === b.key ? 'on' : '' }, zz[1]);
+      })),
+      h('p', { class: 'sg-m-why' }, h('b', null, peak ? 'Peak. ' : 'Why it can still be stronger: '), whyWords),
+      !o.noFixes && fixes.length ? h('ul', { class: 'sg-fixes' }, fixes.slice(0, top).map(fixRow)) : null,
+      (!o.noFixes && fixes.length > top) || items.length ? h('details', { class: 'sg-every' },
+        h('summary', null, 'Every part of the score'),
+        !o.noFixes && fixes.length > top ? h('ul', { class: 'sg-fixes' }, fixes.slice(top).map(fixRow)) : null,
+        items.length ? h('ul', { class: 'sg-parts' }, items.map(function (it) {
+          return h('li', null, h('span', null, it.label), h('b', null, it.checked === false ? 'Not checked this time' : it.got + ' of ' + it.max));
+        })) : null) : null);
+  }
+  function signalChooser(room, plat) {
+    var name = SIGNAL_SOCIAL[plat], list = signalAccounts(room, plat), last = signalLastAcct(plat);
+    var rows = list.map(function (hd) {
+      var newest = signalAcctPosts(room, plat, hd).filter(function (p) { return signalScoreOf(p) !== null; })[0] || null;
+      var b = newest ? window.GSIG.meterBand(newest.score) : null;
+      var card = signalCard(room, plat, hd);
+      var link = signalLinkOf(plat, hd), canLink = signalLinkOn(plat);
+      var row = h('button', { class: 'sg-acc', type: 'button', onclick: function () { signalOpenAcct(plat, hd); } },
+        signalAvatar('avatar:' + plat + ':' + hd.toLowerCase(), card && card.details.name ? card.details.name : hd, 46),
+        h('span', { class: 'sg-acc-t' }, h('span', { class: 'sg-acc-u' }, hd),
+          h('span', { class: 'sg-acc-s' + (b ? ' sg-' + b.key : '') }, b ? [icon('sgBars', 12), 'Newest post scored ' + b.score] : 'No posts scored yet')),
+        link && link.status !== 'reconnect' ? h('span', { class: 'sg-linked' }, icon('sgLink', 13), 'Linked') : null,
+        last && last.toLowerCase() === hd.toLowerCase() ? h('span', { class: 'sg-tickc', 'aria-label': 'Opened last' }, icon('check', 15)) : null);
+      var pill = !canLink ? null : !link ? signalBtn('Link', function () { signalLinkGo(plat, hd); }, { sm: true, block: false, cls: 'sg-linkpill' })
+        : link.status === 'reconnect' ? signalBtn('Reconnect', function () { signalLinkGo(plat, hd); }, { sm: true, block: false, cls: 'sg-linkpill' }) : null;
+      if (pill) row = h('div', { class: 'sg-acc-line' }, row, pill);
+      if (mouseOnly()) return row;
+      return swipeRow(row, [h('button', { class: 'sw-undo', type: 'button', 'aria-label': 'Take ' + hd + ' off SIGNAL',
+        onclick: function () { signalAskRemoveAcct(room, plat, hd); } }, icon('trash', 16), 'Take off')], { noTapOpen: true, tapOnlyCloses: true });
+    });
+    return h('div', { class: 'sg-chooser' },
+      h('h2', { class: 'sg-h2' }, 'Your ' + name + ' accounts'),
+      h('div', { class: 'sg-acc-card' }, rows,
+        h('button', { class: 'sg-acc sg-acc-add', type: 'button', onclick: function () { openSignalAddAccount(room, plat); } },
+          h('span', { class: 'sg-plusc', 'aria-hidden': 'true' }, icon('plus', 22)), h('span', { class: 'sg-acc-u' }, 'Add ' + name + ' account'))),
+      signalLinkOn(plat) ? h('p', { class: 'sg-reads' }, icon('lock', 14), SIGNAL_READ_ONLY)
+        : h('p', { class: 'sg-reads' }, icon('lock', 14), 'SIGNAL only reads what you add here. It never posts or signs in. Reading your ' + name + ' for you comes later.'));
+  }
+  function openSignalAddAccount(room, plat) {
+    var name = SIGNAL_SOCIAL[plat], f = { handle: '' };
+    openSheet(function () {
+      return [
+        h('h2', { class: 'sh-title' }, 'Add ' + name + ' account'),
+        h('p', { class: 'sh-sub' }, signalLinkOn(plat) ? 'Type the account’s handle. To have SIGNAL read its numbers for you, tap Link next to it after.'
+          : 'Type the account’s handle. SIGNAL keeps the name only: it never signs in to ' + name + '.'),
+        h('form', { onsubmit: async function (e) {
+          e.preventDefault();
+          var hd = signalHandle(f.handle);
+          if (!hd) { toast('Type the handle first.'); return; }
+          if (hd.length > 80) { toast('That handle is too long.'); return; }
+          var all = signalAllAccounts(room);
+          if (all.some(function (a) { return a.platform === plat && a.handle.toLowerCase() === hd.toLowerCase(); })) { toast('That account is already in SIGNAL.'); return; }
+          if (all.length >= 30) { toast('That list is full. Take an account off first.'); return; }
+          var saved = await signalPut('settings', { accounts: all.concat([{ platform: plat, handle: hd }]) });
+          if (!saved) return;
+          closeSheet();
+          signalOpenAcct(plat, hd);
+        } },
+          field('Handle', signalInput({ value: '', max: 81, ph: '@handle', label: 'Handle', k: 'handle', on: function (v) { f.handle = v; } })),
+          signalSheetButtons('Add account'))
+      ];
+    }, { label: 'Add ' + name + ' account' });
+  }
+  function signalAskRemoveAcct(room, plat, hd) {
+    confirmSheet({ title: 'Take ' + hd + ' off SIGNAL?', body: 'Its posts and scores stay in SIGNAL. You can add it again any time.', action: 'Take it off', danger: true,
+      onConfirm: async function () {
+        var rest = signalAllAccounts(room).filter(function (a) { return !(a.platform === plat && a.handle.toLowerCase() === hd.toLowerCase()); });
+        var saved = await signalPut('settings', { accounts: rest });
+        if (!saved) return false;
+        var s = signalV2();
+        if (String(s.acct[plat] || '').toLowerCase() === hd.toLowerCase()) delete s.acct[plat];
+        s.post = null; signalDropDraft();
+        render();
+        return true;
+      } });
+  }
+  function signalTopBar(room, plat, handle, mid) {
+    var s = signalV2();
+    return h('div', { class: 'sg-igbar' },
+      h('button', { class: 'sg-icbtn', type: 'button', 'aria-label': 'Create post', onclick: function () { s.create = { plat: plat, acct: handle, postId: null }; signalTop(); render(); } }, icon('plus', 26)),
+      mid || h('span', { class: 'sg-mid' }),
+      h('button', { class: 'sg-icbtn', type: 'button', 'aria-label': 'More in SIGNAL', onclick: function () { openSignalMore(room, plat, handle); } }, icon('menu', 26)));
+  }
+  function signalBackToChooser(plat) { signalLeave(function () { var s = signalV2(); delete s.acct[plat]; s.post = null; signalTop(); render(); }); }
+  function signalEditProfileBtn(room, plat, handle) {
+    return h('div', { class: 'sg-two' },
+      signalBtn('Edit profile', function () { openSignalProfile(room, plat, handle); }, { quiet: true, sm: true, block: false }),
+      signalBtn('Create post', function () { signalV2().create = { plat: plat, acct: handle, postId: null }; signalTop(); render(); }, { sm: true, block: false }));
+  }
+  function signalLinkLine(d) {
+    return d.link ? h('p', { class: 'sg-link' }, icon('sgLink', 15), h('span', null, String(d.link))) : null;
+  }
+  function signalGridPart(room, plat, handle, posts, tabs) {
+    var s = signalV2(), on = s.gtab[plat] && tabs.some(function (t) { return t[0] === s.gtab[plat]; }) ? s.gtab[plat] : tabs[0][0];
+    var shown = posts.filter(tabs.filter(function (t) { return t[0] === on; })[0][3]);
+    if (plat === 'tiktok') shown = shown.filter(signalPinned).concat(shown.filter(function (p) { return !signalPinned(p); }));
+    return [
+      h('div', { class: 'sg-gtabs', role: 'tablist', 'aria-label': 'Posts' }, tabs.map(function (t) {
+        return h('button', { class: 'sg-gtab' + (t[0] === on ? ' on' : ''), type: 'button', role: 'tab', 'aria-selected': t[0] === on ? 'true' : 'false', 'aria-label': t[2],
+          onclick: function () { s.gtab[plat] = t[0]; render(); } }, icon(t[1], 24));
+      })),
+      shown.length ? h('div', { class: 'sg-grid' }, shown.map(function (p) { return signalTile(plat, p); }))
+        : h('div', { class: 'sg-empty' },
+          h('p', null, posts.length ? 'Nothing here yet.' : 'No posts here yet.'),
+          posts.length ? null : h('div', { class: 'stack' },
+            signalBtn('Create post', function () { s.create = { plat: plat, acct: handle, postId: null }; signalTop(); render(); }),
+            signalBtn('Score a post you already posted', function () { s.create = { plat: plat, acct: handle, postId: null, history: true }; signalTop(); render(); }, { quiet: true })))
+    ];
+  }
+  function signalFormatIcon(fmt) { return fmt === 'carousel' ? 'sgStack' : fmt === 'reel' || fmt === 'video' || fmt === 'short' ? 'sgPlay' : 'sgImage'; }
+  function signalTile(plat, p) {
+    var s = signalV2(), thumb = signalThumb(p.id), score = signalScoreOf(p);
+    var many = p.format === 'carousel' && G.isObj(p.answers) && G.isObj(p.answers.media) && +p.answers.media.n > 1 ? Math.round(+p.answers.media.n) : 0;
+    var corner = plat === 'instagram' ? (p.format === 'carousel' ? (many ? h('span', { class: 'sg-cpill' }, '1/' + many) : icon('sgStack', 17))
+      : p.format === 'reel' || p.format === 'video' ? icon('sgPlay', 17) : null) : null;
+    return h('button', { class: 'sg-tile' + (thumb ? '' : ' plain'), type: 'button',
+      'aria-label': (SIGNAL_FORMAT_WORDS[p.format] || 'Post') + ', ' + (score === null ? 'not scored yet' : 'score ' + Math.round(score)),
+      onclick: function () { s.post = p.id; signalTop(); render(); } },
+      thumb ? h('img', { src: thumb, alt: '' }) : h('span', { class: 'sg-tile-ic', 'aria-hidden': 'true' }, icon(signalFormatIcon(p.format), 28)),
+      corner ? h('span', { class: 'sg-corner', 'aria-hidden': 'true' }, corner) : null,
+      plat === 'tiktok' && signalPinned(p) ? h('span', { class: 'sg-pinned' }, 'Pinned') : null,
+      signalBadge(score));
+  }
+  function signalAverage(posts) {
+    var sc = posts.map(signalScoreOf).filter(function (x) { return x !== null; }).slice(0, 12);
+    return sc.length ? { n: sc.length, avg: Math.round(sc.reduce(function (a, b) { return a + b; }, 0) / sc.length) } : null;
+  }
+  function signalAvgCard(posts) {
+    var a = signalAverage(posts);
+    if (!a) return null;
+    var b = window.GSIG.meterBand(a.avg);
+    return h('div', { class: 'sg-avg' },
+      h('span', { class: 'sg-avg-t' }, h('b', null, a.n === 1 ? 'Last post' : 'Last ' + a.n + ' posts'), h('span', null, 'Average SIGNAL score')),
+      h('span', { class: 'sg-avg-n sg-' + b.key }, String(a.avg), h('small', null, '/100')));
+  }
+  function signalIsVideo(p) { return p.format === 'reel' || p.format === 'video' || p.format === 'short'; }
+  function signalHasTags(p) { return G.isObj(p.answers) && Array.isArray(p.answers.tags) && p.answers.tags.length > 0; }
+  function signalIgProfile(room, handle) {
+    var plat = 'instagram', card = signalCard(room, plat, handle), d = card ? card.details : {};
+    var posts = signalAcctPosts(room, plat, handle);
+    var stat = function (n, w) { return h('span', { class: 'sg-stat' }, h('b', null, n), h('span', null, w)); };
+    return h('div', { class: 'sg-prof-page' },
+      signalTopBar(room, plat, handle, h('button', { class: 'sg-mid', type: 'button', 'aria-label': 'Choose an account', onclick: function () { signalBackToChooser(plat); } },
+        h('b', null, handle), icon('sgChev', 16))),
+      h('div', { class: 'sg-prof' },
+        signalAvatarPick(plat, handle, d.name, 86),
+        h('div', { class: 'sg-pinfo' },
+          h('div', { class: 'sg-pname' }, d.name ? String(d.name) : handle),
+          h('div', { class: 'sg-stats' },
+            stat(typeof d.posts === 'number' ? signalShort(d.posts) : signalCount(posts.length), 'posts'),
+            stat(signalShort(d.followers), 'followers'),
+            stat(signalShort(d.following), 'following')))),
+      d.bio ? h('p', { class: 'sg-bio' }, String(d.bio)) : null,
+      signalLinkLine(d),
+      signalEditProfileBtn(room, plat, handle),
+      signalAvgCard(posts),
+      signalGridPart(room, plat, handle, posts, [
+        ['grid', 'sgGrid', 'All posts', function () { return true; }],
+        ['videos', 'sgPlay', 'Reels', signalIsVideo],
+        ['tagged', 'sgAt', 'Posts with people tagged', signalHasTags]]));
+  }
+  function signalTikTokMain(room, handle) {
+    var plat = 'tiktok', card = signalCard(room, plat, handle), d = card ? card.details : {};
+    var posts = signalAcctPosts(room, plat, handle);
+    var stat = function (n, w) { return h('span', { class: 'sg-stat' }, h('b', null, n), h('span', null, w)); };
+    return h('div', { class: 'sg-prof-page sg-tt' },
+      signalTopBar(room, plat, handle, null),
+      h('div', { class: 'sg-tthead' },
+        h('div', { class: 'sg-ttname' },
+          h('button', { class: 'sg-ttn', type: 'button', 'aria-label': 'Choose an account', onclick: function () { signalBackToChooser(plat); } },
+            h('b', null, d.name ? String(d.name) : handle), icon('sgChev', 18)),
+          h('span', { class: 'sg-tth' }, '@' + handle),
+          h('div', { class: 'sg-stats' },
+            stat(signalShort(d.following), 'following'),
+            stat(signalShort(d.followers), 'followers'),
+            stat(signalShort(d.likes), 'likes'))),
+        signalAvatarPick(plat, handle, d.name, 96)),
+      d.bio ? h('p', { class: 'sg-bio' }, String(d.bio)) : null,
+      signalLinkLine(d),
+      signalEditProfileBtn(room, plat, handle),
+      signalAvgCard(posts),
+      signalGridPart(room, plat, handle, posts, [
+        ['grid', 'sgGrid', 'All videos', function () { return true; }],
+        ['pinned', 'sgPin', 'Pinned', signalPinned],
+        ['tagged', 'sgAt', 'Videos with people tagged', signalHasTags]]));
+  }
+  function openSignalProfile(room, plat, handle) {
+    var card = signalCard(room, plat, handle), d = card ? card.details : {};
+    var countKeys = plat === 'tiktok' ? [['following', 'Following'], ['followers', 'Followers'], ['likes', 'Likes']]
+      : [['posts', 'Posts'], ['followers', 'Followers'], ['following', 'Following']];
+    var f = { name: String(d.name || ''), bio: String(d.bio || ''), link: String(d.link || '') };
+    countKeys.forEach(function (k) { f[k[0]] = typeof d[k[0]] === 'number' ? String(d[k[0]]) : ''; });
+    var locked = d.linked === true && Array.isArray(d.linked_keys) ? d.linked_keys.map(String) : [];
+    var isLocked = function (k) { return locked.indexOf(k) >= 0; };
+    var fixed = function (label, k, v) { return h('div', { class: 'sg-lkfixed', 'data-k': k }, h('span', null, v || ''), icon('lock', 14)); };
+    var lockedWords = function () {
+      var counts = countKeys.filter(function (k) { return isLocked(k[0]); });
+      var parts = (isLocked('name') ? ['name'] : []).concat(isLocked('bio') ? ['bio'] : [])
+        .concat(counts.length === countKeys.length ? ['counts'] : counts.map(function (k) { return k[1].toLowerCase(); }));
+      var all = isLocked('name') && isLocked('bio') && counts.length === countKeys.length;
+      var list = parts.length > 1 ? parts.slice(0, -1).join(', ') + ' and ' + parts[parts.length - 1] : parts[0];
+      return list.charAt(0).toUpperCase() + list.slice(1) + ' come from ' + SIGNAL_SOCIAL[plat] + ' (as of ' + (signalDay(d.as_of) || String(d.as_of || 'today')) +
+        ') and update by themselves. ' + (all ? 'Only Link is yours to change.' : 'The rest is yours to change.');
+    };
+    openSheet(function () {
+      return [
+        h('p', { class: 'sig-over' }, SIGNAL_SOCIAL[plat] + ' · ' + handle),
+        h('h2', { class: 'sh-title' }, 'Edit profile'),
+        h('p', { class: 'sh-sub' }, 'What you type here stays in SIGNAL. It changes nothing on ' + SIGNAL_SOCIAL[plat] + '.' +
+          (plat === 'tiktok' || isLocked('posts') ? '' : ' Leave Posts empty to count the posts in SIGNAL.')),
+        locked.length ? h('p', { class: 'sg-lkfrom' }, icon('sgLink', 14), lockedWords()) : null,
+        h('form', { onsubmit: async function (e) {
+          e.preventDefault();
+          var det = Object.assign({}, d, { profile: plat + ':' + handle.toLowerCase(), name: isLocked('name') ? d.name : f.name.trim().slice(0, 60),
+            bio: isLocked('bio') ? d.bio : f.bio.trim().slice(0, 150), link: f.link.trim().slice(0, 120), as_of: locked.length ? d.as_of : signalToday() });
+          var bad = '';
+          countKeys.forEach(function (k) {
+            if (isLocked(k[0])) return;
+            var n = signalNum(f[k[0]]);
+            if (String(f[k[0]]).trim() && n === null) bad = k[1];
+            det[k[0]] = n === null ? null : Math.round(n);
+          });
+          if (bad) { toast('Check the ' + bad.toLowerCase() + '.'); return; }
+          var row = card ? { id: card.id, details: det }
+            : { release_id: null, kind: 'other', name: 'Profile ' + plat + ' ' + handle, status: 'ready', details: det };
+          if (!(await signalPut('asset', row))) return;
+          closeSheet(); render();
+        } },
+          field('Name', isLocked('name') ? fixed('Name', 'name', f.name) : signalInput({ value: f.name, max: 60, label: 'Name', k: 'name', on: function (v) { f.name = v; } })),
+          field('Bio', isLocked('bio') ? fixed('Bio', 'bio', f.bio) : signalArea({ value: f.bio, max: 150, rows: 2, label: 'Bio', k: 'bio', on: function (v) { f.bio = v; } })),
+          field('Link', signalInput({ value: f.link, max: 120, label: 'Link', k: 'link', mode: 'url', on: function (v) { f.link = v; } })),
+          h('div', { class: 'sig-grid' }, countKeys.map(function (k) {
+            return field(k[1], isLocked(k[0]) ? fixed(k[1], k[0], typeof d[k[0]] === 'number' ? signalCount(d[k[0]]) : '')
+              : signalInput({ value: f[k[0]], mode: 'numeric', label: k[1], k: k[0], on: function (v) { f[k[0]] = v; } }));
+          })),
+          signalSheetButtons('Save'))
+      ];
+    }, { label: 'Edit profile' });
+  }
+  function openSignalMore(room, plat, handle, art) {
+    var go1 = function (tab, then) {
+      return function () { closeSheet(); S.signalV1 = tab; S.signalTab = tab; S.signalOpen = null; if (then) then(); signalTop(); render(); };
+    };
+    var rows = SIGNAL_SOCIAL[plat] ? [
+      ['share', 'Post log and numbers', go1('posts', function () { S.signalPostView = 'log'; })],
+      plat === 'instagram' ? ['edit', 'Score a Story', go1('posts', function () { S.signalPostView = 'score'; S.signalFmt = 'story'; })] : null,
+      ['calendar', 'This week', go1('week')],
+      ['download', 'Add this week’s file', function () { openSignalFile(room); }],
+      signalLinksShown() ? ['sgLink', 'Linked accounts', function () { openSignalLinks(room); }] : null,
+      handle ? ['trash', 'Take ' + handle + ' off SIGNAL', function () { signalAskRemoveAcct(room, plat, handle); }] : null
+    ] : [
+      ['calendar', 'This week', go1('week')],
+      ['music', 'Releases', go1('releases')],
+      ['tabcost', 'Songs and Song Doctor', go1('songs')],
+      ['tabmap', 'Audience and cities', go1('audience')],
+      ['check', 'Facts', go1('facts')],
+      ['download', 'Add this week’s file', function () { openSignalFile(room); }],
+      signalLinksShown() ? ['sgLink', 'Linked accounts', function () { openSignalLinks(room); }] : null,
+      art ? ['edit', 'Edit ' + art.name, function () { openSignalArtist(room, art); }] : null,
+      art ? ['trash', 'Take ' + art.name + ' off SIGNAL', function () { signalAskRemoveProject(room, plat, art); }] : null
+    ];
+    openSheet(function () {
+      return [
+        h('h2', { class: 'sh-title' }, 'More in SIGNAL'),
+        h('div', { class: 'sg-menu' }, rows.filter(Boolean).map(function (r) {
+          return h('button', { class: 'sg-mrow', type: 'button', onclick: r[2] }, icon(r[0], 20), h('span', null, r[1]), icon('chevron', 16));
+        }))
+      ];
+    }, { label: 'More in SIGNAL' });
+  }
+  var SIGNAL_MEDIA_PARTS = ['shape', 'length', 'slides', 'count'];
+  function signalRereadPost(room, post, res) {
+    var X = window.GSIG, plat = post.platform === 'tiktok' ? 'tiktok' : 'instagram', a = G.isObj(post.answers) ? post.answers : {};
+    var rel = post.release_id ? signalById(room, 'releases', post.release_id) : null;
+    var at = Date.parse(String(post.posted_at || post.planned_at || post.created_at || ''));
+    var rules = X.pbRules(plat, post.format) || [];
+    if (!rules.length) return res;
+    var draft = { platform: plat, format: post.format, caption: String(post.caption || ''), media: { count: 0 },
+      song: rel ? { title: String(rel.title || ''), artists: String(rel.artists || ''), release_day: rel.release_day || null, out: signalRelOut(rel) } : null,
+      artist: signalArtistName(room, rel), tags: Array.isArray(a.tags) ? a.tags.map(String) : [], location: typeof a.loc === 'string' ? a.loc : '',
+      at: isFinite(at) ? at : Date.now() };
+    var m = X.measurePost(draft, { timeZone: signalZone(room) });
+    var media = function (id) { return SIGNAL_MEDIA_PARTS.indexOf(id) >= 0; };
+    rules.forEach(function (r) { if (media(r.id) && m.items[r.id]) m.items[r.id] = { got: Math.floor(r.max / 2), note: '' }; });
+    var out = X.scorePost(plat, post.format, { items: m.items, gate: { capped: false } }, null, { capped: false });
+    var byId = {};
+    rules.forEach(function (r) { byId[r.id] = r; });
+    var looked = function (it) { return it.kind === 'M' && !media(it.id); };
+    var fixes = out.fixes.filter(function (f) { return byId[f.id] && looked(byId[f.id]) && !media(f.id); });
+    var items = out.items.map(function (it) { return looked(it) ? it : Object.assign({}, it, { checked: false }); });
+    var held = out.items.filter(function (it) { return looked(it) && it.got < it.max; }).sort(function (x, y) { return (y.max - y.got) - (x.max - x.got); })
+      .map(function (it) { return it.note || (it.got * 2 >= it.max ? byId[it.id].half : (byId[it.id].none || byId[it.id].half)); });
+    var helped = out.items.filter(function (it) { return looked(it) && it.got >= it.max; }).map(function (it) { return byId[it.id].full; });
+    return Object.assign({}, res, { items: items, fixes: fixes, helped: helped, held: held, reread: true,
+      why: res.score >= 100 ? res.why : fixes.length ? fixes[0].words : 'Score it again so SIGNAL can look at the pictures too.' });
+  }
+  function signalPostView(room, plat, handle, post) {
+    var X = window.GSIG, s = signalV2(), res = X.postResult(post), thumb = signalThumb(post.id);
+    if (res && res.source === 'score') res = signalRereadPost(room, post, res);
+    var card = signalCard(room, plat, handle), d = card ? card.details : {};
+    var up = signalWhen(post.posted_at), plan = signalWhen(post.planned_at);
+    var dayLine = up ? 'Posted ' + signalDay(up.date) : plan ? 'Planned for ' + signalDay(plan.date) + ', ' + signalClock(plan.time) : 'Not posted yet';
+    var r24 = signalResultOf(room, post.id, '24h'), r7 = signalResultOf(room, post.id, '7d'), r = r24 || r7;
+    var nums = r ? [['reach', 'reached'], ['views', 'views'], ['likes', 'likes'], ['comments', 'comments'], ['sends', 'sends']]
+      .filter(function (k) { return typeof r[k[0]] === 'number'; }).slice(0, 4) : [];
+    var cap = String(post.caption || '');
+    var capEl = cap ? h('p', { class: 'sg-cap' }, h('b', null, handle), ' ', cap) : null;
+    var longCap = cap.length > 90 || cap.split('\n').length > 2;
+    return h('div', { class: 'sg-post' },
+      h('div', { class: 'sg-phead' },
+        h('button', { class: 'sg-icbtn', type: 'button', 'aria-label': 'Back to the posts', onclick: function () { s.post = null; render(); } }, icon('back', 22)),
+        h('span', { class: 'sg-phead-t' }, h('small', null, handle), h('b', null, plat === 'tiktok' ? 'Videos' : 'Posts')),
+        h('span', { class: 'sg-icbtn-sp' })),
+      h('div', { class: 'sg-puser' },
+        signalAvatar('avatar:' + plat + ':' + handle.toLowerCase(), d.name || handle, 34),
+        h('b', null, handle),
+        h('button', { class: 'sg-icbtn sg-more', type: 'button', 'aria-label': 'Post options', onclick: function () { openSignalPostMore(room, plat, handle, post); } }, icon('more', 22))),
+      h('div', { class: 'sg-pimg' + (thumb ? '' : ' plain') + (plat === 'tiktok' ? ' tall' : '') },
+        thumb ? h('img', { src: thumb, alt: '' }) : h('span', { class: 'sg-tile-ic', 'aria-hidden': 'true' }, icon(signalFormatIcon(post.format), 44)),
+        signalBadge(res ? res.score : null, { big: true, of: true })),
+      capEl,
+      capEl && longCap ? h('button', { class: 'sg-capmore', type: 'button', onclick: function (e) {
+        capEl.classList.toggle('open');
+        e.currentTarget.textContent = capEl.classList.contains('open') ? 'less' : 'more';
+      } }, 'more') : null,
+      h('p', { class: 'sg-when' }, [SIGNAL_FORMAT_WORDS[post.format] || 'Post', dayLine, post.boosted ? 'Boosted' : ''].filter(Boolean).join(' · ')),
+      res ? signalMeter({ score: res.score, why: res.why, items: res.items, noFixes: true }) : null,
+      res && res.reread ? h('p', { class: 'sg-reread' }, 'Why and the fixes are read again from the caption, the time, the song and the tags. The pictures were not looked at.') : null,
+      res ? null
+        : h('div', { class: 'sg-unscored' }, h('p', null, 'This post has no score yet.'),
+          signalBtn('Score it', function () { s.create = { plat: plat, acct: handle, postId: post.id }; signalTop(); render(); })),
+      res && (res.helped.length || res.held.length) ? [
+        h('h3', { class: 'sg-sec' }, 'Why ' + res.score),
+        h('ul', { class: 'sg-why' },
+          res.helped.slice(0, 4).map(function (w) { return h('li', { class: 'up' }, icon('sgUp', 17), h('span', null, w)); }),
+          res.held.slice(0, 5).map(function (w) { return h('li', { class: 'dn' }, icon('sgDown', 17), h('span', null, w)); }))] : null,
+      res && res.fixes.length ? [
+        h('h3', { class: 'sg-sec' }, 'How it gets to 100'),
+        h('ul', { class: 'sg-fixes sg-fixcard' }, res.fixes.map(function (f) {
+          return h('li', { class: 'sg-fix' }, h('span', { class: 'sg-pts' }, '+' + f.pts), h('span', { class: 'sg-fix-t' }, f.words));
+        }))] : null,
+      signalPostNotes(post),
+      res && res.source === 'score' ? signalBtn('Score it again', function () { s.create = { plat: plat, acct: handle, postId: post.id }; signalTop(); render(); }, { quiet: true, cls: 'sg-again' }) : null,
+      nums.length ? [h('h3', { class: 'sg-sec' }, r24 ? 'After 24 hours' : 'After 7 days'),
+        h('div', { class: 'sg-nums' }, nums.map(function (k) { return h('span', null, h('b', null, signalShort(r[k[0]])), k[1]); }))] : null,
+      h('div', { class: 'sg-log' },
+        signalBtn(r24 ? 'Change the 24-hour numbers' : 'Log the 24-hour numbers', function () { openSignalResults(room, post, '24h'); }, { quiet: true, sm: true }),
+        signalBtn(r7 ? 'Change the 7-day numbers' : 'Log the 7-day numbers', function () { openSignalResults(room, post, '7d'); }, { quiet: true, sm: true })));
+  }
+  function signalPostNotes(post) {
+    var nt = signalNotesOf(post.id), v = nt && G.isObj(nt.video) ? nt.video : null;
+    var ups = v && Array.isArray(v.working) ? v.working.map(String) : [], downs = v && Array.isArray(v.not_working) ? v.not_working.map(String) : [];
+    if (!ups.length && !downs.length) return null;
+    return [h('h3', { class: 'sg-sec' }, 'The video'),
+      h('ul', { class: 'sg-why' },
+        ups.map(function (w) { return h('li', { class: 'up' }, icon('sgUp', 17), h('span', null, w)); }),
+        downs.map(function (w) { return h('li', { class: 'dn' }, icon('sgDown', 17), h('span', null, w)); }))];
+  }
+  function openSignalPostMore(room, plat, handle, post) {
+    var s = signalV2(), pinned = signalPinned(post);
+    var rows = [
+      ['refresh', 'Score it again', function () { closeSheet(); s.create = { plat: plat, acct: handle, postId: post.id }; signalTop(); render(); }],
+      plat === 'tiktok' ? ['sgPin', pinned ? 'Take it off the top' : 'Pin it to the top', async function () {
+        var ans = Object.assign({}, G.isObj(post.answers) ? post.answers : {}, { pinned: !pinned });
+        var saved = await signalPut('post', { id: post.id, answers: ans });
+        if (saved) { closeSheet(); render(); }
+      }] : null,
+      ['trash', 'Delete this post', function () {
+        confirmSheet({ title: 'Delete this post?', body: 'Its score and numbers go too. Nothing changes on ' + SIGNAL_SOCIAL[plat] + '.', action: 'Delete', danger: true,
+          onConfirm: async function () { var ok = await signalGone('post', post.id); if (ok) { s.post = null; render(); } return ok; } });
+      }]
+    ];
+    openSheet(function () {
+      return [
+        h('h2', { class: 'sh-title' }, 'This post'),
+        h('div', { class: 'sg-menu' }, rows.filter(Boolean).map(function (r) {
+          return h('button', { class: 'sg-mrow', type: 'button', onclick: r[2] }, icon(r[0], 20), h('span', null, r[1]), icon('chevron', 16));
+        }))
+      ];
+    }, { label: 'This post' });
+  }
+  var SIGNAL_PICK_MAX = { instagram: 20, tiktok: 35 };
+  var SIGNAL_OFFLINE_WORDS = {
+    daily_limit: 'SIGNAL has looked at all it can for today, so the parts only it can judge count the middle.',
+    rate_limited: 'SIGNAL is busy right now, so the parts only it can judge count the middle. Try Analyze again in a minute.',
+    session_expired: 'Sign in again so SIGNAL can look at the pictures. Until then the parts only it can judge count the middle.',
+    not_granted: 'SIGNAL couldn’t look at the pictures for this account, so the parts only it can judge count the middle.'
+  };
+  function signalCreateDraft(room, cr) {
+    var s = signalV2();
+    if (s.draft && s.draft.cr === cr) return s.draft;
+    if (s.draft) signalRevoke(s.draft);
+    var post = cr.postId ? signalById(room, 'posts', cr.postId) : null;
+    var a = post && G.isObj(post.answers) ? post.answers : {};
+    var up = post ? signalLocalWhen(post.posted_at) : null;
+    s.draft = { cr: cr, plat: cr.plat, acct: cr.acct, editId: post ? post.id : null, savedId: post ? post.id : null,
+      caption: post ? String(post.caption || '') : '',
+      song: post && post.release_id && signalById(room, 'releases', post.release_id) ? post.release_id : null,
+      tags: Array.isArray(a.tags) ? a.tags.map(String).filter(Boolean) : [], loc: typeof a.loc === 'string' ? a.loc : '',
+      pinned: a.pinned === true, history: !!cr.history || !!(post && post.posted_at),
+      day: up ? up.date : signalToday(), time: up ? up.time : '18:00',
+      media: [], picking: false, busy: false, result: null, useMine: false, stale: false, staleBy: {}, crops: null, thumb: null, saveFailed: false, why: '',
+      planMs: null, saving: null };
+    return s.draft;
+  }
+  function signalRevoke(d) {
+    (d && d.media || []).forEach(function (m) { try { if (m.url && /^blob:/.test(m.url)) URL.revokeObjectURL(m.url); } catch (e) {   } });
+    (d && d.crops || []).forEach(function (c) { try { if (c && c.url && /^blob:/.test(c.url)) URL.revokeObjectURL(c.url); } catch (e) {   } });
+  }
+  function signalDropDraft() {
+    var s = signalV2();
+    if (s.draft) signalRevoke(s.draft);
+    s.create = null; s.draft = null;
+  }
+  function signalDraftAtRisk() {
+    var s = signalV2(), d = s.draft;
+    return !!(s.create && d && d.cr === s.create && !d.savedId && ((d.media || []).length || String(d.caption || '').trim()));
+  }
+  function signalLeave(go) {
+    if (!signalDraftAtRisk()) { signalDropDraft(); go(); return; }
+    confirmSheet({ title: 'Leave this post?', body: 'Your caption and pictures are not saved.', action: 'Leave', cancel: 'Stay', danger: true,
+      onConfirm: function () { signalDropDraft(); go(); return true; } });
+  }
+  function signalLeaveCreate() { signalLeave(function () { signalTop(); render(); }); }
+  function signalMarkStale(d, why) {
+    if (!d.result) return false;
+    var was = d.stale;
+    if (!G.isObj(d.staleBy)) d.staleBy = {};
+    d.staleBy[why] = true; d.stale = true;
+    return !was;
+  }
+  function signalUnstale(d, why) {
+    if (G.isObj(d.staleBy)) delete d.staleBy[why];
+    d.stale = !!(G.isObj(d.staleBy) && Object.keys(d.staleBy).length);
+  }
+  function signalLocalWhen(iso) {
+    var t = Date.parse(String(iso || ''));
+    if (!isFinite(t)) return null;
+    var x = new Date(t), p = function (n) { return (n < 10 ? '0' : '') + n; };
+    return { date: x.getFullYear() + '-' + p(x.getMonth() + 1) + '-' + p(x.getDate()), time: p(x.getHours()) + ':' + p(x.getMinutes()) };
+  }
+  function signalLocalMs(date, time) {
+    var m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(date || '')), t = /^(\d{1,2}):(\d{2})/.exec(String(time || ''));
+    if (!m || !t) return null;
+    var ms = new Date(+m[1], +m[2] - 1, +m[3], +t[1], +t[2]).getTime();
+    return isFinite(ms) ? ms : null;
+  }
+  function signalDraftFormat(d) {
+    var m = d.media;
+    if (!m.length) return null;
+    if (m[0].kind === 'video') return d.plat === 'tiktok' ? 'video' : 'reel';
+    return d.plat === 'tiktok' || m.length > 1 ? 'carousel' : 'photo';
+  }
+  function signalSecs(sec) {
+    var s = Math.round(+sec || 0);
+    return Math.floor(s / 60) + ':' + (s % 60 < 10 ? '0' : '') + (s % 60);
+  }
+  function signalFmtWords(d) {
+    var f = signalDraftFormat(d), n = d.media.length, m0 = d.media[0] || {};
+    if (!f) return '';
+    if (f === 'reel' || f === 'video') return (f === 'reel' ? 'Reel' : 'Video') + (m0.sec ? ', ' + signalSecs(m0.sec) : '');
+    if (f === 'photo') return 'Photo';
+    return (d.plat === 'tiktok' ? 'Photo post' : 'Carousel') + ', ' + n + (n === 1 ? ' photo' : ' photos');
+  }
+  function signalZone(room) {
+    var st = room && G.isObj(room.settings) ? room.settings : {};
+    return typeof st.time_zone === 'string' && st.time_zone ? st.time_zone : 'America/Los_Angeles';
+  }
+  function signalPhoneZone() {
+    try { return Intl.DateTimeFormat().resolvedOptions().timeZone || ''; } catch (e) { return ''; }
+  }
+  function signalRelOut(rel) {
+    return !!rel && (rel.status === 'out' || rel.status === 'done' || (!!rel.release_day && rel.release_day <= signalToday()));
+  }
+  function signalArtistName(room, rel) {
+    var arts = signalRows(room, 'artists');
+    if (rel && Array.isArray(rel.artist_ids)) {
+      var a = arts.filter(function (x) { return rel.artist_ids.indexOf(x.id) >= 0; })[0];
+      if (a && a.name) return String(a.name);
+    }
+    if (rel && rel.artists) return String(rel.artists).split(/,|&|\bfeat\.?\b|\bx\b/i)[0].trim();
+    return arts[0] && arts[0].name ? String(arts[0].name) : '';
+  }
+  function signalSongChoices(room) {
+    var X = window.GSIG, soon = X.addDays(signalToday(), 28);
+    return signalRows(room, 'releases').filter(function (r) {
+      return r.title && r.status !== 'shelved' && (!r.release_day || r.release_day <= soon);
+    }).sort(function (a, b) { return String(b.release_day || '9999').localeCompare(String(a.release_day || '9999')); });
+  }
+  function signalPlaces(room) {
+    var out = [], seen = {};
+    var add = function (p) { var t = String(p || '').trim(); if (t && !seen[t.toLowerCase()] && out.length < 6) { seen[t.toLowerCase()] = 1; out.push(t); } };
+    signalRows(room, 'artists').forEach(function (a) { add(a.based); add(a.hometown); });
+    signalRows(room, 'posts').forEach(function (p) { if (G.isObj(p.answers) && typeof p.answers.loc === 'string') add(p.answers.loc); });
+    return out;
+  }
+  function signalMeasureDraft(room, d, at) {
+    var X = window.GSIG, m0 = d.media[0] || {};
+    var rel = d.song ? signalById(room, 'releases', d.song) : null;
+    if (d.history) at = signalLocalMs(d.day, d.time || '12:00');
+    return { platform: d.plat, format: signalDraftFormat(d), caption: d.caption,
+      media: { count: d.media.length, width: m0.w || 0, height: m0.h || 0, seconds: m0.sec || 0,
+        shapes: d.media.map(function (x) { return [x.w || 0, x.h || 0]; }) },
+      song: rel ? { title: String(rel.title || ''), artists: String(rel.artists || ''), release_day: rel.release_day || null, out: signalRelOut(rel) } : null,
+      artist: signalArtistName(room, rel), tags: d.tags.slice(), location: d.loc, at: typeof at === 'number' && isFinite(at) ? at : Date.now() };
+  }
+  function signalIgNear(room, now) {
+    return signalRows(room, 'posts').some(function (p) {
+      var t = Date.parse(String(p.planned_at || ''));
+      return p.platform === 'instagram' && isFinite(t) && Math.abs(t - now) <= 2 * 3600e3;
+    });
+  }
+  function signalGrow(ta) {
+    try { if (ta && ta.style && ta.scrollHeight) { ta.style.height = 'auto'; ta.style.height = Math.max(104, ta.scrollHeight + 2) + 'px'; } } catch (e) {   }
+  }
+  function signalScrollTo(sel) {
+    try {
+      requestAnimationFrame(function () {
+        var el = document.querySelector ? document.querySelector(sel) : null;
+        if (el && typeof el.scrollIntoView === 'function') el.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      });
+    } catch (e) {   }
+  }
+  function signalIsVideoFile(f) { return /^video\//.test(String(f && f.type || '')) || /\.(mov|mp4|m4v|webm|3gp)$/i.test(String(f && f.name || '')); }
+  function signalIsImageFile(f) { return /^image\//.test(String(f && f.type || '')) || /\.(jpe?g|png|heic|heif|webp|gif)$/i.test(String(f && f.name || '')); }
+  function signalCanvas(w, hh) {
+    try {
+      var cv = document.createElement('canvas');
+      if (!cv || typeof cv.getContext !== 'function') return null;
+      cv.width = Math.max(1, Math.round(w)); cv.height = Math.max(1, Math.round(hh));
+      return cv.getContext('2d') ? cv : null;
+    } catch (e) { return null; }
+  }
+  function signalJpeg(cv, q) {
+    return new Promise(function (ok) {
+      try { cv.toBlob(function (b) { ok(b || null); }, 'image/jpeg', q); } catch (e) { ok(null); }
+    });
+  }
+  async function signalDecode(file) {
+    try {
+      if (typeof window.createImageBitmap === 'function') {
+        try {
+          var bm = await window.createImageBitmap(file);
+          return { img: bm, w: bm.width, h: bm.height, done: function () { try { bm.close(); } catch (e) {   } } };
+        } catch (e) {   }
+      }
+      var url = URL.createObjectURL(file);
+      var im = await new Promise(function (ok, no) { var i = new Image(); i.onload = function () { ok(i); }; i.onerror = no; i.src = url; });
+      return { img: im, w: im.naturalWidth || im.width, h: im.naturalHeight || im.height, done: function () { URL.revokeObjectURL(url); } };
+    } catch (e) { return null; }
+  }
+  function signalVideoEl(url) {
+    return new Promise(function (ok) {
+      try {
+        var v = document.createElement('video'), done = false;
+        var end = function (x) { if (!done) { done = true; ok(x); } };
+        v.muted = true; v.playsInline = true; v.setAttribute('playsinline', ''); v.setAttribute('muted', ''); v.preload = 'auto';
+        v.onloadedmetadata = function () { end(v); };
+        v.onerror = function () { end(null); };
+        setTimeout(function () { end(v.videoWidth ? v : null); }, 8000);
+        v.src = url;
+        if (typeof v.load === 'function') v.load();
+      } catch (e) { ok(null); }
+    });
+  }
+  async function signalFrames(item, times, side) {
+    var v = await signalVideoEl(item.url), out = [];
+    if (!v) return out;
+    try { var pl = v.play(); if (pl && pl.then) await pl.catch(function () {}); v.pause(); } catch (e) {   }
+    for (var i = 0; i < times.length; i++) {
+      var t = Math.min(times[i], Math.max(0, (v.duration || 0) - 0.05));
+      var seeked = await new Promise(function (ok) {
+        var timer = setTimeout(function () { ok(false); }, 8000);
+        v.onseeked = function () { clearTimeout(timer); ok(true); };
+        try { v.currentTime = t; } catch (e) { clearTimeout(timer); ok(false); }
+      });
+      if (!seeked) continue;
+      await new Promise(function (ok) { requestAnimationFrame(function () { ok(); }); });
+      var w = v.videoWidth, hh = v.videoHeight, k = side / Math.max(w, hh, 1);
+      var cv = signalCanvas(w * Math.min(1, k), hh * Math.min(1, k));
+      if (!cv) break;
+      cv.getContext('2d').drawImage(v, 0, 0, cv.width, cv.height);
+      var b = await signalJpeg(cv, 0.72);
+      if (b) out.push({ blob: b, t: times[i], cv: cv });
+    }
+    try { v.removeAttribute('src'); v.load(); } catch (e) {   }
+    return out;
+  }
+  async function signalBlobB64(blob) {
+    try { return G.bytesBase64(new Uint8Array(await blob.arrayBuffer())); } catch (e) { return ''; }
+  }
+  async function signalTakeFiles(d, files) {
+    var list = Array.prototype.slice.call(files || []);
+    var vids = list.filter(signalIsVideoFile), pics = list.filter(function (f) { return !signalIsVideoFile(f) && signalIsImageFile(f); });
+    if (!vids.length && !pics.length) { toast('Pick photos or a video.'); return; }
+    d.picking = true; render();
+    var media = [];
+    if (vids.length && !pics.length) {
+      if (vids.length > 1) toast('SIGNAL reads one video at a time. It took the first one.');
+      var url = URL.createObjectURL(vids[0]), v = await signalVideoEl(url);
+      media.push({ kind: 'video', file: vids[0], url: url, w: v ? v.videoWidth : 0, h: v ? v.videoHeight : 0, sec: v && isFinite(v.duration) ? v.duration : 0 });
+      try { if (v) { v.removeAttribute('src'); v.load(); } } catch (e) {   }
+      var still = await signalFrames(media[0], [Math.min(0.3, (media[0].sec || 1) / 2)], 540);
+      if (still[0]) { media[0].poster = signalBlobUrl(still[0].blob); media[0].thumb = await signalThumbFrom(still[0].cv, still[0].cv.width, still[0].cv.height); }
+    } else {
+      var max = SIGNAL_PICK_MAX[d.plat] || 20;
+      if (vids.length) toast('A post of photos here is photos only, so the video was left out.');
+      if (pics.length > max) toast('Up to ' + max + ' photos. SIGNAL took the first ' + max + '.');
+      var take = pics.slice(0, max);
+      for (var i = 0; i < take.length; i++) {
+        var dec = await signalDecode(take[i]);
+        media.push({ kind: 'photo', file: take[i], url: URL.createObjectURL(take[i]), w: dec ? dec.w : 0, h: dec ? dec.h : 0, sec: 0 });
+        if (dec) dec.done();
+      }
+    }
+    (d.media || []).forEach(function (m) { try { if (m.url && /^blob:/.test(m.url)) URL.revokeObjectURL(m.url); } catch (e) {   } });
+    d.media = media; d.picking = false; d.result = null; d.crops = null; d.thumb = null; d.stale = false;
+    render();
+  }
+  async function signalSendImages(d, fmt) {
+    var X = window.GSIG, out = [];
+    var video = fmt === 'reel' || fmt === 'video';
+    if (video) {
+      var item = d.media[0];
+      if (item.send) return [{ media_type: 'image/jpeg', data: item.send, label: 'Frame at 0.3 s' }];
+      var frames = item.file ? await signalFrames(item, X.frameTimes(item.sec), 512) : [];
+      for (var i = 0; i < frames.length && out.length < 6; i++) {
+        var b64 = await signalBlobB64(frames[i].blob);
+        if (b64) out.push({ media_type: 'image/jpeg', data: b64, label: 'Frame at ' + frames[i].t + ' s' });
+      }
+      if (frames[0] && !d.thumb) d.thumb = await signalThumbFrom(frames[0].cv, frames[0].cv.width, frames[0].cv.height);
+      return out;
+    }
+    for (var k = 0; k < d.media.length && out.length < 6; k++) {
+      var m = d.media[k];
+      if (m.send) { out.push({ media_type: 'image/jpeg', data: m.send, label: 'Photo ' + (k + 1) }); continue; }
+      if (!m.file) continue;
+      var dec = await signalDecode(m.file);
+      if (!dec) continue;
+      var sc = Math.min(1, 1024 / Math.max(dec.w, dec.h, 1)), cv = signalCanvas(dec.w * sc, dec.h * sc);
+      if (cv) {
+        cv.getContext('2d').drawImage(dec.img, 0, 0, cv.width, cv.height);
+        var blob = await signalJpeg(cv, 0.72), data = blob ? await signalBlobB64(blob) : '';
+        if (data) out.push({ media_type: 'image/jpeg', data: data, label: 'Photo ' + (k + 1) });
+        if (k === 0 && !d.thumb) d.thumb = await signalThumbFrom(dec.img, dec.w, dec.h);
+      }
+      dec.done();
+    }
+    return out;
+  }
+  async function signalThumbFrom(src, w, hh) {
+    var cv = signalCanvas(360, 480);
+    if (!cv || !(w > 0 && hh > 0)) return null;
+    var r = 3 / 4, sw = w, sh = hh;
+    if (w / hh > r) sw = hh * r; else sh = w / r;
+    cv.getContext('2d').drawImage(src, (w - sw) / 2, (hh - sh) / 2, sw, sh, 0, 0, 360, 480);
+    return await signalJpeg(cv, 0.7);
+  }
+  async function signalMakeCrops(d) {
+    var X = window.GSIG, res = d.result;
+    if (!res || !d.media.length || d.media[0].kind !== 'photo') return;
+    var fmt = signalDraftFormat(d), focusOf = {};
+    (res.images || []).forEach(function (im) { focusOf[im.index] = im; });
+    var crops = d.crops = d.media.map(function (m, i) {
+      var plan = X.cropPlan(m.w, m.h, d.plat, fmt, focusOf[i] ? focusOf[i].focus : null);
+      return { plan: plan, note: plan ? plan.note : 'The size of this photo couldn’t be read.', tip: focusOf[i] ? focusOf[i].note : '', url: null, blob: null };
+    });
+    for (var i = 0; i < d.media.length; i++) {
+      var m = d.media[i], c = crops[i];
+      if (!c.plan || !m.file) continue;
+      var dec = await signalDecode(m.file);
+      if (!dec) continue;
+      var cv = signalCanvas(c.plan.outW, c.plan.outH);
+      if (cv) {
+        var g = cv.getContext('2d');
+        g.imageSmoothingQuality = 'high';
+        g.drawImage(dec.img, c.plan.sx, c.plan.sy, c.plan.sw, c.plan.sh, 0, 0, c.plan.outW, c.plan.outH);
+        c.blob = await signalJpeg(cv, 0.9);
+        c.url = c.blob ? signalBlobUrl(c.blob) : null;
+      }
+      dec.done();
+      if (d.crops !== crops) return;
+    }
+    if (S.route && S.route.name === 'signal' && signalV2().draft === d) render();
+  }
+  async function signalSaveImages(list, title) {
+    var ready = (list || []).filter(function (x) { return x && x.blob; });
+    if (!ready.length) { toast('The pictures are still being made. Try again in a moment.'); return; }
+    if (IN_SHELL) {
+      var P = window.Capacitor && window.Capacitor.Plugins, FS = P && P.Filesystem, SH = P && P.Share;
+      if (!FS || typeof FS.writeFile !== 'function' || !SH || typeof SH.share !== 'function') { toast('This version of the app can’t save pictures yet.'); return; }
+      var uris = [];
+      for (var i = 0; i < ready.length; i++) {
+        try {
+          var w = await FS.writeFile({ path: 'signal/' + ready[i].name, data: await signalBlobB64(ready[i].blob), directory: 'CACHE', recursive: true });
+          if (w && typeof w.uri === 'string') uris.push(w.uri);
+        } catch (e) {   }
+      }
+      if (!uris.length) { toast('Couldn’t make the pictures on this phone. Try again.'); return; }
+      try { await SH.share({ title: title, files: uris }); }
+      catch (e) { if (!/cancel/i.test(String((e && (e.message || e.errorMessage)) || e || ''))) toast('Couldn’t open the share sheet. Try again.'); }
+      return;
+    }
+    var files = [];
+    try { files = ready.map(function (x) { return new File([x.blob], x.name, { type: 'image/jpeg' }); }); } catch (e) { files = []; }
+    if (files.length && navigator.canShare && navigator.canShare({ files: files })) {
+      try { await navigator.share({ files: files, title: title }); return; }
+      catch (e) { if (e && e.name === 'AbortError') return; }
+    }
+    ready.forEach(function (x) {
+      var url = URL.createObjectURL(x.blob), a = h('a', { href: url, download: x.name });
+      document.body.appendChild(a); a.click(); a.remove();
+      setTimeout(function () { URL.revokeObjectURL(url); }, 60e3);
+    });
+    toast(ready.length === 1 ? 'Saved the picture.' : 'Saved ' + ready.length + ' pictures.');
+  }
+  async function signalAnalyzeDraft(room, d) {
+    if (d.busy || !d.media.length) return;
+    var X = window.GSIG, B = window.GR_BACKEND, tz = signalZone(room), now = Date.now();
+    var rel = d.song ? signalById(room, 'releases', d.song) : null;
+    var today = X.zoneParts(now, tz).date;
+    var best = d.history ? null : X.bestTime(d.plat, now, tz, { releaseToday: !!(rel && rel.release_day === today), igNear: d.plat === 'tiktok' && signalIgNear(room, now) });
+    var planMs = d.history ? null : X.bestInstant(best, now);
+    var draft = signalMeasureDraft(room, d, typeof planMs === 'number' && isFinite(planMs) ? planMs : now), mctx = { timeZone: tz, now: now };
+    var measured = X.measurePost(draft, mctx);
+    var accts = signalAccounts(room, d.plat);
+    var targets = X.postTargets(room, d.plat, d.acct, draft.format, { first: !!accts[0] && accts[0].toLowerCase() === String(d.acct).toLowerCase() });
+    d.busy = true; d.why = ''; render();
+    var server = null;
+    try {
+      if (!B || typeof B.signalAnalyze !== 'function') throw Object.assign(new Error('unavailable'), { code: 'unavailable' });
+      var images = await signalSendImages(d, measured.fmt);
+      if (!images.length) throw Object.assign(new Error('no pictures'), { code: 'no_pictures' });
+      var req = X.analysisRequest(d.history ? draft : Object.assign({}, draft, { at: now }), { measured: measured, timeZone: tz, phoneZone: signalPhoneZone(), now: now, best: best, targets: targets });
+      req.images = images;
+      server = await B.signalAnalyze(req);
+    } catch (e) {
+      if (e && e.code === 'cancelled') { d.busy = false; render(); return; }
+      server = null; d.why = (e && e.code) || 'unavailable';
+    }
+    var res = X.mergeAnalysis(measured, server, { draft: draft, measureCtx: mctx, today: today, best: best, targets: targets, song: draft.song, hasSong: !!draft.song });
+    signalRevoke({ crops: d.crops });
+    d.busy = false; d.result = res; d.useMine = !res.caption.changed; d.stale = false; d.staleBy = {}; d.crops = null;
+    d.planMs = typeof planMs === 'number' && isFinite(planMs) ? planMs : null;
+    d.caption = res.caption.after;
+    if (!d.thumb && d.media[0] && d.media[0].thumb) d.thumb = d.media[0].thumb;
+    render();
+    signalScrollTo('.sg-result');
+    signalMakeCrops(d);
+    await signalSaveDraft(room, d);
+  }
+  function signalTaken(d) { return d.useMine ? d.result.mine : d.result; }
+  function signalPostRow(d) {
+    var X = window.GSIG, r = d.result, res = signalTaken(d), m0 = d.media[0] || {};
+    var cap = X.codePoints(String(d.caption || '')).slice(0, 4000).join('');
+    var row = { platform: d.plat, account: String(d.acct || '').slice(0, 60), format: signalDraftFormat(d), caption: cap,
+      score: res.score, band: res.band.name, scorer_version: X.PLAYBOOK_VERSION,
+      answers: X.packAnswers(res, { before: r.caption.before, best: r.best ? { at: r.best.at, words: r.best.words } : null, targets: r.targets,
+        media: { count: d.media.length, width: m0.w || 0, height: m0.h || 0, seconds: Math.round((m0.sec || 0) * 10) / 10 },
+        tags: d.tags.slice(0, 20), loc: d.loc, pinned: d.pinned }),
+      release_id: d.song || null };
+    if (d.history) { var up = signalLocalMs(d.day, d.time || '12:00'); row.posted_at = up === null ? null : new Date(up).toISOString(); }
+    else row.planned_at = d.planMs ? new Date(d.planMs).toISOString() : null;
+    return row;
+  }
+  function signalKeepNotes(id, res) {
+    if (!id || !res) return;
+    var keep = { images: (res.images || []).map(function (x) { return [x.index, x.note]; }).filter(function (x) { return x[1]; }).slice(0, 20),
+      video: res.video ? { working: res.video.working, not_working: res.video.not_working } : null };
+    lsSet('gr.signal.notes.' + id, JSON.stringify(keep));
+  }
+  function signalNotesOf(id) {
+    try { var v = JSON.parse(lsGet('gr.signal.notes.' + id) || 'null'); return G.isObj(v) ? v : null; } catch (e) { return null; }
+  }
+  function signalSaveDraft(room, d) {
+    var go = function () { return signalSaveOnce(room, d); };
+    var run = (d.saving || Promise.resolve()).then(go, go);
+    d.saving = run.then(function () { return null; }, function () { return null; });
+    return run;
+  }
+  async function signalSaveOnce(room, d) {
+    if (!d.result || d.stale) return null;
+    var row = signalPostRow(d);
+    if (d.savedId) row.id = d.savedId;
+    var saved = await signalPut('post', row);
+    if (!saved) { d.saveFailed = true; if (signalV2().draft === d) render(); return null; }
+    var fresh = !d.savedId || d.saveFailed;
+    d.saveFailed = false; d.savedId = saved.id;
+    if (d.thumb) signalThumbPut(saved.id, d.thumb);
+    signalKeepNotes(saved.id, d.result);
+    if (fresh && signalV2().draft === d) render();
+    return saved;
+  }
+  function signalCreatePage(room, cr) {
+    var X = window.GSIG, s = signalV2(), d = signalCreateDraft(room, cr), name = SIGNAL_SOCIAL[d.plat];
+    var fmt = signalDraftFormat(d), res = d.result;
+    var pickInput = function () {
+      return h('input', { type: 'file', class: 'sg-file', accept: 'image/*,video/*', multiple: true, 'aria-label': 'Pick photos or a video',
+        onchange: function (e) { var f = e.target.files; if (f && f.length) signalTakeFiles(d, f); e.target.value = ''; } });
+    };
+    var media;
+    if (d.picking) media = h('div', { class: 'sg-pick busy' }, h('span', null, 'Reading your photos or video…'));
+    else if (!d.media.length) {
+      media = h('label', { class: 'sg-pick' + (d.plat === 'tiktok' ? ' tall' : '') },
+        h('span', { class: 'sg-pick-ic', 'aria-hidden': 'true' }, icon('sgImage', 30)),
+        h('b', null, 'Pick photos or a video'),
+        h('span', null, d.history ? 'The ones you posted. They stay on your phone.' : d.plat === 'tiktok' ? 'One video, or photos for a photo post.' : 'One photo, several for a carousel, or a video for a Reel.'),
+        pickInput());
+    } else if (d.media[0].kind === 'video') {
+      media = h('label', { class: 'sg-media one tall', 'aria-label': 'Change the video' },
+        d.media[0].url ? h('video', { src: d.media[0].url, poster: d.media[0].poster || null, muted: true, playsinline: true, autoplay: true, loop: true, preload: 'metadata' }) : h('span', { class: 'sg-tile-ic' }, icon('sgPlayOnly', 40)),
+        pickInput());
+    } else if (d.media.length === 1) {
+      media = h('label', { class: 'sg-media one', 'aria-label': 'Change the photo' }, d.media[0].url ? h('img', { src: d.media[0].url, alt: '' }) : h('span', { class: 'sg-tile-ic' }, icon('sgImage', 40)), pickInput());
+    } else {
+      media = h('label', { class: 'sg-strip', 'aria-label': 'Change the photos' }, d.media.map(function (m, i) {
+        return h('span', { class: 'sg-strip-i' }, m.url ? h('img', { src: m.url, alt: '' }) : h('span', { class: 'sg-tile-ic' }, icon('sgImage', 28)), h('i', null, String(i + 1)));
+      }), pickInput());
+    }
+    var count = h('span', { class: 'sg-capcount' }, String(X.codePoints(d.caption).length) + ' / ' + (d.plat === 'tiktok' ? '4,000' : '2,200'));
+    var resultEl = null;
+    var analyzeBtn = function () {
+      return [signalBtn(d.busy ? 'Reading your post…' : res ? 'Analyze again' : 'Analyze', function () { signalAnalyzeDraft(room, d); },
+        { disabled: !d.media.length || d.busy || d.picking, cls: 'sg-analyze', icon: d.busy ? null : 'sgBars' }),
+        !d.media.length ? h('p', { class: 'sg-rowhint c' }, 'Pick a photo or a video first.') : null];
+    };
+    var bar = h('div', { class: 'sg-gobar pin' }, res && !d.stale && !d.busy ? signalCopyBtn(room, d) : analyzeBtn());
+    var touched = function (why) {
+      if (signalMarkStale(d, why)) { if (resultEl) resultEl.classList.add('stale'); fillEl(bar, analyzeBtn()); }
+    };
+    var capIn = h('textarea', { class: 'sg-capin', rows: 4, placeholder: 'Add a caption…', 'aria-label': 'Caption', 'data-k': 'caption', maxlength: d.plat === 'tiktok' ? 4000 : 2200,
+      value: d.caption, oninput: function (e) {
+        d.caption = e.target.value;
+        signalGrow(e.target);
+        count.textContent = X.codePoints(d.caption).length + ' / ' + (d.plat === 'tiktok' ? '4,000' : '2,200');
+        touched('caption');
+      } });
+    var songs = signalSongChoices(room), picked = d.song ? signalById(room, 'releases', d.song) : null;
+    var places = signalPlaces(room);
+    if (d.loc && !places.some(function (p) { return p.toLowerCase() === d.loc.toLowerCase(); })) places.unshift(d.loc);
+    var row = function (ic, words, value, onTap, label) {
+      return h(onTap ? 'button' : 'div', { class: 'sg-row', type: onTap ? 'button' : null, onclick: onTap || null, 'aria-label': label || null },
+        icon(ic, 24), h('span', { class: 'sg-row-t' }, words), value ? h('span', { class: 'sg-row-v' }, value) : null, onTap ? icon('chevron', 18) : null);
+    };
+    var notOut = picked && !signalRelOut(picked) && d.plat === 'instagram';
+    var body = [
+      h('div', { class: 'sg-newhead' },
+        h('button', { class: 'sg-round', type: 'button', 'aria-label': 'Back', onclick: signalLeaveCreate }, icon('back', 22)),
+        h('span', { class: 'sg-newt' }, h('b', null, 'New post'), h('small', null, name + ' · ' + d.acct + (d.history ? ' · already posted' : ''))),
+        h('span', { class: 'sg-icbtn-sp' })),
+      media,
+      fmt ? h('div', { class: 'sg-fmtline' }, h('span', { class: 'sg-fmtpill' }, signalFmtWords(d)),
+        h('label', { class: 'sg-change' }, 'Change', pickInput())) : null,
+      h('div', { class: 'sg-capbox' }, capIn, count),
+      h('div', { class: 'sg-rows' },
+        row('music', 'Add audio', picked ? String(picked.title) : null, null),
+        songs.length ? h('div', { class: 'sg-chips', role: 'group', 'aria-label': 'Your songs' }, songs.map(function (r) {
+          var on = d.song === r.id;
+          return h('button', { class: 'sg-chip sg-song' + (on ? ' on' : ''), type: 'button', 'aria-pressed': on ? 'true' : 'false',
+            onclick: function () { d.song = on ? null : r.id; signalMarkStale(d, 'song'); render(); } },
+            h('span', { class: 'sg-chip-art', 'aria-hidden': 'true' }, signalThumb('release:' + r.id) ? h('img', { src: signalThumb('release:' + r.id), alt: '' }) : icon('music', 15)),
+            h('b', null, String(r.title)), r.artists ? h('span', null, String(r.artists)) : null, icon(on ? 'check' : 'plus', 16));
+        })) : h('p', { class: 'sg-rowhint' }, 'Your releases in SIGNAL show here.'),
+        notOut ? h('p', { class: 'sg-songnote' }, 'It’s not in Instagram’s music library until ' + (picked.release_day ? signalDay(picked.release_day) : 'it comes out') +
+          '. Post with your own audio now and swap the song in later (feed posts and carousels only).') : null,
+        row('sgAt', 'Tag people', d.tags.length ? d.tags.map(function (t) { return '@' + t; }).join(', ') : null, function () { openSignalTags(d); }),
+        row('tabmap', 'Add location', d.loc || null, function () { openSignalPlace(d); }),
+        places.length ? h('div', { class: 'sg-chips', role: 'group', 'aria-label': 'Places' }, places.map(function (p) {
+          var on = d.loc.toLowerCase() === p.toLowerCase();
+          return h('button', { class: 'sg-chip' + (on ? ' on' : ''), type: 'button', 'aria-pressed': on ? 'true' : 'false',
+            onclick: function () { d.loc = on ? '' : p; signalMarkStale(d, 'loc'); render(); } }, p);
+        })) : null,
+        h('div', { class: 'sg-hist' },
+          signalTick('Already posted', d.history, function (v) { d.history = v; signalMarkStale(d, 'history'); render(); }, d.history ? 'SIGNAL scores it as it went up.' : null),
+          d.history ? h('div', { class: 'sg-histwhen' },
+            h('p', { class: 'sg-histlbl' }, 'The day and time it went up, on your phone’s clock'),
+            h('input', { class: 'input', type: 'date', value: d.day, 'aria-label': 'The day it went up, on your phone’s clock', 'data-k': 'day', oninput: function (e) { d.day = e.target.value; touched('day'); } }),
+            h('input', { class: 'input', type: 'time', value: d.time, 'aria-label': 'The time it went up, on your phone’s clock', 'data-k': 'time', oninput: function (e) { d.time = e.target.value; touched('time'); } })) : null)),
+      h('p', { class: 'sg-ailine' }, icon('lock', 13), 'Analyze sends small copies of the pictures and the caption to an AI service (Anthropic) to be read. SIGNAL keeps nothing on the server.')
+    ];
+    if (res) body.push(resultEl = signalResultView(room, d));
+    body.push(bar);
+    if (d.caption) requestAnimationFrame(function () { signalGrow(capIn); });
+    return h('div', { class: 'sg-create' + (d.plat === 'tiktok' ? ' sg-tt' : '') }, body);
+  }
+  function openSignalTags(d) {
+    var f = { v: '' };
+    var paint = function () {
+      return [
+        h('h2', { class: 'sh-title' }, 'Tag people'),
+        h('p', { class: 'sh-sub' }, 'The people in it, or the ones you’ll invite as a Collab. Their handles only.'),
+        h('form', { onsubmit: function (e) {
+          e.preventDefault();
+          var hd = signalHandle(f.v);
+          if (!hd) { toast('Type a handle first.'); return; }
+          if (d.tags.some(function (t) { return t.toLowerCase() === hd.toLowerCase(); })) { toast('Already tagged.'); return; }
+          if (d.tags.length >= 20) { toast('That’s 20 already.'); return; }
+          d.tags.push(hd.slice(0, 80)); f.v = ''; signalMarkStale(d, 'tags');
+          openSheet(paint, { label: 'Tag people', onClose: function () { render(); } });
+        } },
+          h('div', { class: 'sg-tagadd' }, signalInput({ value: '', max: 81, ph: '@handle', label: 'Handle', k: 'tag', on: function (v) { f.v = v; } }),
+            signalBtn('Add', null, { submit: true, sm: true, block: false }))),
+        d.tags.length ? h('div', { class: 'sg-chips wrap' }, d.tags.map(function (t, i) {
+          return h('button', { class: 'sg-chip on', type: 'button', 'aria-label': 'Take @' + t + ' off', onclick: function () {
+            d.tags.splice(i, 1); signalMarkStale(d, 'tags'); openSheet(paint, { label: 'Tag people', onClose: function () { render(); } });
+          } }, '@' + t, icon('close', 14));
+        })) : null,
+        h('div', { class: 'stack' }, signalBtn('Done', function () { closeSheet(); render(); }))
+      ];
+    };
+    openSheet(paint, { label: 'Tag people', onClose: function () { render(); } });
+  }
+  function openSignalPlace(d) {
+    var f = { v: d.loc };
+    openSheet(function () {
+      return [
+        h('h2', { class: 'sh-title' }, 'Add location'),
+        h('form', { onsubmit: function (e) {
+          e.preventDefault();
+          var was = d.loc;
+          d.loc = String(f.v || '').replace(/\s+/g, ' ').trim().slice(0, 100);
+          if (d.loc !== was) signalMarkStale(d, 'loc');
+          closeSheet(); render();
+        } },
+          field('Place', signalInput({ value: d.loc, max: 100, ph: 'City, venue or neighborhood', label: 'Place', k: 'place', on: function (v) { f.v = v; } })),
+          signalSheetButtons('Save'))
+      ];
+    }, { label: 'Add location' });
+  }
+  function signalResultView(room, d) {
+    var X = window.GSIG, r = d.result, res = signalTaken(d), name = SIGNAL_SOCIAL[d.plat], fmt = signalDraftFormat(d);
+    var cap = r.caption;
+    var out = [h('h2', { class: 'sg-h2 sg-resh' }, d.stale ? 'Before your last changes' : 'SIGNAL’s read')];
+    out.push(signalMeter({ score: res.score, why: res.why, fixes: res.fixes, items: res.items, top: 3 }));
+    if (r.offline && SIGNAL_OFFLINE_WORDS[d.why]) out.push(h('p', { class: 'sg-offline' }, icon('lock', 14), SIGNAL_OFFLINE_WORDS[d.why]));
+    out.push(h('section', { class: 'sg-card' },
+      h('h3', { class: 'sg-card-h' }, cap.changed ? 'Your caption, upgraded' : 'Your caption'),
+      cap.changed ? [
+        h('p', { class: 'sg-capnew' }, cap.segments.map(function (sg) {
+          return sg.t === 'added' ? h('span', { class: 'sg-add' }, sg.s) : sg.t === 'removed' ? h('del', { class: 'sg-del' }, sg.s) : sg.s;
+        })),
+        h('p', { class: 'sg-legend' }, h('span', { class: 'sg-add' }, 'Green'), ' is new or fixed. ', h('del', { class: 'sg-del' }, 'Struck through'), ' is taken out.'),
+        h('p', { class: 'sg-mine' }, 'Your words: ' + r.mine.score + '. With SIGNAL’s caption: ' + r.score + '.'),
+        h('div', { class: 'sg-choice', role: 'group', 'aria-label': 'Which caption' },
+          h('button', { class: 'sg-ch' + (d.useMine ? '' : ' on'), type: 'button', 'aria-pressed': d.useMine ? 'false' : 'true',
+            onclick: function () { if (!d.useMine) return; d.useMine = false; d.caption = cap.after; signalUnstale(d, 'caption'); render(); signalSaveDraft(room, d); } }, 'Use this caption'),
+          h('button', { class: 'sg-ch' + (d.useMine ? ' on' : ''), type: 'button', 'aria-pressed': d.useMine ? 'true' : 'false',
+            onclick: function () { if (d.useMine) return; d.useMine = true; d.caption = cap.before; signalUnstale(d, 'caption'); render(); signalSaveDraft(room, d); } }, 'Keep mine'))
+      ] : h('p', { class: 'sg-mine' }, 'Your caption already does what the playbook asks.')));
+    if (d.media[0] && d.media[0].kind === 'photo') {
+      var crops = d.crops || [];
+      var tall = d.plat === 'tiktok';
+      out.push(h('section', { class: 'sg-card' },
+        h('h3', { class: 'sg-card-h' }, 'Sized for ' + name),
+        h('p', { class: 'sg-card-sub' }, (tall ? '9:16 at 1080 by 1920' : '4:5 at 1080 by 1350') + (d.media.length > 1 ? ', every one the same shape.' : '.')),
+        h('div', { class: 'sg-sized' + (tall ? ' tall' : '') }, d.media.map(function (m, i) {
+          var c = crops[i] || null;
+          return h('figure', { class: 'sg-crop' },
+            h('span', { class: 'sg-crop-img' }, c && c.url ? h('img', { src: c.url, alt: 'Photo ' + (i + 1) + ', sized' }) : h('span', { class: 'sg-tile-ic' }, icon('sgImage', 24))),
+            h('figcaption', null, c ? c.note : 'Sizing…', c && c.tip ? h('span', { class: 'sg-tip' }, c.tip) : null));
+        })),
+        signalBtn('Save to my phone', function () {
+          signalSaveImages((d.crops || []).map(function (c, i) { return { blob: c.blob, name: 'signal-' + d.plat + '-' + (i + 1) + '.jpg' }; }), 'Sized for ' + name);
+        }, { icon: 'download', disabled: !crops.length || crops.some(function (c) { return c.plan && !c.blob; }), cls: 'sg-save' })));
+    }
+    if (r.video) {
+      var ups = r.video.working.concat(r.video.measured.filter(function (x) { return x.ok; }).map(function (x) { return x.words; }));
+      var downs = r.video.not_working.concat(r.video.measured.filter(function (x) { return !x.ok; }).map(function (x) { return x.words; }));
+      out.push(h('section', { class: 'sg-card' },
+        h('h3', { class: 'sg-card-h' }, 'The video'),
+        r.video.looked ? null : h('p', { class: 'sg-card-sub' }, 'SIGNAL couldn’t look at the video this time. What it measured:'),
+        ups.length ? [h('p', { class: 'sg-vh' }, 'What’s working'), h('ul', { class: 'sg-why' }, ups.map(function (w) { return h('li', { class: 'up' }, icon('sgUp', 17), h('span', null, w)); }))] : null,
+        downs.length ? [h('p', { class: 'sg-vh' }, 'What’s not working yet'), h('ul', { class: 'sg-why' }, downs.map(function (w) { return h('li', { class: 'dn' }, icon('sgDown', 17), h('span', null, w)); }))] : null));
+    }
+    if (!d.history && r.best) {
+      var phone = signalPhoneZone(), here = null;
+      if (phone && phone !== r.best.zone) { var nowD = new Date(); here = 'It’s ' + signalClock((nowD.getHours() < 10 ? '0' : '') + nowD.getHours() + ':' + (nowD.getMinutes() < 10 ? '0' : '') + nowD.getMinutes()) + ' where you are.'; }
+      out.push(h('section', { class: 'sg-card sg-best' },
+        h('h3', { class: 'sg-card-h' }, icon('clock', 17), 'Best time to post today'),
+        h('p', { class: 'sg-big' }, r.best.words),
+        h('p', { class: 'sg-card-sub' }, r.best.why),
+        h('p', { class: 'sg-card-sub' }, r.best.soon),
+        here ? h('p', { class: 'sg-card-sub' }, here) : null));
+    }
+    if (!d.history) {
+      var t = r.targets;
+      var nums = t ? [['likes', 'likes'], ['comments', 'comments'], ['views', 'views']].filter(function (k) { return typeof t[k[0]] === 'number'; }) : [];
+      out.push(h('section', { class: 'sg-card sg-targets' },
+        h('h3', { class: 'sg-card-h' }, icon('sgTarget', 17), 'Targets for this post'),
+        nums.length ? [
+          h('div', { class: 'sg-tnums' }, nums.map(function (k) { return h('span', { class: 'sg-tnum' }, h('b', null, signalShort(t[k[0]])), h('span', null, k[1])); })),
+          h('p', { class: 'sg-card-sub' }, t.basis)
+        ] : h('p', { class: 'sg-card-sub' }, 'Log the 24-hour numbers on 3 posts and SIGNAL sets targets from your own page.'),
+        h('p', { class: 'sg-boost' }, r.boost)));
+    }
+    if (d.saveFailed) {
+      out.push(h('div', { class: 'sg-unscored' }, h('p', null, 'This score isn’t saved in SIGNAL yet.'),
+        signalBtn('Save it', function () { signalSaveDraft(room, d); }, { quiet: true, sm: true })));
+    }
+    out.push(h('div', { class: 'sg-gobar end' },
+      d.stale ? null : signalBtn('Analyze again', function () { signalAnalyzeDraft(room, d); }, { quiet: true, disabled: d.busy }),
+      signalBtn(d.history ? 'Done' : 'Back to ' + d.acct, signalLeaveCreate, { quiet: true })));
+    return h('div', { class: 'sg-result' + (d.stale ? ' stale' : '') }, out);
+  }
+  function signalCopyBtn(room, d) {
+    var name = SIGNAL_SOCIAL[d.plat], url = d.plat === 'tiktok' ? 'https://www.tiktok.com/' : 'https://www.instagram.com/';
+    var copyNow = function () {
+      var text = String(d.caption || '');
+      copyText(text, null).then(function (ok) {
+        toast(ok ? 'Caption copied. Paste it in ' + name + '.' : 'Couldn’t copy it. Hold the caption to copy it.');
+      });
+      signalSaveDraft(room, d);
+    };
+    return d.history ? signalBtn('Copy caption', copyNow, { icon: 'copy' })
+      : h('a', { class: 'btn primary block sg-go' + cfCls(true), href: url, target: '_blank', rel: 'noopener', onclick: copyNow }, icon('copy', 18), 'Copy caption and open ' + name);
+  }
+  var SIGNAL_DSP = { spotify: 'Spotify', apple: 'Apple Music' };
+  function signalDspBody(room, s, plat) {
+    var id = s.acct[plat], art = id ? signalById(room, 'artists', id) : null;
+    if (id && !art) delete s.acct[plat];
+    if (!art) return plat === 'apple' ? signalAppleChooser(room) : signalSpotChooser(room);
+    return plat === 'apple' ? signalApplePage(room, art) : signalSpotPage(room, art);
+  }
+  function signalProjectOf(room, art) {
+    var arts = signalRows(room, 'artists'), first = !!(arts[0] && arts[0].id === art.id);
+    return function (r) {
+      var ids = r && Array.isArray(r.artist_ids) ? r.artist_ids : [];
+      return ids.length ? ids.indexOf(art.id) >= 0 : first;
+    };
+  }
+  function signalArtKey(art) { return 'avatar:artist:' + String(art.id).toLowerCase(); }
+  function signalRelArtKey(rel) { return 'avatar:release:' + String(rel.id).toLowerCase(); }
+  function signalListeners(room, art, source) {
+    var name = String(art.name || '').trim().toLowerCase(), one = signalRows(room, 'artists').length === 1;
+    var rows = signalRows(room, 'snapshots').filter(function (n) { return n.scope === 'artist' && n.source === source && G.isObj(n.numbers); });
+    var mine = rows.filter(function (n) { return String(n.subject || '').trim().toLowerCase() === name; });
+    if (!mine.length && one) mine = rows;
+    var last = mine.sort(function (a, b) { return String(b.week_of || '').localeCompare(String(a.week_of || '')); })[0];
+    if (!last) return null;
+    var n = last.numbers, num = function (v) { return typeof v === 'number' && isFinite(v) ? v : null; };
+    return num(n.listeners) === null && num(n.followers) === null ? null : { listeners: num(n.listeners), followers: num(n.followers), week: last.week_of };
+  }
+  function signalSongRows(room, art, source) {
+    var mine = signalProjectOf(room, art), first = (signalRows(room, 'artists')[0] || {}).id === art.id, today = signalToday();
+    var by = {}, order = [];
+    var song = function (title, rel) {
+      var k = String(title).trim().toLowerCase();
+      if (!by[k]) { by[k] = { title: String(title).trim(), release: null, releaseDay: null, weeks: [], sources: [], streams12m: null, at12: '' }; order.push(k); }
+      if (rel && !by[k].release) { by[k].release = rel; by[k].releaseDay = rel.release_day || null; }
+      return by[k];
+    };
+    signalRows(room, 'snapshots').forEach(function (n) {
+      if (n.source !== source || (n.scope !== 'song' && n.scope !== 'source') || !String(n.subject || '').trim()) return;
+      var part = signalSongParts(n), rel = signalById(room, 'releases', n.release_id) || signalReleaseNamed(room, part.song);
+      if (rel ? !mine(rel) : !first) return;
+      var s = song(part.song, rel), num = G.isObj(n.numbers) ? n.numbers : {};
+      if (n.scope === 'source') {
+        if (typeof num.streams === 'number') s.sources.push({ week: n.week_of, name: part.source, streams: num.streams });
+        return;
+      }
+      if (typeof num.streams12m === 'number' && String(n.week_of || '') >= s.at12) { s.streams12m = num.streams12m; s.at12 = String(n.week_of || ''); }
+      s.weeks.push({ week: n.week_of, streams: num.streams, listeners: num.listeners, saves: num.saves, adds: num.adds, shazams: num.shazams });
+    });
+    signalRows(room, 'releases').forEach(function (r) {
+      if (!mine(r) || !String(r.title || '').trim()) return;
+      var out = r.release_day ? r.release_day <= today : (r.status === 'out' || r.status === 'done');
+      if (out) song(r.title, r);
+    });
+    return order.map(function (k) { return by[k]; });
+  }
+  function signalScoredSongs(room, art, source) {
+    var X = window.GSIG, today = signalToday(), list = signalSongRows(room, art, source);
+    var spot = {};
+    if (source === 'apple') signalSongRows(room, art, 'spotify').forEach(function (s) { spot[s.title.toLowerCase()] = s; });
+    return list.map(function (s) {
+      var res = X.songScore(source, s, { today: today, others: list, spotify: spot[s.title.toLowerCase()] || null });
+      var plays = 0;
+      s.weeks.forEach(function (w) { if (typeof w.streams === 'number' && isFinite(w.streams)) plays += w.streams; });
+      return { song: s, res: res, plays: plays };
+    }).sort(function (a, b) {
+      if (a.res.needsFile !== b.res.needsFile) return a.res.needsFile ? 1 : -1;
+      if (a.res.needsFile) return String(b.song.releaseDay || '').localeCompare(String(a.song.releaseDay || ''));
+      return b.plays - a.plays;
+    });
+  }
+  function signalUpcoming(room, art) {
+    var mine = signalProjectOf(room, art), today = signalToday();
+    return signalRows(room, 'releases').filter(function (r) {
+      if (!mine(r)) return false;
+      return r.release_day ? r.release_day >= today : r.status === 'planning';
+    }).sort(function (a, b) { return String(a.release_day || '9999').localeCompare(String(b.release_day || '9999')); });
+  }
+  function signalTodoRelease(room, art, plat) {
+    var X = window.GSIG, mine = signalProjectOf(room, art), today = signalToday(), from = X.addDays(today, -42);
+    var service = plat === 'apple' ? 'apple' : 'spotify';
+    var open = function (r) {
+      return signalStepsOf(room, r.id).filter(function (st) {
+        return st.status !== 'done' && st.status !== 'skipped' && (st.platform === service || st.platform === 'all');
+      });
+    };
+    var recent = signalRows(room, 'releases').filter(function (r) {
+      if (!mine(r) || !r.release_day || r.release_day >= today || r.status === 'shelved') return false;
+      var left = open(r);
+      return left.length > 0 && (r.release_day >= from || left.some(function (st) { return !!st.due_day && st.due_day >= from; }));
+    }).sort(function (a, b) { return String(b.release_day).localeCompare(String(a.release_day)); });
+    return recent[0] || signalUpcoming(room, art)[0] || null;
+  }
+  function signalLongDay(d) {
+    var m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(d || ''));
+    if (!m) return '';
+    return ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'][+m[2] - 1] + ' ' + (+m[3]) + ', ' + m[1];
+  }
+  function signalArt(rel, size) {
+    var url = rel ? signalThumb(signalRelArtKey(rel)) : null;
+    return h('span', { class: 'sg-art' + (url ? '' : ' none'), style: 'width:' + size + 'px;height:' + size + 'px', 'aria-hidden': 'true' },
+      url ? h('img', { src: url, alt: '' }) : icon('music', Math.round(size * 0.42)));
+  }
+  function signalOpenRelease(rel) {
+    S.signalV1 = 'releases'; S.signalTab = 'releases'; S.signalOpen = { release: rel.id };
+    signalTop(); render();
+  }
+  function signalRoundBtn(label, ic, onTap, cls) {
+    return h('button', { class: 'sg-rbtn' + (cls ? ' ' + cls : ''), type: 'button', 'aria-label': label, onclick: onTap }, icon(ic, 20));
+  }
+  function signalDspReads(plat) {
+    var linking = SIGNAL_LINK_CATALOG.some(signalLinkOn) || signalLinkList().some(function (l) { return SIGNAL_LINK_CATALOG.indexOf(l.platform) >= 0; });
+    return h('p', { class: 'sg-reads' }, icon('lock', 14), linking ? SIGNAL_READ_ONLY + ' Streams and listeners still come from your weekly file.'
+      : 'SIGNAL only reads the numbers you add from your weekly file. It never signs in to ' + SIGNAL_DSP[plat] + '.');
+  }
+  function signalSpotChooser(room) {
+    var plat = 'spotify', arts = signalRows(room, 'artists'), last = signalLastAcct(plat);
+    return h('div', { class: 'sg-dsp sg-spch' },
+      h('div', { class: 'sg-dtop' }, h('h2', { class: 'sg-dbig' }, 'Projects'),
+        signalRoundBtn('More in SIGNAL', 'menu', function () { openSignalMore(room, plat, null, null); })),
+      h('h3', { class: 'sg-dsph' }, 'Your projects'),
+      h('div', { class: 'sg-plist' }, arts.map(function (a) {
+        var on = last && last === a.id;
+        return h('div', { class: 'sg-prow' },
+          h('button', { class: 'sg-prow-b', type: 'button', onclick: function () { signalOpenAcct(plat, a.id); } },
+            signalAvatar(signalArtKey(a), a.name, 56), h('span', { class: 'sg-prow-n' }, String(a.name || '')),
+            on ? h('span', { class: 'sg-tickc', 'aria-label': 'Opened last' }, icon('check', 15)) : null),
+          h('button', { class: 'sg-dots', type: 'button', 'aria-label': 'Options for ' + a.name, onclick: function () { openSignalProjectMenu(room, plat, a); } }, icon('more', 20)));
+      }),
+      h('div', { class: 'sg-prow' }, h('button', { class: 'sg-prow-b sg-prow-add', type: 'button', onclick: function () { openSignalArtist(room, null); } },
+        h('span', { class: 'sg-plusc ring', 'aria-hidden': 'true' }, icon('plus', 24)), h('span', { class: 'sg-prow-n' }, 'Add a project')))),
+      arts.length ? null : h('p', { class: 'note sg-dnote' }, 'A project is a name you release under. Add one to see its songs, each with a score, what is coming up and one to-do list.'),
+      signalDspReads(plat));
+  }
+  function openSignalProjectMenu(room, plat, a) {
+    openSheet(function () {
+      return [
+        h('h2', { class: 'sh-title' }, String(a.name || '')),
+        h('div', { class: 'sg-menu' },
+          h('button', { class: 'sg-mrow', type: 'button', onclick: function () { openSignalArtist(room, a); } }, icon('edit', 20), h('span', null, 'Edit the project'), icon('chevron', 16)),
+          signalProjectLinkRows(room, a),
+          h('button', { class: 'sg-mrow', type: 'button', onclick: function () { signalAskRemoveProject(room, plat, a); } }, icon('trash', 20), h('span', null, 'Take it off SIGNAL'), icon('chevron', 16)))
+      ];
+    }, { label: String(a.name || 'Project') });
+  }
+  function signalAskRemoveProject(room, plat, a) {
+    confirmSheet({ title: 'Take ' + (a.name || 'this project') + ' off SIGNAL?', body: 'It comes off every release that named it. The releases, songs and numbers stay.',
+      action: 'Take it off', danger: true, onConfirm: async function () {
+        var ok = await signalGone('artist', a.id);
+        if (!ok) return false;
+        var s = signalV2();
+        Object.keys(SIGNAL_DSP).forEach(function (p) { if (s.acct[p] === a.id) delete s.acct[p]; });
+        render();
+        return true;
+      } });
+  }
+  function signalAppleChooser(room) {
+    var plat = 'apple', arts = signalRows(room, 'artists'), last = signalLastAcct(plat);
+    return h('div', { class: 'sg-dsp sg-apch' },
+      h('div', { class: 'sg-dtop' }, h('h2', { class: 'sg-dbig' }, 'Artists'),
+        signalRoundBtn('More in SIGNAL', 'menu', function () { openSignalMore(room, plat, null, null); })),
+      arts.length ? h('div', { class: 'sg-apgrid' }, arts.map(function (a) {
+        return h('button', { class: 'sg-apcell', type: 'button', onclick: function () { signalOpenAcct(plat, a.id); } },
+          h('span', { class: 'sg-apav' }, signalAvatar(signalArtKey(a), a.name, 150),
+            last && last === a.id ? h('span', { class: 'sg-tickc', 'aria-label': 'Opened last' }, icon('check', 15)) : null),
+          h('span', { class: 'sg-apn' }, String(a.name || '')));
+      })) : h('p', { class: 'note sg-dnote' }, 'A project is a name you release under. Add one to see its top songs, each with a score, what is coming up and one to-do list.'),
+      h('div', { class: 'sg-apadd' }, signalBtn('Add a project', function () { openSignalArtist(room, null); }, { block: false })),
+      signalDspReads(plat));
+  }
+  function signalSongRow(room, plat, art, x, i) {
+    var res = x.res, s = x.song;
+    var sub = res.needsFile ? 'needs this week’s file'
+      : typeof s.streams12m === 'number' ? signalCount(s.streams12m) + ' in 12 months' : signalCount(x.plays) + (plat === 'apple' ? ' plays' : ' streams');
+    return h('button', { class: 'sg-srow' + (res.needsFile ? ' nofile' : ''), type: 'button',
+      'aria-label': s.title + ', ' + (res.needsFile ? 'needs this week’s file' : 'score ' + res.score + ' out of 100, ' + res.band.name),
+      onclick: function () { openSignalSong(room, plat, art, x); } },
+      plat === 'apple' ? [signalArt(s.release, 50), h('span', { class: 'sg-sn' }, String(i + 1))] : [h('span', { class: 'sg-sn' }, String(i + 1)), signalArt(s.release, 48)],
+      h('span', { class: 'sg-st' }, h('b', null, s.title), h('small', null, sub)),
+      res.needsFile ? null : signalBadge(res.score, { inrow: true }));
+  }
+  function signalSongList(room, plat, art, songs) {
+    var s = signalV2(), more = !!(s.more && s.more[plat]), shown = more ? songs : songs.slice(0, 5);
+    if (!songs.length) {
+      return h('div', { class: 'sg-dempty' }, h('p', null, 'No songs yet. Add this week’s file and every song gets its score here.'),
+        signalBtn('Add this week’s file', function () { openSignalFile(room); }, { block: false, sm: true }));
+    }
+    return [
+      h('div', { class: 'sg-slist' + (plat === 'apple' ? ' sg-apsongs' : '') }, shown.map(function (x, i) { return signalSongRow(room, plat, art, x, i); })),
+      songs.length > 5 ? h('button', { class: 'sg-seemore', type: 'button', onclick: function () {
+        s.more = G.isObj(s.more) ? s.more : {}; s.more[plat] = !more; render();
+      } }, more ? 'Show fewer' : 'See ' + (songs.length - 5) + ' more') : null
+    ];
+  }
+  function openSignalSong(room, plat, art, x) {
+    var res = x.res, s = x.song, n = res.numbers || {};
+    var line = function (words, v) { return v === null || v === undefined || v === '' ? null : h('div', { class: 'sg-nrow' }, h('span', null, words), h('b', null, v)); };
+    openSheet(function () {
+      return [
+        h('p', { class: 'sig-over' }, SIGNAL_DSP[plat] + ' · ' + String(art.name || '')),
+        h('h2', { class: 'sh-title' }, s.title),
+        res.needsFile ? [
+          h('p', { class: 'sh-sub' }, 'SIGNAL has no numbers for it yet. Add this week’s file from ' + (plat === 'apple' ? 'Apple Music for Artists' : 'Spotify for Artists') + ' and its score shows here.'),
+          h('div', { class: 'stack' }, signalBtn('Add this week’s file', function () { openSignalFile(room); }))
+        ] : [
+          h('p', { class: 'sh-sub' }, (res.window === 'first28' ? 'Scored on its first 28 days' : 'Scored on its latest 4 weeks') + ', against your own songs.'),
+          signalMeter({ score: res.score, why: res.why, fixes: res.fixes, peak: 'It’s at Peak. Keep sharing it so the numbers hold.',
+            items: res.items.map(function (it) { return { label: it.label + (it.note ? ': ' + it.note : ''), got: it.got, max: it.max }; }) }),
+          h('p', { class: 'sg-sec' }, 'Its numbers'),
+          h('div', { class: 'sg-nlist' },
+            line(plat === 'apple' ? 'Plays' : 'Streams', typeof n.streams === 'number' ? signalCount(n.streams) : null),
+            line('Listeners', typeof n.listeners === 'number' ? signalCount(n.listeners) : null),
+            line('Plays per listener', typeof n.perListener === 'number' ? String(Math.round(n.perListener * 10) / 10) : null),
+            line('Save rate', typeof n.saveRate === 'number' ? signalPct(n.saveRate, 1) : null),
+            line('Playlist adds', typeof n.adds === 'number' ? signalCount(n.adds) : null),
+            line('Shazams', typeof n.shazams === 'number' ? signalCount(n.shazams) : null),
+            line('Listening from "Other"', typeof n.otherShare === 'number' ? signalPct(n.otherShare, 0) : null),
+            line('In 12 months', typeof n.year === 'number' ? signalCount(n.year) : null))
+        ],
+        s.release ? h('div', { class: 'sg-two' },
+          h('label', { class: 'btn ghost sm sg-artpick' }, 'Add cover art',
+            h('input', { type: 'file', accept: 'image/*', class: 'sg-file', onchange: async function (e) {
+              var f = e.target.files && e.target.files[0];
+              if (!f) return;
+              var b = await signalSquareJpeg(f, 240);
+              if (!b) { toast('That picture couldn’t be read.'); return; }
+              await signalThumbPut(signalRelArtKey(s.release), b);
+              closeSheet(); render();
+            } })),
+          signalBtn('Open the release', function () { closeSheet(); signalOpenRelease(s.release); }, { quiet: true, sm: true, block: false })) : null
+      ];
+    }, { label: s.title, cls: 'sig-sheet' });
+  }
+  function signalUpcomingPart(room, plat, art) {
+    var X = window.GSIG, ups = signalUpcoming(room, art), today = signalToday();
+    var outWords = function (r) { return !r.release_day ? 'no release day yet' : r.release_day <= today ? 'out now' : 'out ' + signalDay(r.release_day); };
+    var next = ups[0] || null;
+    var pic = next ? signalThumb(signalRelArtKey(next)) || signalThumb(signalArtKey(art)) : null;
+    return [
+      h('h3', { class: 'sg-dsph' }, 'Upcoming releases'),
+      next ? h('button', { class: 'sg-cup' + (pic ? '' : ' none'), type: 'button', onclick: function () { signalOpenRelease(next); } },
+        pic ? h('img', { src: pic, alt: '' }) : h('span', { class: 'sg-cup-in', 'aria-hidden': 'true' }, signalInitials(next.title)),
+        h('span', { class: 'sg-cup-over' }, 'Coming up'),
+        h('span', { class: 'sg-pill' }, signalAvatar(signalArtKey(art), art.name, 24), h('span', null, String(next.title || '') + ' ' + outWords(next)))) : null,
+      ups.slice(1).map(function (r) {
+        var left = r.release_day ? X.daysBetween(today, r.release_day) : null;
+        return h('button', { class: 'sg-relrow', type: 'button', onclick: function () { signalOpenRelease(r); } },
+          signalArt(r, 48),
+          h('span', { class: 'sg-st' }, h('b', null, String(r.title || '')),
+            h('small', null, [SIGNAL_KIND_WORDS[r.kind] || '', r.release_day ? signalDay(r.release_day) : 'No release day yet', left !== null ? X.dueWords(left) : ''].filter(Boolean).join(' · '))),
+          icon('chevron', 16));
+      }),
+      next ? null : h('p', { class: 'note sg-dnote' }, 'Nothing coming up. Add a release to get its to-do list.'),
+      h('button', { class: 'sg-addrel', type: 'button', onclick: function () { openSignalRelease(room, null, { artist: art }); } }, icon('plus', 18), 'Add a release')
+    ];
+  }
+  function signalTodoPart(room, plat, art) {
+    var X = window.GSIG, rel = signalTodoRelease(room, art, plat), today = signalToday(), s = signalV2();
+    var head = function (words, extra) { return h('div', { class: 'sg-todo-top' }, h('h3', { class: 'sg-dsph' }, words), extra || null); };
+    if (!rel) return null;
+    var title = String(rel.title || 'the next release');
+    if (!signalStepsOf(room, rel.id).length) {
+      return h('section', { class: 'sg-todo' }, head('To do for ' + title),
+        rel.release_day ? [
+          h('p', { class: 'note sg-dnote' }, 'One list from the playbook, from 8 weeks before release day to 6 weeks after, each date worked out from ' + signalDay(rel.release_day) + '.'),
+          h('div', { class: 'stack' }, signalBtn('Make the to-do list', function () { signalMakeChecklist(room, rel); }))
+        ] : [
+          h('p', { class: 'note sg-dnote' }, 'Add the release day first, and the list works out every date from it.'),
+          h('div', { class: 'stack' }, signalBtn('Add the release day', function () { openSignalRelease(room, rel); }, { quiet: true }))
+        ]);
+    }
+    var list = X.todoList(rel, signalRows(room, 'steps'), plat, today);
+    var showDone = !!(G.isObj(s.done) && s.done[plat]);
+    var pitchOf = function () { return signalRows(room, 'pitches').filter(function (p) { return p.release_id === rel.id && p.platform === plat; })[0] || null; };
+    var row = function (it) {
+      var step = signalById(room, 'steps', it.id);
+      var tags = [];
+      if (it.overdue) tags.push(h('span', { class: 'sg-tag bad' }, 'Overdue'));
+      if (!it.done && it.status === 'waiting') tags.push(h('span', { class: 'sg-tag' }, 'Waiting'));
+      if (!it.done && it.needsOk) tags.push(h('span', { class: 'sg-tag ok' }, 'Needs your OK'));
+      var who = it.who === 'distributor' ? (rel.distributor ? String(rel.distributor) : 'Your distributor') : '';
+      return h('div', { class: 'sg-trow' + (it.done ? ' done' : '') + (it.overdue ? ' late' : '') },
+        h('button', { class: 'sg-tk' + (it.done ? ' on' : ''), type: 'button', role: 'checkbox', 'aria-checked': it.done ? 'true' : 'false',
+          'aria-label': (it.done ? 'Mark not done: ' : 'Mark done: ') + it.title,
+          onclick: async function () { if (await signalPut('step', { id: it.id, status: it.done ? 'todo' : 'done' })) render(); } },
+          it.done ? icon('check', 15) : null),
+        h('div', { class: 'sg-tbody' },
+          h('button', { class: 'sg-ttap', type: 'button', onclick: function () {
+            if (step) openSignalStep(room, Object.assign({}, signalStepItem(step), { release: rel.id, releaseTitle: title }));
+          } },
+            h('span', { class: 'sg-tdt' }, it.title),
+            h('span', { class: 'sg-tds' }, [it.due ? signalDay(it.due) : 'No day set', who].filter(Boolean).join(' · '), tags)),
+          it.pitch && !it.done ? h('button', { class: 'btn primary sm sg-pitchbtn' + cfCls(true), type: 'button',
+            onclick: function () { openSignalPitch(room, rel, pitchOf(), { platform: plat }); } }, icon('edit', 15), 'Create a pitch') : null));
+    };
+    var group = function (name, items) {
+      if (!items.length) return null;
+      var open = items.filter(function (it) { return !it.done; });
+      var shown = showDone ? items : open, key = plat + ':' + name, all = !!(G.isObj(s.todoAll) && s.todoAll[key]);
+      var cut = all ? shown : shown.slice(0, 6);
+      return [h('p', { class: 'sg-todo-h' }, h('b', null, name), h('span', null, open.length ? open.length + ' left' : 'All done')),
+        cut.length ? h('div', { class: 'sg-tcard' }, cut.map(row)) : null,
+        shown.length > 6 ? h('button', { class: 'sg-seemore', type: 'button', onclick: function () {
+          s.todoAll = G.isObj(s.todoAll) ? s.todoAll : {}; s.todoAll[key] = !all; render();
+        } }, all ? 'Show fewer' : 'See ' + (shown.length - 6) + ' more') : null];
+    };
+    return h('section', { class: 'sg-todo' },
+      head('To do for ' + title, h('span', { class: 'sg-todo-n' }, list.done + ' of ' + list.of + ' done')),
+      h('p', { class: 'sg-todo-sub' }, [rel.release_day ? 'Out ' + signalDay(rel.release_day) : '', 'From the playbook, for ' + SIGNAL_DSP[plat] + ' and every service'].filter(Boolean).join(' · ')),
+      group('Before release', list.before),
+      group('After release', list.after),
+      list.done ? h('button', { class: 'sg-seemore', type: 'button', onclick: function () {
+        s.done = G.isObj(s.done) ? s.done : {}; s.done[plat] = !showDone; render();
+      } }, showDone ? 'Hide the done ones' : 'Show the ' + list.done + ' done') : null);
+  }
+  function signalSpotPage(room, art) {
+    var plat = 'spotify', nums = signalListeners(room, art, 'spotify'), photo = signalThumb(signalArtKey(art));
+    var songs = signalScoredSongs(room, art, 'spotify');
+    return h('div', { class: 'sg-dsp sg-spot' },
+      h('div', { class: 'sg-sphead' + (photo ? '' : ' none') },
+        photo ? h('img', { src: photo, alt: '' }) : h('span', { class: 'sg-sph-in', 'aria-hidden': 'true' }, signalInitials(art.name)),
+        signalRoundBtn('Your projects', 'back', function () { signalBackToChooser(plat); }, 'sg-sph-back'),
+        h('h2', { class: 'sg-sph-name' }, String(art.name || ''))),
+      nums ? h('p', { class: 'sg-listen' },
+        nums.listeners !== null ? [h('b', null, signalCount(nums.listeners)), ' listeners'] : null,
+        nums.listeners !== null && nums.followers !== null ? h('span', { class: 'sg-dot' }, ' · ') : null,
+        nums.followers !== null ? [h('b', null, signalCount(nums.followers)), ' followers'] : null,
+        nums.week ? h('span', { class: 'sg-wk' }, ' · week of ' + signalDay(nums.week)) : null)
+        : h('button', { class: 'sg-quiet', type: 'button', onclick: function () { openSignalFile(room); } }, 'Add this week’s file to see listeners'),
+      h('div', { class: 'sg-rbtns' },
+        signalAvatarPick('artist', art.id, art.name, 44),
+        signalRoundBtn('Go to the to-do list', 'sgBars', function () { signalScrollTo('.sg-todo'); }, 'lime'),
+        signalRoundBtn('More in SIGNAL', 'more', function () { openSignalMore(room, plat, null, art); })),
+      h('h3', { class: 'sg-dsph' }, 'Popular'),
+      signalSongList(room, plat, art, songs),
+      signalUpcomingPart(room, plat, art),
+      signalTodoPart(room, plat, art));
+  }
+  function signalApplePage(room, art) {
+    var plat = 'apple', nums = signalListeners(room, art, 'apple'), songs = signalScoredSongs(room, art, 'apple');
+    var mine = signalProjectOf(room, art), today = signalToday();
+    var firstDay = signalRows(room, 'releases').filter(function (r) { return mine(r) && r.release_day && r.release_day <= today; })
+      .map(function (r) { return r.release_day; }).sort()[0] || null;
+    return h('div', { class: 'sg-dsp sg-apple' },
+      h('div', { class: 'sg-dtop' },
+        signalRoundBtn('Your projects', 'back', function () { signalBackToChooser(plat); }),
+        h('span', { class: 'sg-dtop-r' },
+          signalRoundBtn('Go to the to-do list', 'calendar', function () { signalScrollTo('.sg-todo'); }),
+          signalRoundBtn('More in SIGNAL', 'more', function () { openSignalMore(room, plat, null, art); }))),
+      h('div', { class: 'sg-apwho' }, signalAvatarPick('artist', art.id, art.name, 40), h('span', null, String(art.name || ''))),
+      h('h2', { class: 'sg-dbig' }, 'Top Songs'),
+      h('p', { class: 'sg-since' }, [firstDay ? signalLongDay(firstDay) + ' to today' : 'Your songs on Apple Music',
+        nums && nums.listeners !== null ? signalCount(nums.listeners) + ' listeners' : ''].filter(Boolean).join(' · ')),
+      nums ? null : h('button', { class: 'sg-quiet', type: 'button', onclick: function () { openSignalFile(room); } }, 'Add this week’s file to see listeners'),
+      signalSongList(room, plat, art, songs),
+      signalUpcomingPart(room, plat, art),
+      signalTodoPart(room, plat, art));
+  }
+  var SIGNAL_LINK_NAMES = { instagram: 'Instagram', facebook: 'Facebook', youtube: 'YouTube', tiktok: 'TikTok', apple: 'Apple Music',
+    deezer: 'Deezer', spotify: 'Spotify', soundcloud: 'SoundCloud' };
+  var SIGNAL_LINK_ORDER = ['instagram', 'tiktok', 'facebook', 'youtube', 'deezer', 'apple', 'spotify', 'soundcloud'];
+  var SIGNAL_LINK_SIGNIN = ['instagram', 'facebook', 'youtube', 'tiktok'];
+  var SIGNAL_LINK_CATALOG = ['deezer', 'apple', 'spotify', 'soundcloud'];
+  var SIGNAL_LINK_WORDS = ['ok', 'denied', 'wrong_account', 'missing_scopes', 'too_many_scopes', 'expired', 'failed'];
+  var SIGNAL_BACK_RE = /^greenroom:\/\/signal-linked\?p=(instagram|facebook|youtube|tiktok|apple|deezer|spotify|soundcloud|signal)&r=(ok|denied|wrong_account|missing_scopes|too_many_scopes|expired|failed)$/;
+  var SIGNAL_READ_ONLY = 'Linked accounts are read-only. SIGNAL can never post, comment, message or change anything.';
+  var SIGNAL_LINK_READS = {
+    instagram: 'Reads the profile, every post and each post’s reach, views, likes, comments, saves and shares.',
+    facebook: 'Reads your Page’s numbers, your Stories and how your boosts do while they run.',
+    youtube: 'Reads the channel, every upload and its views, likes and watch time. Data from YouTube.',
+    tiktok: 'Reads the profile’s counts and each public video’s views, likes, comments and shares.',
+    apple: 'Reads the artist’s songs, releases and artwork. No plays.',
+    deezer: 'Reads the fan count and the top tracks once a week. Data from Deezer.',
+    spotify: 'Reads the artist’s releases and pictures. Data from Spotify.',
+    soundcloud: 'Reads the followers and each public track’s plays, likes and reposts once a week. Data from SoundCloud.' };
+  function signalLinksInfo(fresh) {
+    var B = window.GR_BACKEND;
+    var me = S.signal ? S.signal.uid : null;
+    var c = S.signalLinks;
+    if (!c || c.uid !== me) c = S.signalLinks = { uid: me, list: null, on: null, at: 0, onAt: 0, asking: false, failed: false };
+    if (S.signalOk !== true || !me || !B || typeof B.signalLinks !== 'function') return c;
+    if (c.asking || !(fresh || Date.now() - c.at > 60e3)) return c;
+    c.asking = true;
+    var askOn = fresh || c.on === null || Date.now() - c.onAt > 600e3;
+    var links = Promise.resolve().then(function () { return B.signalLinks(); })
+      .then(function (l) { return { ok: true, l: l }; }, function () { return { ok: false }; });
+    var setup = !askOn ? Promise.resolve(null) : typeof B.signalLinkStatus !== 'function' ? Promise.resolve({ on: [] })
+      : Promise.resolve().then(function () { return B.signalLinkStatus(); }).then(null, function () { return { on: [] }; });
+    Promise.all([links, setup]).then(function (got) {
+      c.asking = false; c.at = Date.now();
+      if (got[0].ok) { c.list = Array.isArray(got[0].l) ? got[0].l.filter(G.isObj) : []; c.failed = false; } else c.failed = true;
+      if (got[1]) {
+        c.onAt = Date.now();
+        c.on = (got[1] && Array.isArray(got[1].on) ? got[1].on : []).filter(function (p) { return SIGNAL_LINK_ORDER.indexOf(p) >= 0; });
+      }
+      if (S.signalLinks !== c) return;
+      var busy = S.sigLinkSyncing || {};
+      signalLinkList().forEach(function (l) { var t = Date.parse(String(l.last_sync || '')); if (busy[l.id] && isFinite(t) && t >= busy[l.id] - 5e3) delete busy[l.id]; });
+      signalLinkSheetPaint();
+      if (S.route && S.route.name === 'signal') render();
+    });
+    return c;
+  }
+  function signalLinkList() { var c = S.signalLinks; return c && Array.isArray(c.list) ? c.list : []; }
+  function signalLinkOn(p) { var c = S.signalLinks; return !!(c && Array.isArray(c.on) && c.on.indexOf(p) >= 0); }
+  function signalLinkOf(plat, handle) {
+    var hd = signalHandle(handle).toLowerCase();
+    return signalLinkList().filter(function (l) { return l.platform === plat && signalHandle(l.account).toLowerCase() === hd; })[0] || null;
+  }
+  function signalLinksShown() { var c = S.signalLinks; return signalLinkList().length > 0 || !!(c && Array.isArray(c.on) && c.on.length); }
+  function signalLinkLabel(l) { return (SIGNAL_LINK_NAMES[l.platform] || 'Account') + (l.account ? ' ' + l.account : ''); }
+  function signalLinkTrouble(code, plat) {
+    var name = SIGNAL_LINK_NAMES[plat] || 'It';
+    if (code === 'not_set_up') return name + ' isn’t set up for linking yet.';
+    if (code === 'not_granted') return 'SIGNAL isn’t open to this account.';
+    if (code === 'wait') return 'It was read a moment ago. Try again in two minutes.';
+    if (code === 'full') return 'That’s as many links as SIGNAL keeps. Unlink one first.';
+    if (code === 'rate_limited') return name + ' asked SIGNAL to slow down. Try again in a few minutes.';
+    if (code === 'provider_down') return name + ' didn’t answer. Try again in a few minutes.';
+    if (code === 'not_found') return 'That isn’t there anymore.';
+    if (code === 'session_expired') return 'Sign in again, then try once more.';
+    if (code === 'unavailable') return 'Couldn’t reach Greenroom just now. Try again in a moment.';
+    return 'That didn’t work just now. Try again in a few minutes.';
+  }
+  function signalLinkBackWords(p, r) {
+    var name = SIGNAL_LINK_NAMES[p] || 'The account';
+    if (r === 'ok') return name + ' is linked. Its numbers start coming in within a few minutes.';
+    if (r === 'denied') return name + ' wasn’t linked: the sign-in was cancelled.';
+    if (r === 'wrong_account') return 'That was a different account, so nothing was linked. Sign in as the one you tapped Link on.';
+    if (r === 'missing_scopes') return name + ' wasn’t linked: a box was unticked. Tap Link again and leave every box ticked.';
+    if (r === 'too_many_scopes') return name + ' allowed more than reading, so SIGNAL turned it down and gave it back. Nothing was linked.';
+    if (r === 'expired') return 'That sign-in took too long. Tap Link and try again.';
+    return name + ' couldn’t be linked just now. Try again in a few minutes.';
+  }
+  function signalLinkWhy(word, plat) {
+    var name = SIGNAL_LINK_NAMES[plat] || 'It';
+    if (word === 'reconnect' || word === 'token_expired') return 'Sign in again so it keeps reading.';
+    if (word === 'missing_scopes') return 'A box was unticked. Reconnect and leave every box ticked.';
+    if (word === 'too_many_scopes') return 'It allowed more than reading, so SIGNAL turned it down. Reconnect and allow only what SIGNAL asks for.';
+    if (word === 'wrong_account') return 'That was a different account. Reconnect with the right one.';
+    if (word === 'rate_limited') return name + ' asked SIGNAL to slow down. It tries again within the hour.';
+    if (word === 'provider_down') return name + ' didn’t answer. SIGNAL tries again soon.';
+    if (word === 'not_found') return 'SIGNAL can’t find it on ' + name + ' anymore.';
+    if (word === 'not_set_up') return name + '’s setup isn’t finished yet.';
+    if (word === 'lock_changed' || word === 'failed') return 'The last read didn’t work. SIGNAL tries again soon.';
+    return '';
+  }
+  var SIGNAL_MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+  function signalLinkSynced(l) {
+    var w = signalLocalWhen(l && l.last_sync);
+    if (!w) return 'Not read yet. The first read comes within a few minutes.';
+    var today = signalLocalWhen(new Date().toISOString());
+    var m = /^\d{4}-(\d{2})-(\d{2})$/.exec(w.date);
+    return 'Synced ' + (today && today.date === w.date || !m ? '' : SIGNAL_MONTHS[+m[1] - 1] + ' ' + (+m[2]) + ', ') + signalClock(w.time);
+  }
+  function signalLinkState(l) {
+    var err = String(l.last_error || '');
+    if (l.status === 'reconnect') return { words: 'Reconnect', tone: 'warn', why: signalLinkWhy(err || 'reconnect', l.platform), reconnect: true };
+    if (l.status === 'error') {
+      return { words: 'Not reading', tone: 'bad', why: signalLinkWhy(err || 'failed', l.platform),
+        reconnect: ['reconnect', 'token_expired', 'missing_scopes', 'too_many_scopes', 'wrong_account'].indexOf(err) >= 0 };
+    }
+    var by = Date.parse(String(l.reconnect_by || ''));
+    if (isFinite(by) && by - Date.now() < 14 * 864e5) {
+      var d = new Date(by);
+      return { words: 'Linked', tone: 'ok', reconnect: true,
+        why: by <= Date.now() ? 'Sign in again so it keeps reading.' : 'Reconnect by ' + SIGNAL_MONTHS[d.getMonth()] + ' ' + d.getDate() + ' so it keeps reading.' };
+    }
+    return { words: 'Linked', tone: 'ok', why: signalLinkWhy(err, l.platform), reconnect: false };
+  }
+  async function signalLinkGo(plat, account) {
+    var B = window.GR_BACKEND;
+    if (S.sigLinkBusy) return;
+    if (!B || typeof B.signalLinkStart !== 'function') { toast('Linking isn’t switched on yet.'); return; }
+    S.sigLinkBusy = true;
+    var url = '';
+    try { url = await B.signalLinkStart(plat, account || '', IN_SHELL === true); }
+    catch (e) { toast(signalLinkTrouble(e && e.code, plat)); return; }
+    finally { S.sigLinkBusy = false; }
+    listenForPlaidBack();
+    openSignalLinkOpen(plat, account, url);
+  }
+  function signalLinkHow(plat, account) {
+    var where = IN_SHELL ? 'opens in Safari' : 'opens in a new tab';
+    var back = IN_SHELL ? ' Greenroom opens again by itself. If your phone asks whether to open Greenroom, tap Open.'
+      : ' Greenroom then opens in that tab with the result, and you can close it.';
+    if (plat === 'instagram') return 'Instagram ' + where + '. Sign in as ' + account + ', check it asks only for your profile and insights, then tap Allow.' + back;
+    if (plat === 'facebook') return 'Facebook ' + where + '. Sign in, pick your Page (and your ad account if it asks), then tap Continue.' + back;
+    if (plat === 'youtube') {
+      return 'Google ' + where + '. Sign in with the account that owns your channel. Google shows a warning because this is your own app, not one Google has ' +
+        'reviewed. That is expected. Tap Advanced, then the line that starts “Go to” and ends “(unsafe)”. Leave both boxes ticked and tap Allow.' + back;
+    }
+    return 'TikTok ' + where + '. Sign in as ' + (account || 'your account') + ', check it asks only for your profile, stats and public videos, then tap Authorize.' + back;
+  }
+  function signalOutLink(words, href) { return h('a', { class: 'sg-lkout', href: href, target: '_blank', rel: 'noopener noreferrer' }, words); }
+  function openSignalLinkOpen(plat, account, url) {
+    var name = SIGNAL_LINK_NAMES[plat];
+    openSheet(function () {
+      return [
+        h('p', { class: 'sig-over' }, account ? name + ' · ' + account : 'SIGNAL'),
+        h('h2', { class: 'sh-title' }, account ? 'Link ' + account : 'Connect ' + name),
+        h('p', { class: 'sh-sub' }, signalLinkHow(plat, account)),
+        plat === 'youtube' ? h('p', { class: 'sh-sub sg-lkterms' }, 'Data from YouTube. ',
+          signalOutLink('YouTube’s Terms of Service', 'https://www.youtube.com/t/terms'), ' and ',
+          signalOutLink('Google’s Privacy Policy', 'https://policies.google.com/privacy'), ' apply. ',
+          signalOutLink('Take access back any time', 'https://myaccount.google.com/permissions'), '.') : null,
+        h('p', { class: 'sg-reads sg-lkro' }, icon('lock', 14), SIGNAL_READ_ONLY),
+        h('div', { class: 'stack' },
+          h('a', { class: 'btn primary block' + cfCls(true), href: url, target: '_blank', rel: 'noopener noreferrer' }, 'Open ' + (plat === 'youtube' ? 'Google' : name)),
+          signalBtn('Cancel', function () { closeSheet(); }, { quiet: true }))
+      ];
+    }, { label: account ? 'Link ' + account : 'Connect ' + name });
+    if (sheet) sheet.signalLink = true;
+  }
+  function signalLinkBack(u) {
+    var m = typeof u === 'string' ? SIGNAL_BACK_RE.exec(u.trim()) : null;
+    if (!m) return false;
+    signalLinkLanded(m[1], m[2]);
+    return true;
+  }
+  function signalAddressBack() {
+    if (IN_SHELL) return false;
+    var q = '';
+    try { q = String(window.location.search || ''); } catch (e) { return false; }
+    if (!/[?&]signal=linked(?:&|$)/.test(q)) return false;
+    try {
+      var rest = q.replace(/^\?/, '').split('&').filter(function (kv) { return !/^(signal|p|r)=/.test(kv); }).join('&');
+      window.history.replaceState(null, '', window.location.pathname + (rest ? '?' + rest : '') + window.location.hash);
+    } catch (e) {   }
+    var m = /^\?signal=linked&p=([a-z]+)&r=([a-z_]+)$/.exec(q);
+    if (!m || (SIGNAL_LINK_ORDER.indexOf(m[1]) < 0 && m[1] !== 'signal') || SIGNAL_LINK_WORDS.indexOf(m[2]) < 0) return false;
+    signalLinkLanded(m[1], m[2]);
+    return true;
+  }
+  function signalLinkLanded(p, r) {
+    whenLoaded(function () {
+      if (S.signalOk === true) { signalLinkShow(p, r); return; }
+      var c = S.signal;
+      if (c && c.at && !c.asking) return;
+      S.sigLinkPending = { p: p, r: r };
+      signalKnown();
+    });
+  }
+  function signalLinkShow(p, r) {
+    if (S.signalOk !== true) return;
+    if (sheet && sheet.signalLink) closeSheet(true);
+    if (!S.route || S.route.name !== 'signal') go({ name: 'signal', back: { name: 'mainmenu', back: { name: 'home' } } });
+    if (SIGNAL_SOCIAL[p]) signalV2().plat = p;
+    signalLinksInfo(true);
+    signalRoomInfo(true);
+    toast(signalLinkBackWords(p, r));
+    render();
+  }
+  function openSignalLinks(room) {
+    signalLinksInfo(true);
+    var host = h('div', { class: 'sg-lk' });
+    openSheet(function (panel) {
+      S.sigLinkSheet = { panel: panel, host: host, room: room };
+      fillEl(host, signalLinksBody(room));
+      return [
+        h('h2', { class: 'sh-title' }, 'Linked accounts'),
+        h('p', { class: 'sh-sub sg-lkro' }, icon('lock', 14), SIGNAL_READ_ONLY),
+        host
+      ];
+    }, { label: 'Linked accounts' });
+  }
+  function signalLinkSheetPaint() {
+    var k = S.sigLinkSheet;
+    if (!k || !sheet || sheet.panel !== k.panel) return;
+    fillEl(k.host, signalLinksBody(k.room));
+  }
+  function signalLinksBody(room) {
+    var c = S.signalLinks || {}, list = signalLinkList().slice().sort(function (a, b) {
+      return SIGNAL_LINK_ORDER.indexOf(a.platform) - SIGNAL_LINK_ORDER.indexOf(b.platform) || String(a.account || '').localeCompare(String(b.account || ''));
+    });
+    var connect = ['facebook', 'youtube'].filter(function (p) {
+      return signalLinkOn(p) && !list.some(function (l) { return l.platform === p; });
+    });
+    return [
+      c.list == null && !c.failed ? h('p', { class: 'note' }, 'Loading…') : null,
+      c.failed && !list.length ? [h('p', { class: 'note' }, 'Couldn’t read your linked accounts just now.'),
+        signalBtn('Try again', function () { signalLinksInfo(true); signalLinkSheetPaint(); }, { sm: true, block: false })] : null,
+      list.length ? h('div', { class: 'sg-lklist' }, list.map(function (l) { return signalLinkCard(room, l); })) : null,
+      Array.isArray(c.list) && !list.length ? h('p', { class: 'note' }, signalLinksEmptyWords(connect)) : null,
+      connect.length ? h('div', { class: 'sg-menu' }, connect.map(function (p) {
+        return h('button', { class: 'sg-mrow', type: 'button', onclick: function () { signalLinkGo(p, ''); } },
+          icon('plus', 20), h('span', null, 'Connect ' + SIGNAL_LINK_NAMES[p]), icon('chevron', 16));
+      })) : null
+    ];
+  }
+  function signalLinksEmptyWords(connect) {
+    var or = function (xs) { return xs.length > 1 ? xs.slice(0, -1).join(', ') + ' or ' + xs[xs.length - 1] : xs[0]; };
+    var social = ['instagram', 'tiktok'].filter(signalLinkOn).map(function (p) { return SIGNAL_LINK_NAMES[p]; });
+    var music = SIGNAL_LINK_CATALOG.filter(signalLinkOn).map(function (p) { return 'Link ' + SIGNAL_LINK_NAMES[p]; });
+    var out = ['Nothing is linked yet.'];
+    if (social.length) out.push('Tap Link next to one of your ' + or(social) + ' accounts.');
+    if (connect.length) out.push((social.length ? 'Or tap ' : 'Tap ') + or(connect.map(function (p) { return 'Connect ' + SIGNAL_LINK_NAMES[p]; })) + ' below.');
+    if (music.length) out.push('To link a project, open the three dots next to it on Spotify or Apple Music and tap ' + or(music) + '.');
+    if (out.length === 1) out.push('Linking isn’t set up yet.');
+    return out.join(' ');
+  }
+  var SIGNAL_LINK_FROM = { youtube: 'Data from YouTube.', deezer: 'Data from Deezer.', spotify: 'Data from Spotify.', soundcloud: 'Data from SoundCloud.' };
+  function signalLinkCard(room, l) {
+    var st = signalLinkState(l), label = signalLinkLabel(l);
+    var art = l.artist_id ? signalById(room, 'artists', l.artist_id) : null;
+    var t0 = S.sigLinkSyncing && S.sigLinkSyncing[l.id], busy = !!t0 && Date.now() - t0 < 120e3;
+    var canSign = SIGNAL_LINK_SIGNIN.indexOf(l.platform) >= 0 && signalLinkOn(l.platform);
+    var card = h('div', { class: 'sg-lkcard', 'data-link': l.id },
+      h('div', { class: 'sg-lkhead' },
+        h('span', { class: 'sg-lkname' }, h('b', null, SIGNAL_LINK_NAMES[l.platform] || ''), l.account ? h('span', null, String(l.account)) : null),
+        h('span', { class: 'sig-tag ' + st.tone }, st.words)),
+      art && String(art.name || '').trim().toLowerCase() !== String(l.account || '').trim().toLowerCase()
+        ? h('p', { class: 'sg-lkline' }, 'For ' + String(art.name || '')) : null,
+      h('p', { class: 'sg-lkline sg-lksync' }, busy ? 'Reading now…' : signalLinkSynced(l)),
+      st.why ? h('p', { class: 'sg-lkline sg-lkwhy ' + st.tone }, st.why) : null,
+      SIGNAL_LINK_FROM[l.platform] ? h('p', { class: 'sg-lkline sg-lkattr' }, SIGNAL_LINK_FROM[l.platform]) : null,
+      h('div', { class: 'sg-lkbtns' },
+        st.reconnect && canSign ? signalBtn('Reconnect', function () { signalLinkGo(l.platform, l.platform === 'instagram' || l.platform === 'tiktok' ? l.account : ''); },
+          { sm: true, block: false }) : null,
+        l.status === 'reconnect' ? null : signalBtn(busy ? 'Reading…' : 'Sync now', function () { signalLinkSync(l); },
+          { quiet: true, sm: true, block: false, icon: 'refresh', disabled: busy }),
+        signalBtn('Unlink', function () { signalAskUnlink(l); }, { quiet: true, sm: true, block: false })));
+    if (mouseOnly()) return card;
+    return swipeRow(card, [h('button', { class: 'sw-undo', type: 'button', 'aria-label': 'Unlink ' + label,
+      onclick: function () { signalAskUnlink(l); } }, icon('trash', 16), 'Unlink')], { noTapOpen: true, tapOnlyCloses: true });
+  }
+  async function signalLinkSync(l) {
+    var B = window.GR_BACKEND;
+    if (!B || typeof B.signalLinkSync !== 'function') { toast('Linking isn’t switched on yet.'); return; }
+    try { await B.signalLinkSync(l.id); }
+    catch (e) { toast(signalLinkTrouble(e && e.code, l.platform)); return; }
+    (S.sigLinkSyncing || (S.sigLinkSyncing = {}))[l.id] = Date.now();
+    toast('Reading ' + signalLinkLabel(l) + ' now. New numbers show in a minute or two.');
+    signalLinkSheetPaint();
+    setTimeout(function () { signalLinksInfo(true); signalRoomInfo(true); }, 40000);
+  }
+  function signalAskUnlink(l) {
+    var label = signalLinkLabel(l);
+    confirmSheet({ title: 'Unlink ' + label + '?', body: 'Its linked posts and numbers leave SIGNAL. Numbers you typed stay.', action: 'Unlink', danger: true,
+      onConfirm: async function () {
+        var B = window.GR_BACKEND, out = null;
+        if (!B || typeof B.signalLinkUnlink !== 'function') { toast('Linking isn’t switched on yet.'); return false; }
+        try { out = await B.signalLinkUnlink(l.id); }
+        catch (e) { toast(signalLinkTrouble(e && e.code, l.platform)); return false; }
+        var c = S.signalLinks;
+        if (c && Array.isArray(c.list)) c.list = c.list.filter(function (x) { return x.id !== l.id; });
+        signalLinksInfo(true);
+        signalRoomInfo(true);
+        toast(label + ' is unlinked.' + (SIGNAL_LINK_SIGNIN.indexOf(l.platform) < 0 ? ''
+          : out && out.taken_back === false ? ' Its access is being taken back.' : ' Its access was taken back.'));
+        return true;
+      } });
+  }
+  function signalProjectLinkRows(room, a) {
+    return SIGNAL_LINK_CATALOG.filter(signalLinkOn).map(function (p) {
+      var have = signalLinkList().filter(function (l) { return l.platform === p && l.artist_id === a.id; })[0];
+      if (have) {
+        return h('button', { class: 'sg-mrow', type: 'button', onclick: function () { openSignalLinks(room); } }, icon('sgLink', 20),
+          h('span', null, SIGNAL_LINK_NAMES[p] + ' linked: ' + String(have.account || '')), icon('chevron', 16));
+      }
+      return h('button', { class: 'sg-mrow', type: 'button', onclick: function () { openSignalLinkSearch(room, p, a); } }, icon('sgLink', 20),
+        h('span', null, 'Link ' + SIGNAL_LINK_NAMES[p]), icon('chevron', 16));
+    });
+  }
+  function openSignalLinkSearch(room, plat, a) {
+    var B = window.GR_BACKEND, name = SIGNAL_LINK_NAMES[plat];
+    var f = { q: String(a.name || '').slice(0, 100), results: null, busy: false, trouble: '', seq: 0, picking: false };
+    var host = h('div', { class: 'sg-lkres' });
+    var paint = function () {
+      fillEl(host, [
+        f.busy ? h('p', { class: 'note' }, 'Looking on ' + name + '…') : null,
+        !f.busy && f.trouble ? h('p', { class: 'note' }, f.trouble) : null,
+        !f.busy && Array.isArray(f.results) && !f.results.length ? h('p', { class: 'note' }, 'Nothing on ' + name + ' by that name. Try it spelled another way.') : null,
+        !f.busy && f.results && f.results.length ? [h('div', { class: 'sg-lkpicks' }, f.results.map(function (r) {
+          var fans = typeof r.fans === 'number' ? signalCount(r.fans) + (plat === 'soundcloud' ? ' followers' : ' fans') : '';
+          return h('button', { class: 'sg-lkpick', type: 'button', onclick: function () { pick(r); } },
+            r.image ? h('span', { class: 'sg-av', style: 'width:44px;height:44px', 'aria-hidden': 'true' }, h('img', { src: r.image, alt: '', referrerpolicy: 'no-referrer' }))
+              : signalAvatar('', r.name, 44),
+            h('span', { class: 'sg-lkpick-t' }, h('b', null, r.name), fans ? h('small', null, fans) : null), icon('chevron', 16));
+        })), h('p', { class: 'sg-lkline' }, 'Results from ' + name + '.')] : null]);
+    };
+    var search = async function () {
+      var term = String(f.q || '').trim();
+      if (term.length < 2) { toast('Type at least two letters.'); return; }
+      if (!B || typeof B.signalLinkSearch !== 'function') { toast('Linking isn’t switched on yet.'); return; }
+      var my = ++f.seq;
+      f.busy = true; f.trouble = ''; paint();
+      var got = null, trouble = '';
+      try { got = await B.signalLinkSearch(plat, term); } catch (e) { trouble = signalLinkTrouble(e && e.code, plat); }
+      if (my !== f.seq) return;
+      f.busy = false; f.results = trouble ? null : (Array.isArray(got) ? got : []); f.trouble = trouble;
+      paint();
+    };
+    var pick = async function (r) {
+      if (f.picking) return;
+      f.picking = true;
+      var out = null;
+      try { out = await B.signalLinkPick(plat, r.ext_id, a.id); }
+      catch (e) { f.picking = false; toast(signalLinkTrouble(e && e.code, plat)); return; }
+      f.picking = false;
+      closeSheet();
+      signalLinksInfo(true);
+      toast(name + ' is linked to ' + String(a.name || 'this project') + (out && out.account && out.account !== a.name ? ' as ' + out.account : '') +
+        '. Its numbers come in within a few minutes.');
+      render();
+    };
+    openSheet(function () {
+      return [
+        h('p', { class: 'sig-over' }, String(a.name || '')),
+        h('h2', { class: 'sh-title' }, 'Link ' + name),
+        h('p', { class: 'sh-sub' }, 'Find ' + (a.name || 'the project') + ' on ' + name + ', then tap the right one. ' + SIGNAL_LINK_READS[plat]),
+        h('form', { class: 'sg-lkfind', onsubmit: function (e) { e.preventDefault(); search(); } },
+          field('Artist on ' + name, signalInput({ value: f.q, max: 100, label: 'Artist on ' + name, k: 'q', on: function (v) { f.q = v; } })),
+          signalBtn('Search', null, { submit: true, quiet: true })),
+        host,
+        h('p', { class: 'sg-reads sg-lkro' }, icon('lock', 14), SIGNAL_READ_ONLY)
+      ];
+    }, { label: 'Link ' + name });
+    paint();
+    if (f.q.trim().length >= 2) search();
   }
   function homeFace(current) {
     var me = myCard(), who = profileName(), on = current === 'me';
@@ -37871,21 +39876,24 @@
     if (!IN_SHELL) return false;
     try { return localStorage.getItem('gr_ai_ok') !== '1'; } catch (e) { return true; }
   }
-  function aiConsent() {
+  function aiConsent(kind) {
+    var sig = kind === 'signal', key = sig ? 'gr_ai_ok_signal' : 'gr_ai_ok';
     if (!IN_SHELL) return Promise.resolve(true);
-    try { if (localStorage.getItem('gr_ai_ok') === '1') return Promise.resolve(true); } catch (e) {}
+    try { if (localStorage.getItem(key) === '1') return Promise.resolve(true); } catch (e) {}
     return new Promise(function (resolve) {
       var done = false;
       function finish(ok) {
         if (done) return;
         done = true;
-        if (ok) { try { localStorage.setItem('gr_ai_ok', '1'); } catch (e) {} }
+        if (ok) { try { localStorage.setItem(key, '1'); } catch (e) {} }
         resolve(ok);
       }
       openSheet(function () {
         return [
-          h('h2', { class: 'sh-title' }, 'Read this with an AI service?'),
-          h('p', { class: 'sh-sub' }, 'To read a flyer, a day sheet, a statement, a P&L or a to-do list, Greenroom sends that photo or text to an AI service (Anthropic) just to be read. Nothing else is shared, and you check the result before anything is saved.'),
+          h('h2', { class: 'sh-title' }, sig ? 'Read this post with an AI service?' : 'Read this with an AI service?'),
+          h('p', { class: 'sh-sub' }, sig
+            ? 'To score a post, SIGNAL sends small copies of its photos (or a few frames from its video), its caption, its tags and place, and your page’s recent numbers to an AI service (Anthropic) just to be read. SIGNAL keeps nothing on the server, and nothing is posted anywhere.'
+            : 'To read a flyer, a day sheet, a statement, a P&L or a to-do list, Greenroom sends that photo or text to an AI service (Anthropic) just to be read. Nothing else is shared, and you check the result before anything is saved.'),
           h('div', { class: 'stack' },
             h('button', { class: 'btn primary block', type: 'button',
               onclick: function () { finish(true); closeSheet(); } }, 'Allow'),
@@ -40252,12 +42260,14 @@
         if (p && typeof p.catch === 'function') p.catch(function () {   });
       } catch (e) {   }
     };
-    on('appUrlOpen', function (ev) { if (!plaidBackOpened(ev && ev.url)) dayBarOpened(ev && ev.url); });
+    on('appUrlOpen', function (ev) { var u = ev && ev.url; if (!plaidBackOpened(u) && !signalLinkBack(u)) dayBarOpened(u); });
     on('resume', function () { checkPlaid(false); calSync(true, true); dayBarLook(function () { dayBarSync(true); }); alarmSync(true); share.asked = false; shareCheck(); if (S.loaded && !sheet) render(); });
     on('appStateChange', function (st) { if (st && st.isActive) checkPlaid(false); });
     return true;
   }
   listenForPlaidBack();
+  signalAddressBack();
+  if (window.__harness) window.__harness.signalLinkBack = function (p, r) { return signalLinkBack('greenroom://signal-linked?p=' + p + '&r=' + r); };
   var DAYBAR_PUSH = true;
   var HOME_BAR = true;
   var HOME_BAR_LENGTHS = false;
