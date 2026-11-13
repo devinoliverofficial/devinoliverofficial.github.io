@@ -472,7 +472,7 @@
       if (isNaN(x) || isNaN(y)) return null;
       return Math.round((y-x)/86400000);
     }
-    function leadPts(d){ if (d===null) return 0; if (d>=28) return 12; if (d>=14) return 11; if (d===13) return 10; if (d>=11) return 9; if (d===10) return 8; if (d>=8) return 7; if (d===7) return 6; return 0; }
+    function leadPts(d){ if (d===null) return 0; if (d>=42) return 12; if (d>=35) return 11; if (d>=28) return 10; if (d>=21) return 9; if (d>=14) return 8; if (d>=10) return 7; if (d>=7) return 6; return 0; }
     function homeCountry(based){
       if (!based) return null;
       if (US_HINT.test(based)) return "US";
@@ -498,6 +498,7 @@
         leadChecks.push(ck("Pitched " + Math.max(days,0) + " days before release", lp, lp>0, "Pitch at least 7 days before release"));
         var best = today ? leadPts(daysBetween(today, p.release)) : lp;
         if (today && p.submit > today && best > lp){ leadChecks.push(ck("Submit today instead", best-lp, false, "Submit today instead of later")); }
+        else if (lp > 0 && lp < 12){ leadChecks.push(ck("6 weeks (42 days) before release", 12-lp, false, "Pitch 6 weeks (42 days) before release, as soon as the song shows in Upcoming")); }
       }
       add("lead", "Lead time", 12, leadChecks, leadNote);
       var g = (p.genres||[]).map(function(x){ return x.toLowerCase(); });
@@ -615,16 +616,18 @@
   };
   var EVENTS = { newreleases: 'when the song shows under New Releases', tenspins: 'once the song gets 10 or more spins a week' };
   var RELEASE_STEPS = [
-    { key: 'master', from: -56, at: -42, who: 'artist', platform: 'all', title: 'Master, art and metadata final, with credits spelled exactly as on past releases' },
+    { key: 'master', from: -56, at: -49, who: 'artist', platform: 'all', title: 'Master, art and metadata final, with credits spelled exactly as on past releases' },
     { key: 'altversions', from: -56, at: -42, who: 'artist', platform: 'all', title: 'Bounce the alternate versions: instrumental, sped-up, slowed, extended or club' },
     { key: 'press', from: -56, at: -42, who: 'artist', platform: 'all', title: 'Press photos and EPK ready' },
     { key: 'profiles', from: -56, at: -42, who: 'artist', platform: 'all', title: 'Every profile claimed: Spotify, Apple, Amazon, Deezer, Pandora AMP, YouTube Official Artist Channel, TikTok Artist Account' },
     { key: 'brief', from: -56, at: -42, who: 'artist', platform: 'all', alarm: true, needsOk: true, title: 'Send {d} the brief and ask if the release is a priority (Apple, YouTube, Deezer, TIDAL)' },
     { key: 'tidal', from: -56, at: -28, who: 'distributor', platform: 'tidal', title: '{D} flags the release to TIDAL' },
-    { key: 'deliver', from: -42, at: -35, who: 'artist', platform: 'all', title: 'Deliver the song to {d}. It takes about 5 days to show in Spotify for Artists' },
-    { key: 'masterpitch', from: -42, at: -35, who: 'artist', platform: 'all', title: 'Write the master pitch' },
+    { key: 'applepitchnotes', from: -28, at: -21, who: 'artist', platform: 'apple', needsOk: true, title: 'Send {d} the Apple pitch notes and ask for a pre-add link' },
+    { key: 'applemapped', from: -21, at: -14, who: 'distributor', platform: 'apple', title: 'Confirm the Apple pitch is in and the release is mapped' },
+    { key: 'deliver', from: -56, at: -49, who: 'artist', platform: 'all', title: 'Deliver the song to {d} 7 weeks out. It takes about 5 days to show in Spotify for Artists' },
+    { key: 'masterpitch', from: -56, at: -45, who: 'artist', platform: 'all', title: 'Write the master pitch' },
     { key: 'countdown', from: -42, at: -28, who: 'artist', platform: 'spotify', only: 'long', title: 'Countdown Page (an EP or album, from about 3,000 listeners)' },
-    { key: 'spotify', from: -35, at: -28, who: 'artist', platform: 'spotify', needsOk: true, title: 'Pitch Spotify as soon as the song shows in Upcoming, aiming for 28 days out, and tell {d}' },
+    { key: 'spotify', from: -44, at: -42, who: 'artist', platform: 'spotify', needsOk: true, title: 'Pitch Spotify 6 weeks (42 days) out, as soon as the song shows in Upcoming, and tell {d}' },
     { key: 'amazon', event: 'newreleases', at: 14, who: 'artist', platform: 'amazon', alarm: true, hard: true, needsOk: true, title: 'Pitch Amazon when the song shows under New Releases, with the text agreed with {d} first' },
     { key: 'amazonlabel', event: 'newreleases', at: 14, who: 'distributor', platform: 'amazon', hard: true, title: "{D}'s own Amazon label pitch" },
     { key: 'presave', from: -28, at: -21, who: 'artist', platform: 'all', title: 'Pre-save and pre-add links, plus TikTok Pre-Release' },
@@ -636,7 +639,7 @@
     { key: 'facts14', from: -21, at: -14, who: 'artist', platform: 'all', needsOk: true, title: 'Send {d} the new facts: the video date, press, DJ support' },
     { key: 'apple', from: -42, at: -10, who: 'distributor', platform: 'apple', alarm: true, title: 'Apple full consideration closes: confirm {d} pitched Apple Music' },
     { key: 'applelate', kind: 'deadline', ties: 'apple', from: -42, at: -7, who: 'distributor', platform: 'apple', alarm: true, hard: true, title: 'Apple late adds close' },
-    { key: 'spotifylast', kind: 'deadline', ties: 'spotify', from: -35, at: -7, who: 'artist', platform: 'spotify', alarm: true, hard: true, title: 'Last day to pitch Spotify and keep Release Radar' },
+    { key: 'spotifylast', kind: 'deadline', ties: 'spotify', from: -44, at: -7, who: 'artist', platform: 'spotify', alarm: true, hard: true, title: 'Last day to pitch Spotify and keep Release Radar' },
     { key: 'facts7', from: -10, at: -7, who: 'artist', platform: 'all', needsOk: true, title: 'Send {d} any new facts' },
     { key: 'thisis', from: -7, at: -3, who: 'artist', platform: 'spotify', title: 'Ask for the This Is pin' },
     { key: 'pandoramsg', from: -7, at: -3, who: 'artist', platform: 'pandora', title: 'Record the Pandora Artist Audio Message and set up Promote Singles' },
@@ -646,6 +649,10 @@
     { key: 'firstfans', from: 0, at: 0, who: 'artist', platform: 'soundcloud', title: 'Turn on SoundCloud First Fans' },
     { key: 'storyshare', from: 0, at: 0, who: 'artist', platform: 'instagram', title: 'Share the song from Spotify to Stories' },
     { key: 'applepromote', from: 0, at: 0, who: 'artist', platform: 'apple', title: 'Post the Apple Music Promote card' },
+    { key: 'radarcheck', from: 0, at: 0, who: 'artist', platform: 'spotify', title: 'Check the song is in Release Radar in its Playlists view' },
+    { key: 'followsave', from: 0, at: 0, who: 'artist', platform: 'all', title: 'Post with a follow and save ask' },
+    { key: 'applefavorite', from: 0, at: 0, who: 'artist', platform: 'apple', title: 'Post the Become a fan favorite card on your Stories' },
+    { key: 'appleinsights', from: 0, at: 0, who: 'artist', platform: 'apple', title: 'Open New Release Insights and note the first count' },
     { key: 'amazonhype', from: 0, at: 0, who: 'artist', platform: 'amazon', title: 'Post the Amazon Hype card' },
     { key: 'sync', from: 0, at: 0, who: 'artist', platform: 'all', title: 'Upload to the sync libraries' },
     { key: 'video', base: 'video', from: 0, at: 7, who: 'artist', platform: 'spotify', alarm: true, hard: true, needsOk: true, title: 'Pitch the music video to Spotify, within 7 days of the video coming out' },
@@ -656,6 +663,9 @@
     { key: 'curators2', from: 1, at: 14, who: 'artist', platform: 'all', needsOk: true, title: 'Second wave of curators' },
     { key: 'botcheck', from: 1, at: 14, who: 'artist', platform: 'spotify', title: 'Bot-check every new playlist' },
     { key: 'djpool', from: 1, at: 14, who: 'artist', platform: 'all', title: 'DJ pool upload for any club edit' },
+    { key: 'sourcecheck', from: 1, at: 14, who: 'artist', platform: 'spotify', title: 'Read Source of Streams and Discovered On for two weeks' },
+    { key: 'showcase', from: 7, at: 14, who: 'artist', platform: 'spotify', needsOk: true, title: 'Decide on a Showcase test, only if a clip beat your normal' },
+    { key: 'appleshazam', from: 1, at: 14, who: 'artist', platform: 'apple', title: 'Read the Shazam cities and use them in the next post' },
     { key: 'applerepromo', from: 1, at: 14, who: 'distributor', platform: 'apple', title: '{D} files an Apple re-promotion pitch with the new numbers' },
     { key: 'deezerclose', kind: 'deadline', ties: 'deezer', from: -42, at: 14, who: 'distributor', platform: 'deezer', alarm: true, hard: true, title: 'Deezer closes 14 days after release' },
     { key: 'audiomack', from: 0, at: 28, who: 'artist', platform: 'audiomack', needsOk: true, title: 'Email Audiomack about Trending (within about a month)' },
@@ -697,7 +707,7 @@
     return { ok: true, releaseDate: R, steps: steps, warnings: warnings };
   }
   function releaseSpacing(releases, minDays) {
-    var gap = minDays || 28;
+    var gap = minDays || 42;
     var rs = (releases || []).filter(function (r) { return r && isDay(r.releaseDate); })
       .slice().sort(function (a, b) { return a.releaseDate < b.releaseDate ? -1 : a.releaseDate > b.releaseDate ? 1 : 0; });
     var out = [];
@@ -709,8 +719,8 @@
         first: a.id !== undefined ? a.id : a.title, next: b.id !== undefined ? b.id : b.title, days: days,
         earliestPitch: a.releaseDate, leadDays: days, releaseRadar: days >= 7,
         words: name(b) + ' comes out ' + days + (days === 1 ? ' day' : ' days') + ' after ' + (a.title ? String(a.title) : 'the release before it') +
-          '. Releases need 4 weeks between them: ' + name(b) + ' can only be pitched once ' + (a.title ? String(a.title) : 'that one') + ' is live, ' +
-          (days >= 7 ? days + ' days out instead of 28.' : 'which is too late for Release Radar.')
+          '. A 6-week pitch needs 6 weeks between releases: ' + name(b) + ' can only be pitched once ' + (a.title ? String(a.title) : 'that one') + ' is live, ' +
+          (days >= 7 ? days + ' days out instead of 42.' : 'which is too late for Release Radar.')
       });
     }
     return out;
@@ -852,8 +862,8 @@
     var lead = sp && isDay(R) ? daysBetween(sp.sentOn, R) : null;
     checks.push({ key: 'lead', ok: lead !== null && lead >= 7,
       words: lead === null ? 'No Spotify pitch is logged, so the song had no Release Radar slot.'
-        : lead >= 28 ? 'Pitched to Spotify ' + lead + ' days out.'
-        : lead >= 7 ? 'Pitched to Spotify ' + lead + ' days out. 28 days gives editors the most time.'
+        : lead >= 42 ? 'Pitched to Spotify ' + lead + ' days out.'
+        : lead >= 7 ? 'Pitched to Spotify ' + lead + ' days out. The target is 6 weeks (42 days).'
         : 'Pitched to Spotify ' + Math.max(lead, 0) + ' days out, under 7, so no Release Radar.' });
     var on = {}, list = release.platforms && release.platforms.length ? release.platforms : Object.keys(PLATFORMS);
     list.forEach(function (k) { on[String(k).toLowerCase()] = true; });
@@ -1284,6 +1294,916 @@
     });
     return out;
   }
+  var PLAYBOOK_VERSION = 'playbook-v1';
+  var PB_RULES = {
+    instagram: {
+      reel: [
+        { id: 'hook', label: 'Hook in the first 2 seconds', max: 20, kind: 'J', full: 'It opens on the best part.',
+          half: 'The good part comes a second or two in.', none: 'It starts slow.', fix: 'Open on the drop, a face or a striking moment. No logo, fade or hello first.' },
+        { id: 'change', label: 'Keeps changing after 3 seconds', max: 10, kind: 'J', full: 'It keeps moving: a new angle, person or place.',
+          half: 'It sits on one shot for a while.', none: 'Nothing changes after the start.', fix: 'Change the angle, the person or the place every few seconds, or make it loop.' },
+        { id: 'send', label: 'Worth sending to a friend', max: 15, kind: 'J', full: 'People have a reason to send it on.',
+          half: 'It is nice, but there is no reason to send it.', none: 'It reads like an ad.', fix: 'Give people a reason to send it: news, a reveal, how it was made or a date.' },
+        { id: 'own', label: 'Made by you, and you are in it', max: 10, kind: 'J', full: 'Your own footage, with you in it.',
+          half: 'Your footage, but you are hard to see or hear.', none: 'It is mostly someone else\'s material.', fix: 'Use your own footage with your face, voice or hands in it.' },
+        { id: 'ontext', label: 'One short line on screen', max: 5, kind: 'J', full: 'One plain line on screen says what this is.',
+          half: 'The words on screen are crowded or sit under the buttons.', none: 'No words on screen.', fix: 'Add one short line early, clear of the top and bottom where the buttons sit.' },
+        { id: 'song', label: 'Your song on it', max: 10, kind: 'M', full: 'Your song plays on it.',
+          half: 'Your song is not on it.', none: 'Your song is not on it.', fix: 'Put your song on it in Add audio.' },
+        { id: 'length', label: 'Length', max: 5, kind: 'M', full: 'A good length.',
+          half: 'Under 7 seconds is too short to land.', none: 'Reels of 3 minutes or more got about half the reach.', fix: 'Keep it between 7 seconds and 2 minutes 59.' },
+        { id: 'shape', label: 'Shape and size', max: 5, kind: 'M', full: 'Tall 9:16 and sharp.',
+          half: 'Not quite the tall 9:16 shape, or small.', none: 'Square or wide, so it shows small.', fix: 'Film it tall (9:16) at 1080 by 1920.' },
+        { id: 'caption', label: 'Caption', max: 10, kind: 'M', full: 'The caption does its job.',
+          half: 'The caption misses a few things.', none: 'The caption misses most things.', fix: 'Tighten the caption.' },
+        { id: 'tags', label: 'Tags and location', max: 5, kind: 'M', full: 'People and a place are tagged.',
+          half: 'Only part of the tags are there.', none: 'Nobody and no place is tagged.', fix: 'Tag the people in it (or invite them as a Collab) and add a location.' },
+        { id: 'time', label: 'Time to post', max: 5, kind: 'M', full: 'A strong time to post.',
+          half: 'Not the strongest time.', none: 'A quiet time to post.', fix: 'Post at a better time today.' }
+      ],
+      carousel: [
+        { id: 'first', label: 'First photo stops the scroll', max: 15, kind: 'J', full: 'The first photo stops the scroll.',
+          half: 'The first photo is fine but plain.', none: 'The first photo is blurry, flat or mostly text.', fix: 'Lead with a person or a striking real moment, with a short title or date on an announcement.' },
+        { id: 'slide2', label: 'Slide 2 opens it again, no filler', max: 10, kind: 'J', full: 'Every slide earns its place.',
+          half: 'Some slides are filler.', none: 'The slides repeat each other.', fix: 'Make slide 2 a second opener and cut the filler.' },
+        { id: 'send', label: 'Worth saving or sending', max: 15, kind: 'J', full: 'People have a reason to save or send it.',
+          half: 'It is nice, but there is no reason to save or send it.', none: 'It reads like an ad.', fix: 'Give people a reason to save or send it: news, a date, how it was made.' },
+        { id: 'own', label: 'Made by you, and you are in it', max: 10, kind: 'J', full: 'Your own photos, with you in them.',
+          half: 'Your photos, but you are hard to see.', none: 'Reposted flyers, screenshots or someone else\'s photos.', fix: 'Use your own photos, with you in them.' },
+        { id: 'song', label: 'Your song on it', max: 15, kind: 'M', full: 'Your song plays on it.',
+          half: 'Your song is not on it.', none: 'Your song is not on it, so it cannot play in the Reels feed.', fix: 'Put your song on it. A carousel with your song can play in the Reels feed.' },
+        { id: 'slides', label: 'Number of slides', max: 10, kind: 'M', full: 'Three or more slides.',
+          half: 'Only two slides.', none: 'Only two slides.', fix: 'Add a third slide.' },
+        { id: 'shape', label: 'Shape and size', max: 5, kind: 'M', full: 'All one tall shape, sharp.',
+          half: 'Mixed or wide shapes.', none: 'Mixed or wide shapes, and small.', fix: 'Use SIGNAL\'s 4:5 versions.' },
+        { id: 'caption', label: 'Caption', max: 10, kind: 'M', full: 'The caption does its job.',
+          half: 'The caption misses a few things.', none: 'The caption misses most things.', fix: 'Tighten the caption.' },
+        { id: 'tags', label: 'Tags and location', max: 5, kind: 'M', full: 'People and a place are tagged.',
+          half: 'Only part of the tags are there.', none: 'Nobody and no place is tagged.', fix: 'Tag the people in it (or invite them as a Collab) and add a location.' },
+        { id: 'time', label: 'Time to post', max: 5, kind: 'M', full: 'A strong time to post.',
+          half: 'Not the strongest time.', none: 'A quiet time to post.', fix: 'Post at a better time today.' }
+      ],
+      photo: [
+        { id: 'stop', label: 'The photo stops the scroll', max: 20, kind: 'J', full: 'The photo stops the scroll on its own.',
+          half: 'The photo is fine but plain.', none: 'The photo is blurry, flat or mostly text.', fix: 'Use a photo of a person or a striking real moment.' },
+        { id: 'send', label: 'Worth sending', max: 15, kind: 'J', full: 'People have a reason to send it on.',
+          half: 'It is nice, but there is no reason to send it.', none: 'It reads like an ad.', fix: 'Give people a reason to send it: news, a date, a moment.' },
+        { id: 'own', label: 'Made by you, and you are in it', max: 10, kind: 'J', full: 'Your own photo, with you in it.',
+          half: 'Your photo, but you are hard to see.', none: 'A reposted flyer, screenshot or someone else\'s photo.', fix: 'Use your own photo, with you in it.' },
+        { id: 'sharp', label: 'Sharp and clean', max: 5, kind: 'J', full: 'Sharp and clean.',
+          half: 'A little soft or busy.', none: 'Blurry, a screenshot or mostly text.', fix: 'Use a sharp photo, not a screenshot.' },
+        { id: 'format', label: 'Format', max: 10, kind: 'M', full: 'A strong format.',
+          half: 'A single photo is the weakest format right now.', none: 'A single photo is the weakest format right now.', fix: 'Add 2 or more photos to make it a carousel.' },
+        { id: 'song', label: 'Your song on it', max: 15, kind: 'M', full: 'Your song plays on it.',
+          half: 'Your song is not on it.', none: 'Your song is not on it.', fix: 'Put your song on it in Add audio.' },
+        { id: 'shape', label: 'Shape and size', max: 5, kind: 'M', full: 'Tall and sharp.',
+          half: 'Square, so it shows smaller.', none: 'Wide, so it shows small.', fix: 'Use SIGNAL\'s 4:5 version.' },
+        { id: 'caption', label: 'Caption', max: 10, kind: 'M', full: 'The caption does its job.',
+          half: 'The caption misses a few things.', none: 'The caption misses most things.', fix: 'Tighten the caption.' },
+        { id: 'tags', label: 'Tags and location', max: 5, kind: 'M', full: 'People and a place are tagged.',
+          half: 'Only part of the tags are there.', none: 'Nobody and no place is tagged.', fix: 'Tag the people in it (or invite them as a Collab) and add a location.' },
+        { id: 'time', label: 'Time to post', max: 5, kind: 'M', full: 'A strong time to post.',
+          half: 'Not the strongest time.', none: 'A quiet time to post.', fix: 'Post at a better time today.' }
+      ]
+    },
+    tiktok: {
+      video: [
+        { id: 'hook', label: 'Best moment in the first 2 seconds', max: 20, kind: 'J', full: 'It opens on the best moment.',
+          half: 'The best moment comes a second or two in.', none: 'It starts with an intro.', fix: 'Start on the drop or the best moment, with no intro, so it can loop.' },
+        { id: 'watch', label: 'Keeps people watching to the end', max: 15, kind: 'J', full: 'People have a reason to stay to the end.',
+          half: 'It slows down in the middle.', none: 'There is no reason to stay.', fix: 'Keep the pace up, give a reason to stay, or make it loop.' },
+        { id: 'share', label: 'Worth sharing', max: 10, kind: 'J', full: 'People have a reason to share it.',
+          half: 'It is nice, but there is no reason to share it.', none: 'It reads like an ad.', fix: 'Show how it was made, the sound design, or a reveal.' },
+        { id: 'own', label: 'Made by you, nothing reused', max: 10, kind: 'J', full: 'Your own video.',
+          half: 'Partly reused clips.', none: 'Reused clips with nothing new added cannot reach For You.', fix: 'Use your own footage, or add something new to anything reused.' },
+        { id: 'ontext', label: 'Plain words on screen early', max: 5, kind: 'J', full: 'Plain words on screen in the first 3 seconds.',
+          half: 'The words on screen come late or are hard to read.', none: 'No words on screen.', fix: 'Put plain words on screen in the first 3 seconds: the genre or the song.' },
+        { id: 'song', label: 'Your song as the sound', max: 10, kind: 'M', full: 'Your song is the sound.',
+          half: 'Your song is not the sound.', none: 'Your song is not the sound.', fix: 'Use your song as the sound.' },
+        { id: 'length', label: 'Length', max: 5, kind: 'M', full: 'A good length.',
+          half: 'A little long or short.', none: 'Too short or too long.', fix: 'Keep it between 7 and 60 seconds.' },
+        { id: 'shape', label: 'Shape and size', max: 5, kind: 'M', full: 'Tall 9:16 and sharp.',
+          half: 'Not quite the tall 9:16 shape, or small.', none: 'Square or wide, so it shows small.', fix: 'Film it tall (9:16) at 1080 by 1920.' },
+        { id: 'caption', label: 'Caption', max: 10, kind: 'M', full: 'The caption does its job.',
+          half: 'The caption misses a few things.', none: 'The caption misses most things.', fix: 'Tighten the caption.' },
+        { id: 'tags', label: 'Tags and location', max: 5, kind: 'M', full: 'People and a place are tagged.',
+          half: 'Only part of the tags are there.', none: 'Nobody and no place is tagged.', fix: 'Tag the people in it and add a location.' },
+        { id: 'time', label: 'Time to post', max: 5, kind: 'M', full: 'A strong time to post.',
+          half: 'Not the strongest time.', none: 'A quiet time to post.', fix: 'Post at a better time today.' }
+      ],
+      photos: [
+        { id: 'first', label: 'First photo stops the scroll', max: 15, kind: 'J', full: 'The first photo stops the scroll.',
+          half: 'The first photo is fine but plain.', none: 'The first photo is blurry, flat or mostly text.', fix: 'Lead with a person or a striking real moment.' },
+        { id: 'each', label: 'Each photo adds something', max: 10, kind: 'J', full: 'Every photo adds something.',
+          half: 'Some photos repeat each other.', none: 'The photos repeat each other.', fix: 'Cut the photos that repeat; make each one add something.' },
+        { id: 'share', label: 'Worth sharing', max: 10, kind: 'J', full: 'People have a reason to share it.',
+          half: 'It is nice, but there is no reason to share it.', none: 'It reads like an ad.', fix: 'Give people a reason to share it: news, a date, how it was made.' },
+        { id: 'own', label: 'Made by you', max: 10, kind: 'J', full: 'Your own photos.',
+          half: 'Partly reused pictures.', none: 'Reposted flyers, screenshots or someone else\'s photos.', fix: 'Use your own photos.' },
+        { id: 'format', label: 'Format', max: 10, kind: 'M', full: 'A strong format.',
+          half: 'Video reaches about 5 times as many people as photos.', none: 'Video reaches about 5 times as many people as photos.', fix: 'Make it a video that plays your song.' },
+        { id: 'song', label: 'Your song as the sound', max: 15, kind: 'M', full: 'Your song is the sound.',
+          half: 'Your song is not the sound.', none: 'Your song is not the sound.', fix: 'Use your song as the sound.' },
+        { id: 'count', label: 'Number of photos', max: 5, kind: 'M', full: 'Three or more photos.',
+          half: 'Only two photos.', none: 'Only one photo.', fix: 'Add more photos: three or more do best.' },
+        { id: 'shape', label: 'Shape and size', max: 5, kind: 'M', full: 'All tall 9:16, sharp.',
+          half: 'Not all tall 9:16, or small.', none: 'Not tall and small.', fix: 'Use SIGNAL\'s 9:16 versions.' },
+        { id: 'caption', label: 'Caption', max: 10, kind: 'M', full: 'The caption does its job.',
+          half: 'The caption misses a few things.', none: 'The caption misses most things.', fix: 'Tighten the caption.' },
+        { id: 'tags', label: 'Tags and location', max: 5, kind: 'M', full: 'People and a place are tagged.',
+          half: 'Only part of the tags are there.', none: 'Nobody and no place is tagged.', fix: 'Tag the people in it and add a location.' },
+        { id: 'time', label: 'Time to post', max: 5, kind: 'M', full: 'A strong time to post.',
+          half: 'Not the strongest time.', none: 'A quiet time to post.', fix: 'Post at a better time today.' }
+      ]
+    }
+  };
+  var PB_PLATFORMS = { instagram: 'Instagram', tiktok: 'TikTok' };
+  var METER_BANDS = [
+    { key: 'peak', name: 'Peak', min: 90, max: 100, tone: 'brand' },
+    { key: 'strong', name: 'Strong', min: 70, max: 89, tone: 'brand' },
+    { key: 'moderate', name: 'Moderate', min: 40, max: 69, tone: 'part' },
+    { key: 'weak', name: 'Weak', min: 0, max: 39, tone: 'neg' }
+  ];
+  function clampScore(n) { var x = typeof n === 'number' ? n : parseFloat(n); return isFinite(x) ? Math.max(0, Math.min(100, Math.round(x))) : 0; }
+  function meterBand(score) {
+    var s = clampScore(score);
+    for (var i = 0; i < METER_BANDS.length; i++) {
+      var b = METER_BANDS[i];
+      if (s >= b.min) return { key: b.key, name: b.name, min: b.min, max: b.max, tone: b.tone, score: s };
+    }
+    return null;
+  }
+  function pbFormat(platform, format) {
+    if (platform === 'tiktok') return format === 'carousel' || format === 'photo' || format === 'photos' ? 'photos' : 'video';
+    return format === 'carousel' ? 'carousel' : format === 'photo' ? 'photo' : 'reel';
+  }
+  function pbRules(platform, fmt) {
+    var p = PB_RULES[platform === 'tiktok' ? 'tiktok' : 'instagram'];
+    return p[pbFormat(platform === 'tiktok' ? 'tiktok' : 'instagram', fmt)] || null;
+  }
+  var PB_BANNED = {
+    instagram: ['fyp', 'foryou', 'foryoupage', 'viral', 'explore', 'reels'],
+    tiktok: ['fyp', 'foryou', 'foryoupage', 'viral']
+  };
+  var PB_ASK = /\?|\b(?:send (?:this|it)|save (?:this|it)|tell me|which|what do you)\b/i;
+  var PB_LETTER = /[A-Za-z0-9À-ɏͰ-ϿЀ-ӿ]/;
+  function hasWords(hay, needle) {
+    var n = String(needle || '').trim().toLowerCase();
+    return !!n && String(hay || '').toLowerCase().indexOf(n) >= 0;
+  }
+  function firstLineOf(caption) {
+    var lines = String(caption || '').split(/\r?\n/).map(function (l) { return l.trim(); }).filter(Boolean);
+    return lines.length ? lines[0] : '';
+  }
+  function hashtagsOf(caption) { return (String(caption || '').match(/#[^\s#@.,!?;:]+/g) || []).map(function (t) { return t.slice(1); }); }
+  function captionChecks(platform, caption, ctx) {
+    ctx = ctx || {};
+    var text = String(caption || ''), first = firstLineOf(text), firstLen = codePoints(first).length;
+    var tags = hashtagsOf(text), banned = PB_BANNED[platform === 'tiktok' ? 'tiktok' : 'instagram'];
+    var bannedHit = tags.filter(function (t) { return banned.indexOf(t.toLowerCase()) >= 0; });
+    var bait = PostScore.analyzeCaption(text).bait;
+    var asks = PB_ASK.test(text);
+    var named = hasWords(text, ctx.song) || hasWords(text, ctx.artist);
+    var nameFix = ctx.song ? 'Name the song, "' + ctx.song + '", in the caption.' : 'Name the song or the artist in the caption.';
+    if (platform === 'tiktok') {
+      var plain = first.replace(/[#@][^\s]+/g, ' ');
+      return [
+        { id: 'plain', label: 'Plain first line', ok: PB_LETTER.test(plain), pts: 2, fix: 'Start with a plain line of words, not only hashtags or emoji.' },
+        { id: 'named', label: 'Names the song or the artist', ok: named, pts: 2, fix: nameFix + ' People search TikTok with words.' },
+        { id: 'count', label: '1 to 5 hashtags', ok: tags.length >= 1 && tags.length <= 5, pts: 2, fix: tags.length ? 'Cut to 5 hashtags or fewer.' : 'Add 1 to 5 hashtags that say what it is, like the genre.' },
+        { id: 'banned', label: 'No #fyp-style tags', ok: !bannedHit.length, pts: 2, fix: 'Take out ' + (bannedHit.length ? '#' + bannedHit.join(', #') : '#fyp-style tags') + '. They do nothing.' },
+        { id: 'ask', label: 'Asks something real, no bait', ok: asks && !bait.length, pts: 2,
+          fix: bait.length ? 'Take out "' + bait[0] + '". TikTok keeps posts that beg for likes or follows out of For You.' : 'Ask one real question people can answer.' }
+      ];
+    }
+    var hookOk = firstLen >= 1 && firstLen <= 125 && !/^[#@]/.test(first) && !/^(?:https?:|www\.)/i.test(first) && /^["'“‘(]?[A-Za-z0-9À-ɏͰ-ϿЀ-ӿ]/.test(first);
+    return [
+      { id: 'hook', label: 'First line is a hook', ok: hookOk, pts: 2, fix: firstLen > 125 ? 'Cut the first line to under 125 characters. It is all people see before "more".' : 'Open with a line of words that makes people stop. It is all they see before "more".' },
+      { id: 'named', label: 'Names the song or the artist', ok: named, pts: 2, fix: nameFix },
+      { id: 'ask', label: 'Asks something real', ok: asks, pts: 2, fix: 'Ask one real question, or ask people to send it to someone.' },
+      { id: 'tags', label: '5 hashtags or fewer, no #fyp-style tags', ok: tags.length <= 5 && !bannedHit.length, pts: 2,
+        fix: bannedHit.length ? 'Take out #' + bannedHit.join(', #') + '. They do nothing.' : 'Cut to 5 hashtags or fewer.' },
+      { id: 'bait', label: 'No bait', ok: !bait.length, pts: 2, fix: bait.length ? 'Take out "' + bait[0] + '". Begging for likes cuts likes.' : '' }
+    ];
+  }
+  var zoneFormats = {};
+  function zoneParts(ms, tz) {
+    tz = tz || LA;
+    if (tz === LA) { var p = pacificParts(ms); return { date: p.date, time: p.time, weekday: p.weekday, hour: p.hour, minute: p.minute }; }
+    try {
+      if (typeof Intl !== 'undefined' && Intl.DateTimeFormat) {
+        var f = zoneFormats[tz] || (zoneFormats[tz] = new Intl.DateTimeFormat('en-US', { timeZone: tz, year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hourCycle: 'h23' }));
+        var o = {};
+        f.formatToParts(new Date(ms)).forEach(function (x) { o[x.type] = x.value; });
+        if (+o.year && +o.month && +o.day) {
+          var date = o.year + '-' + o.month + '-' + o.day, hh = (+o.hour) % 24, mi = +o.minute;
+          return { date: date, time: pad2(hh) + ':' + pad2(mi), weekday: weekdayOf(date), hour: hh, minute: mi };
+        }
+      }
+    } catch (e) {   }
+    var d = new Date(ms), dd = d.getFullYear() + '-' + pad2(d.getMonth() + 1) + '-' + pad2(d.getDate());
+    return { date: dd, time: pad2(d.getHours()) + ':' + pad2(d.getMinutes()), weekday: d.getDay(), hour: d.getHours(), minute: d.getMinutes() };
+  }
+  function zoneInstant(date, time, tz) {
+    tz = tz || LA;
+    if (tz === LA) return pacificInstant(date, time);
+    var a = dayMs(date), m = /^(\d{1,2}):(\d{2})/.exec(String(time || ''));
+    if (a === null || !m || +m[1] > 23 || +m[2] > 59) return null;
+    var target = a + (+m[1]) * 3600000 + (+m[2]) * 60000, guess = target;
+    for (var i = 0; i < 3; i++) {
+      var p = zoneParts(guess, tz), had = dayMs(p.date);
+      if (had === null) return null;
+      guess += target - (had + p.hour * 3600000 + p.minute * 60000);
+    }
+    return guess;
+  }
+  function bestInstant(best, nowMs) {
+    if (!best || !best.local) return null;
+    if (best.inWindow) return nowMs;
+    return zoneInstant(best.day === 'tomorrow' ? addDays(best.local.date, 1) : best.local.date, best.at, best.zone);
+  }
+  function zoneCity(tz) { return String(tz || LA).split('/').pop().replace(/_/g, ' '); }
+  function postWindows(platform, weekday) {
+    if (platform === 'tiktok') {
+      if (weekday === 0) return [[9, 11], [19, 21]];
+      if (weekday === 6) return [[19, 21]];
+      return [[15, 17], [19, 21]];
+    }
+    return [[9, 10], [11, 14], [18, 21]];
+  }
+  function inWindows(platform, weekday, hour) {
+    return postWindows(platform, weekday).some(function (w) { return hour >= w[0] && hour < w[1]; });
+  }
+  function timePoints(platform, weekday, hour, releaseDay) {
+    var pts;
+    if (inWindows(platform, weekday, hour)) {
+      if (platform === 'tiktok') pts = weekday === 3 ? 3 : 5;
+      else pts = weekday === 3 || weekday === 4 ? 5 : weekday === 0 || weekday === 6 ? 3 : 4;
+    } else pts = hour >= 7 && hour < 23 ? 2 : 1;
+    if (releaseDay && platform !== 'tiktok') pts = Math.max(pts, 4);
+    return pts;
+  }
+  function clockWords(hh, mm) { return (hh % 12 || 12) + (mm ? ':' + pad2(mm) : '') + (hh < 12 ? ' AM' : ' PM'); }
+  function spanWords(w) {
+    var a = w[0], b = w[1], am = function (x) { return x < 12 ? 'AM' : 'PM'; };
+    return (am(a) === am(b) ? (a % 12 || 12) : clockWords(a, 0)) + ' to ' + clockWords(b, 0);
+  }
+  function windowWords(platform, weekday) {
+    var wins = postWindows(platform === 'tiktok' ? 'tiktok' : 'instagram', typeof weekday === 'number' ? weekday : 3).map(spanWords);
+    return 'Post at ' + (wins.length > 1 ? wins.slice(0, -1).join(', ') + ' or ' + wins[wins.length - 1] : wins[0]) + ', your audience\'s time.';
+  }
+  var DAY_FIX = {
+    instagram: 'Post on a Wednesday or Thursday, the strongest days. Release day always counts as strong.',
+    tiktok: 'Post on a weekday afternoon or Sunday morning. Wednesday is the weakest day.'
+  };
+  var BEST_WHY = {
+    instagram: 'Weekday lunch and early evening do best. Wednesday and Thursday are the strongest days.',
+    tiktok: 'Weekday afternoons, 8 PM and Sunday morning do best. Wednesday is the weakest day.'
+  };
+  var BEST_SOON = {
+    instagram: 'Most views come in the first 3 days, so post when you can answer comments.',
+    tiktok: 'Most views come in the first 10 days, so post when you can answer comments.'
+  };
+  function bestTime(platform, nowMs, timeZone, opts) {
+    var o = typeof opts === 'object' && opts ? opts : { releaseToday: !!opts };
+    platform = platform === 'tiktok' ? 'tiktok' : 'instagram';
+    var tz = timeZone || LA, p = zoneParts(nowMs, tz), city = zoneCity(tz);
+    var wins = postWindows(platform, p.weekday), mins = p.hour * 60 + p.minute, out;
+    var now = wins.filter(function (w) { return mins >= w[0] * 60 && mins < w[1] * 60; })[0];
+    var next = wins.filter(function (w) { return w[0] * 60 > mins; })[0];
+    if (now) out = { inWindow: true, at: p.time, day: 'today', words: 'Now is a good time (' + city + ' time).' };
+    else if (next) out = { inWindow: false, at: pad2(next[0]) + ':00', day: 'today', words: 'Today at ' + clockWords(next[0], 0) + ' (' + city + ' time).' };
+    else {
+      var tw = postWindows(platform, (p.weekday + 1) % 7)[0];
+      out = { inWindow: false, at: pad2(tw[0]) + ':00', day: 'tomorrow',
+        words: 'Today\'s best times have passed. Post now, or tomorrow at ' + clockWords(tw[0], 0) + ' (' + city + ' time).' };
+    }
+    out.why = BEST_WHY[platform];
+    if (o.releaseToday && platform === 'instagram') out.why += ' It is the song\'s release day, so any time today counts as strong.';
+    out.soon = BEST_SOON[platform];
+    if (platform === 'tiktok' && o.igNear) out.soon += ' Don\'t post the same clip on Instagram and TikTok at the same time.';
+    out.zone = tz; out.city = city; out.local = p;
+    return out;
+  }
+  function shapeOf(w, h) { return w > 0 && h > 0 ? w / h : null; }
+  function near(r, target, pct) { return r !== null && Math.abs(r - target) / target <= (pct || 0.03); }
+  function measurePost(draft, ctx) {
+    draft = draft || {}; ctx = ctx || {};
+    var platform = draft.platform === 'tiktok' ? 'tiktok' : 'instagram', fmt = pbFormat(platform, draft.format);
+    var media = draft.media || {}, n = Math.max(0, Math.floor(+media.count || 0)), sec = +media.seconds;
+    var w = +media.width || 0, h = +media.height || 0, r = shapeOf(w, h), short = Math.min(w || 0, h || 0);
+    var shapes = Array.isArray(media.shapes) && media.shapes.length ? media.shapes : (w && h ? [[w, h]] : []);
+    var song = draft.song && draft.song.title ? draft.song : null;
+    var items = {}, gate = { capped: false, why: '' };
+    var put = function (id, got, note) { items[id] = { got: got, note: note || '' }; };
+    var songMax = fmt === 'carousel' || fmt === 'photo' || fmt === 'photos' ? 15 : 10;
+    put('song', song ? songMax : 0, song ? '' : (platform === 'tiktok' ? 'Your song is not the sound.' : 'Your song is not on it.'));
+    if (fmt === 'reel' || fmt === 'video') {
+      if (!(sec > 0)) put('length', 0, 'The length could not be read.');
+      else if (platform === 'tiktok') {
+        put('length', sec < 7 ? 2 : sec <= 60 ? 5 : sec <= 180 ? 4 : 2,
+          sec < 7 ? 'Under 7 seconds is too short to land.' : sec > 180 ? 'Over 3 minutes.' : sec > 60 ? 'A little long: 7 to 60 seconds does best.' : '');
+      } else if (sec >= 180) {
+        put('length', 0, 'Reels of 3 minutes or more got about half the reach.');
+        gate = { capped: true, why: 'Reels of 3 minutes or more got about half the reach, so the score stops at 40.' };
+      } else put('length', sec < 7 ? 3 : 5, sec < 7 ? 'Under 7 seconds is too short to land.' : '');
+      var tall = near(r, 9 / 16), anyTall = r !== null && r < 1;
+      var sz = short >= 1080 ? 2 : short >= 720 ? 1 : 0;
+      put('shape', (tall ? 3 : anyTall ? 1 : 0) + sz, !r ? 'The size could not be read.' : !tall ? (anyTall ? 'Not quite the tall 9:16 shape.' : 'Square or wide, so it shows small.') : sz < 2 ? 'Smaller than 1080 wide, so it looks soft.' : '');
+    } else if (fmt === 'carousel' || fmt === 'photos') {
+      if (fmt === 'carousel') put('slides', n >= 3 ? 10 : n === 2 ? 6 : 0, n >= 3 ? '' : 'Only ' + n + ' slide' + (n === 1 ? '' : 's') + '.');
+      else put('count', n >= 3 ? 5 : n === 2 ? 3 : n === 1 ? 1 : 0, n >= 3 ? '' : 'Only ' + n + ' photo' + (n === 1 ? '' : 's') + '.');
+      var ratios = shapes.map(function (s) { return shapeOf(+s[0], +s[1]); });
+      var shorts = shapes.map(function (s) { return Math.min(+s[0] || 0, +s[1] || 0); });
+      var minShort = shorts.length ? Math.min.apply(null, shorts) : 0;
+      if (fmt === 'carousel') {
+        var one = ratios.length > 0 && ratios.every(function (x) { return x !== null && Math.abs(x - ratios[0]) / ratios[0] <= 0.03; });
+        var tallC = ratios.length > 0 && ratios.every(function (x) { return near(x, 4 / 5) || near(x, 3 / 4); });
+        put('shape', (one ? 2 : 0) + (tallC ? 2 : 0) + (minShort >= 1080 ? 1 : 0), !ratios.length ? 'The sizes could not be read.' : !one ? 'The photos are not all one shape.' : !tallC ? 'Not the tall 4:5 shape.' : minShort < 1080 ? 'Smaller than 1080 wide, so they look soft.' : '');
+      } else {
+        var allTall = ratios.length > 0 && ratios.every(function (x) { return near(x, 9 / 16); });
+        put('shape', (allTall ? 3 : 0) + (minShort >= 1080 ? 2 : 0), !ratios.length ? 'The sizes could not be read.' : !allTall ? 'Not all tall 9:16.' : minShort < 1080 ? 'Smaller than 1080 wide, so they look soft.' : '');
+      }
+      if (fmt === 'photos') put('format', 3, 'Video reaches about 5 times as many people as photos.');
+    } else {
+      put('format', 4, 'A single photo is the weakest format right now.');
+      var sz1 = short >= 1080 ? 2 : 0;
+      var sh = r === null ? 0 : (near(r, 4 / 5) || near(r, 3 / 4)) ? 3 : near(r, 1) ? 1 : r < 1 ? 1 : 0;
+      put('shape', sh + sz1, r === null ? 'The size could not be read.' : sh === 3 ? (sz1 ? '' : 'Smaller than 1080 wide, so it looks soft.') : sh === 1 ? 'Square, so it shows smaller than 4:5.' : 'Wide, so it shows small.');
+    }
+    var checks = captionChecks(platform, draft.caption, { song: song ? song.title : '', artist: draft.artist || '' });
+    var capGot = checks.reduce(function (s, c) { return s + (c.ok ? c.pts : 0); }, 0);
+    var missed = checks.filter(function (c) { return !c.ok; });
+    items.caption = { got: capGot, note: missed.length ? missed.map(function (c) { return c.label; }).join(', ') + ': not yet.' : '', checks: checks };
+    var tagged = Array.isArray(draft.tags) && draft.tags.filter(function (t) { return String(t || '').trim(); }).length > 0;
+    var placed = !!String(draft.location || '').trim();
+    put('tags', (tagged ? 3 : 0) + (placed ? 2 : 0), tagged && placed ? '' : !tagged && !placed ? 'Nobody and no place is tagged.' : !tagged ? 'Nobody is tagged.' : 'No location.');
+    var at = typeof draft.at === 'number' && isFinite(draft.at) ? draft.at : typeof ctx.now === 'number' && isFinite(ctx.now) ? ctx.now : 0;
+    var zp = zoneParts(at, ctx.timeZone || LA);
+    var relDay = !!(song && song.release_day && song.release_day === zp.date);
+    var tp = timePoints(platform, zp.weekday, zp.hour, relDay);
+    put('time', tp, tp >= 5 ? '' : 'Not the strongest time to post.');
+    return { items: items, gate: gate, platform: platform, fmt: fmt };
+  }
+  function intIn(v, max) { var x = Math.round(+v); return isFinite(x) ? Math.max(0, Math.min(max, x)) : 0; }
+  function heldWords(rule, it) {
+    if (rule.kind === 'J' && !it.checked) return rule.label + ': not checked this time.';
+    if (it.note) return it.note;
+    return it.got * 2 >= rule.max ? rule.half : (rule.none || rule.half);
+  }
+  function scorePost(platform, fmt, measured, judged, gates) {
+    platform = platform === 'tiktok' ? 'tiktok' : 'instagram';
+    var rules = pbRules(platform, fmt) || [];
+    var m = measured && measured.items ? measured.items : (measured || {});
+    var g = gates || (measured && measured.gate) || {};
+    var looked = !!judged && typeof judged === 'object';
+    var items = rules.map(function (r) {
+      var src = r.kind === 'J' ? (looked ? judged[r.id] : null) : m[r.id];
+      var v = src && typeof src === 'object' ? src.got : src;
+      var got, checked = true;
+      if (r.kind === 'J' && !looked) { got = Math.floor(r.max / 2); checked = false; } else got = intIn(v, r.max);
+      return { id: r.id, label: r.label, max: r.max, got: got, kind: r.kind, checked: checked,
+        note: src && typeof src === 'object' && src.note ? String(src.note).slice(0, 200) : '' };
+    });
+    var raw = items.reduce(function (s, it) { return s + it.got; }, 0);
+    var capped = !!(g && g.capped);
+    var score = capped ? Math.min(raw, 40) : raw;
+    var byId = {};
+    rules.forEach(function (r) { byId[r.id] = r; });
+    var fixes = items.filter(function (it) { return it.got < it.max; }).map(function (it) {
+      var r = byId[it.id], words = r.fix;
+      if (it.id === 'caption' && m.caption && m.caption.checks) {
+        var miss = m.caption.checks.filter(function (c) { return !c.ok && c.fix; });
+        if (miss.length) words = miss[0].fix;
+      }
+      return { id: it.id, pts: it.max - it.got, words: words };
+    }).sort(function (a, b) { return b.pts - a.pts; });
+    var helped = items.filter(function (it) { return it.got >= it.max; }).map(function (it) { return byId[it.id].full; });
+    var held = items.filter(function (it) { return it.got < it.max; }).sort(function (a, b) { return (b.max - b.got) - (a.max - a.got); })
+      .map(function (it) { return heldWords(byId[it.id], it); });
+    var band = meterBand(score);
+    var why = score >= 100 ? 'It\'s at Peak. After you post, answer comments in the first few hours to keep it there.'
+      : fixes.length ? fixes[0].words : '';
+    if (!looked) why = 'SIGNAL couldn\'t look at the pictures this time, so it counted the middle. ' + why;
+    if (capped) why = (g.why || 'The score stops at 40.') + ' ' + why;
+    return { score: score, band: band, items: items, fixes: fixes, helped: helped, held: held, why: why.trim(), judged: looked,
+      capped: capped, gateWhy: capped ? (g.why || '') : '', platform: platform, fmt: pbFormat(platform, fmt) };
+  }
+  function roundUpNice(x) {
+    if (!(x > 0)) return 0;
+    if (x < 100) return Math.ceil(x / 5) * 5;
+    if (x < 1000) return Math.ceil(x / 10) * 10;
+    return Math.ceil(x / 100) * 100;
+  }
+  function plainHandle(s) { return String(s || '').replace(/^@+/, '').trim().toLowerCase(); }
+  function isoMs(s) { var t = Date.parse(String(s || '')); return isFinite(t) ? t : null; }
+  function postTargets(room, platform, account, format, opts) {
+    room = room || {}; opts = opts || {};
+    var who = plainHandle(account), results = Array.isArray(room.results) ? room.results : [];
+    var resOf = function (p) {
+      var mine = results.filter(function (r) { return r && r.post_id === p.id; });
+      return mine.filter(function (r) { return r.checkpoint === '24h'; })[0] || mine.filter(function (r) { return r.checkpoint === '7d'; })[0] || null;
+    };
+    var pool = (Array.isArray(room.posts) ? room.posts : []).filter(function (p) {
+      if (!p || (p.platform || 'instagram') !== platform) return false;
+      var a = plainHandle(p.account);
+      return a === who || (!a && !!opts.first);
+    }).map(function (p) { return { p: p, r: resOf(p) }; }).filter(function (x) {
+      if (!x.r) return false;
+      var boosted = typeof x.r.boosted === 'boolean' ? x.r.boosted : !!x.p.boosted;
+      return !boosted;
+    }).sort(function (a, b) {
+      return (isoMs(b.p.posted_at) || isoMs(b.p.planned_at) || 0) - (isoMs(a.p.posted_at) || isoMs(a.p.planned_at) || 0);
+    }).slice(0, 5);
+    var same = pool.filter(function (x) { return x.p.format === format; });
+    if (same.length >= 3) pool = same;
+    var used7d = pool.some(function (x) { return x.r.checkpoint === '7d'; });
+    var out = { views: null, likes: null, comments: null, median: {}, n: pool.length, sameFormat: same.length >= 3 };
+    ['views', 'likes', 'comments'].forEach(function (k) {
+      var vals = pool.map(function (x) { return x.r[k]; }).filter(function (v) { return typeof v === 'number' && isFinite(v); });
+      if (vals.length < 3) return;
+      var md = median(vals);
+      out.median[k] = md;
+      var t = roundUpNice(md * 2);
+      if (k === 'views') t = Math.max(300, t);
+      out[k] = t;
+    });
+    if (out.views === null && out.likes === null && out.comments === null) return null;
+    out.basis = 'Double the middle of your last ' + pool.length + (out.sameFormat ? ' ' + (FORMAT_PLURAL[format] || 'posts') : ' posts') +
+      ' that weren\'t boosted, after 24 hours' + (used7d ? ' (or 7 days, where that is all there is)' : '') + '.';
+    return out;
+  }
+  var FORMAT_PLURAL = { photo: 'photo posts', carousel: 'carousels', reel: 'Reels', video: 'videos' };
+  function boostLine(platform, hasSong, fmt) {
+    var out = ['If it gets there in its first 24 hours, it beat your normal: that\'s your go to boost it.'];
+    if (platform === 'tiktok') out.push('Boost only a video that uses your song.');
+    else if (!hasSong && fmt === 'reel') out.push('Put your song on it before you boost, so the boost carries your song.');
+    else if (!hasSong) out.push('A photo boost can\'t carry your song. If this one hits the target, boost a Reel with the song instead.');
+    return out.join(' ');
+  }
+  function utf8Bytes(s) {
+    s = String(s); var n = 0;
+    for (var i = 0; i < s.length; i++) {
+      var c = s.charCodeAt(i);
+      if (c < 0x80) n += 1; else if (c < 0x800) n += 2;
+      else if (c >= 0xD800 && c <= 0xDBFF && i + 1 < s.length) { n += 4; i++; } else n += 3;
+    }
+    return n;
+  }
+  function jsonBytes(o) { return utf8Bytes(JSON.stringify(o)); }
+  function cutWords(s, n) { var cp = codePoints(String(s || '')); return cp.length > n ? cp.slice(0, n - 1).join('') + '…' : cp.join(''); }
+  var PACK_LIMIT = 7600;
+  function packAnswers(result, extra) {
+    result = result || {}; extra = extra || {};
+    var a = { v: PLAYBOOK_VERSION, fmt: result.fmt || '', judged: !!result.judged,
+      items: (result.items || []).map(function (it) { return [it.id, it.got]; }),
+      fixes: (result.fixes || []).map(function (f) { return [f.pts, String(f.words || '')]; }),
+      helped: (result.helped || []).map(String), held: (result.held || []).map(String) };
+    if (result.capped) a.capped = String(result.gateWhy || 'capped');
+    if (extra.before != null) a.before = String(extra.before);
+    if (extra.best) a.best = { at: String(extra.best.at || ''), words: String(extra.best.words || '') };
+    if (extra.targets) a.targets = { views: extra.targets.views, likes: extra.targets.likes, comments: extra.targets.comments, basis: String(extra.targets.basis || '') };
+    if (extra.media) a.media = { n: extra.media.count || extra.media.n || 0, w: extra.media.width || extra.media.w || 0, h: extra.media.height || extra.media.h || 0, sec: extra.media.seconds || extra.media.sec || 0 };
+    if (Array.isArray(extra.tags)) a.tags = extra.tags.map(function (t) { return String(t); });
+    if (extra.loc) a.loc = String(extra.loc);
+    a.pinned = !!extra.pinned;
+    if (jsonBytes(a) > PACK_LIMIT) delete a.before;
+    if (jsonBytes(a) > PACK_LIMIT) {
+      a.fixes = a.fixes.map(function (f) { return [f[0], cutWords(f[1], 140)]; });
+      a.helped = a.helped.map(function (s) { return cutWords(s, 140); });
+      a.held = a.held.map(function (s) { return cutWords(s, 140); });
+      if (a.best) a.best.words = cutWords(a.best.words, 140);
+      if (a.targets) a.targets.basis = cutWords(a.targets.basis, 140);
+    }
+    if (jsonBytes(a) > PACK_LIMIT) { delete a.helped; delete a.held; }
+    if (jsonBytes(a) > PACK_LIMIT) { if (a.tags) a.tags = a.tags.slice(0, 10).map(function (t) { return cutWords(t, 60); }); if (a.loc) a.loc = cutWords(a.loc, 100); }
+    if (jsonBytes(a) > PACK_LIMIT) a = { v: a.v, fmt: a.fmt, judged: a.judged, items: a.items, pinned: a.pinned };
+    return a;
+  }
+  function readAnswers(post) {
+    var a = post && post.answers;
+    if (!a || typeof a !== 'object' || a.v !== PLAYBOOK_VERSION || !Array.isArray(a.items)) return null;
+    var items = {};
+    a.items.forEach(function (x) { if (Array.isArray(x) && typeof x[0] === 'string') items[x[0]] = +x[1]; });
+    return { v: a.v, fmt: a.fmt || '', judged: !!a.judged, items: items, capped: a.capped || '',
+      fixes: Array.isArray(a.fixes) ? a.fixes.filter(Array.isArray).map(function (f) { return { pts: +f[0] || 0, words: String(f[1] || '') }; }) : null,
+      helped: Array.isArray(a.helped) ? a.helped.map(String) : null, held: Array.isArray(a.held) ? a.held.map(String) : null,
+      before: typeof a.before === 'string' ? a.before : null, best: a.best || null, targets: a.targets || null, media: a.media || null,
+      tags: Array.isArray(a.tags) ? a.tags.map(String) : [], loc: typeof a.loc === 'string' ? a.loc : '', pinned: !!a.pinned };
+  }
+  function postResult(post) {
+    if (!post) return null;
+    var platform = post.platform === 'tiktok' ? 'tiktok' : 'instagram';
+    var a = readAnswers(post);
+    if (a) {
+      var fmt = a.fmt || pbFormat(platform, post.format);
+      var measured = {}, judged = a.judged ? {} : null;
+      (pbRules(platform, fmt) || []).forEach(function (r) {
+        if (!(r.id in a.items)) return;
+        if (r.kind === 'J') { if (judged) judged[r.id] = a.items[r.id]; } else measured[r.id] = a.items[r.id];
+      });
+      var res = scorePost(platform, fmt, measured, judged, a.capped ? { capped: true, why: a.capped === 'capped' ? '' : a.capped } : null);
+      if (a.fixes && a.fixes.length) res.fixes = a.fixes.slice().sort(function (x, y) { return y.pts - x.pts; });
+      if (a.helped) res.helped = a.helped;
+      if (a.held) res.held = a.held;
+      if (typeof post.score === 'number' && isFinite(post.score)) { res.score = clampScore(post.score); res.band = meterBand(res.score); }
+      res.why = res.score >= 100 ? 'It\'s at Peak. After you post, answer comments in the first few hours to keep it there.'
+        : (res.judged ? '' : 'SIGNAL couldn\'t look at the pictures this time, so it counted the middle. ') + (res.fixes.length ? res.fixes[0].words : '');
+      res.source = 'playbook';
+      return res;
+    }
+    var v1 = post.answers && typeof post.answers === 'object' && post.answers.st && PostScore.DEFS[post.answers.fmt] ? post.answers : null;
+    if (v1) {
+      var w = v1.when && typeof v1.when === 'object' ? postWhen({ date: v1.when.date, time: v1.when.time, release: !!v1.when.release }) : null;
+      w = w || postWhen({ at: isoMs(post.posted_at) || isoMs(post.planned_at) || isoMs(post.created_at) || 0 });
+      var r1 = PostScore.score(v1.fmt, v1.st, w);
+      var score = typeof post.score === 'number' && isFinite(post.score) ? clampScore(post.score) : clampScore(r1.total);
+      var fx = r1.moves.map(function (mv) {
+        var words = mv.id === 'time' ? windowWords(platform) : mv.id === 'day' ? DAY_FIX[platform] : (mv.fix || mv.label);
+        return { id: mv.id, pts: mv.gain, words: words };
+      });
+      return { score: score, band: meterBand(score), items: r1.items.map(function (it) { return { id: it.id, label: it.label, max: it.max, got: it.earned, kind: 'M', checked: true }; }),
+        fixes: fx, helped: r1.items.filter(function (it) { return it.earned >= it.max; }).map(function (it) { return it.label; }),
+        held: r1.items.filter(function (it) { return it.earned < it.max; }).map(function (it) { return it.label; }),
+        why: score >= 100 ? 'It\'s at Peak. After you post, answer comments in the first few hours to keep it there.' : fx.length ? fx[0].words : '',
+        judged: true, source: 'v1' };
+    }
+    if (typeof post.score === 'number' && isFinite(post.score)) {
+      var s = clampScore(post.score);
+      return { score: s, band: meterBand(s), items: [], fixes: [], helped: [], held: [], judged: true, source: 'score',
+        why: s >= 100 ? 'It\'s at Peak. After you post, answer comments in the first few hours to keep it there.' : 'Score it again to see why.' };
+    }
+    return null;
+  }
+  function capTokens(s) { return String(s == null ? '' : s).match(/\s+|[^\s]+/g) || []; }
+  function pushSeg(out, t, s) {
+    if (!s) return;
+    var last = out[out.length - 1];
+    if (last && last.t === t) last.s += s; else out.push({ t: t, s: s });
+  }
+  function captionDiff(before, after) {
+    var a = capTokens(before), b = capTokens(after), out = [];
+    var p = 0;
+    while (p < a.length && p < b.length && a[p] === b[p]) p++;
+    var q = 0;
+    while (q < a.length - p && q < b.length - p && a[a.length - 1 - q] === b[b.length - 1 - q]) q++;
+    var A = a.slice(p, a.length - q), Bt = b.slice(p, b.length - q), n = A.length, m = Bt.length;
+    pushSeg(out, 'same', a.slice(0, p).join(''));
+    if (!n || !m || n * m > 4e6) {
+      pushSeg(out, 'removed', A.join(''));
+      pushSeg(out, 'added', Bt.join(''));
+    } else {
+      var W = m + 1, L = new Int32Array((n + 1) * W);
+      for (var i = n - 1; i >= 0; i--) {
+        for (var j = m - 1; j >= 0; j--) {
+          L[i * W + j] = A[i] === Bt[j] ? L[(i + 1) * W + j + 1] + 1 : Math.max(L[(i + 1) * W + j], L[i * W + j + 1]);
+        }
+      }
+      var x = 0, y = 0;
+      while (x < n && y < m) {
+        if (A[x] === Bt[y]) { pushSeg(out, 'same', A[x]); x++; y++; }
+        else if (L[(x + 1) * W + y] >= L[x * W + y + 1]) { pushSeg(out, 'removed', A[x]); x++; }
+        else { pushSeg(out, 'added', Bt[y]); y++; }
+      }
+      while (x < n) { pushSeg(out, 'removed', A[x]); x++; }
+      while (y < m) { pushSeg(out, 'added', Bt[y]); y++; }
+    }
+    pushSeg(out, 'same', a.slice(a.length - q).join(''));
+    var tidy = [], run = null;
+    var flush = function () { if (run) { pushSeg(tidy, 'removed', run.r); pushSeg(tidy, 'added', run.a); run = null; } };
+    var small = function (txt) { var w = txt.trim() ? txt.trim().split(/\s+/).length : 0; return w === 0 || (w <= 2 && txt.length <= 14); };
+    out.forEach(function (sg, k) {
+      var lone = sg.t === 'same' && small(sg.s) && k > 0 && k < out.length - 1 && out[k - 1].t !== 'same' && out[k + 1].t !== 'same';
+      if (sg.t === 'same' && !lone) { flush(); pushSeg(tidy, 'same', sg.s); return; }
+      if (!run) run = { r: '', a: '' };
+      if (lone) { run.r += sg.s; run.a += sg.s; } else if (sg.t === 'removed') run.r += sg.s; else run.a += sg.s;
+    });
+    flush();
+    return tidy;
+  }
+  function segmentsText(segs, side) {
+    var skip = side === 'before' ? 'added' : 'removed';
+    return (Array.isArray(segs) ? segs : []).filter(function (x) { return x && x.t !== skip; }).map(function (x) { return String(x.s); }).join('');
+  }
+  var PB_ASK_ADD = { instagram: 'Send this to someone who needs it.', tiktok: 'Which part hits hardest?' };
+  var PB_FOLLOW_ADD = 'Save it and follow for the next one.';
+  var PB_CAP_MAX = { instagram: 2200, tiktok: 4000 };
+  function sentencesOf(line) { return line.match(/[^.!?]+[.!?]*\s*|[.!?]+\s*/g) || (line ? [line] : []); }
+  function tidyLine(s) { return s.replace(/[ \t]{2,}/g, ' ').trim(); }
+  function upgradeCaption(platform, caption, ctx) {
+    ctx = ctx || {};
+    platform = platform === 'tiktok' ? 'tiktok' : 'instagram';
+    var banned = PB_BANNED[platform], added = [], removed = [];
+    var lines = String(caption == null ? '' : caption).replace(/\r\n?/g, '\n').split('\n');
+    var tagsKept = 0;
+    lines = lines.map(function (line) {
+      var was = line;
+      var parts = sentencesOf(line), kept = parts.filter(function (sx) {
+        var bait = PostScore.analyzeCaption(sx).bait;
+        if (bait.length) { removed.push(sx.trim()); return false; }
+        return true;
+      });
+      if (kept.length !== parts.length) line = kept.join('');
+      line = line.replace(/([ \t]*)#([^\s#@.,!?;:]+)/g, function (mm, sp, tag) {
+        if (banned.indexOf(tag.toLowerCase()) >= 0 || tagsKept >= 5) { removed.push('#' + tag); return ''; }
+        tagsKept += 1;
+        return mm;
+      });
+      return line === was ? { s: line, changed: false } : { s: tidyLine(line), changed: true };
+    }).filter(function (l) { return !(l.changed && !l.s); }).map(function (l) { return l.s; });
+    var text = lines.join('\n');
+    var song = ctx.song && String(ctx.song.title || '').trim() ? ctx.song : null;
+    var today = isDay(ctx.today) ? ctx.today : null;
+    var adds = [];
+    if (song && !hasWords(text, song.title)) {
+      var title = String(song.title).trim(), rd = isDay(song.release_day) ? song.release_day : null;
+      var out = song.out === true || (rd && today && rd <= today);
+      if (out) adds.push('"' + title + '" is out now.');
+      else if (rd) adds.push('"' + title + '" is out ' + dayWords(rd) + '.');
+    }
+    if (!PB_ASK.test(text)) adds.push(PB_ASK_ADD[platform]);
+    if (song && today && isDay(song.release_day) && !/\bfollow\b/i.test(text)) {
+      var off = daysBetween(song.release_day, today);
+      if (off >= -7 && off <= 14) adds.push(PB_FOLLOW_ADD);
+    }
+    if (adds.length) {
+      var all = text.split('\n'), at = all.length;
+      while (at > 0 && !all[at - 1].trim()) at -= 1;
+      while (at > 0 && /^\s*(?:[#@][^\s]+\s*)+$/.test(all[at - 1])) at -= 1;
+      var line2 = adds.join(' ');
+      var next = text.trim() ? all.slice(0, at).concat([line2], all.slice(at)) : [line2];
+      var cand = next.join('\n');
+      if (codePoints(cand).length <= PB_CAP_MAX[platform]) { text = cand; added = adds.slice(); }
+    }
+    return { after: text, added: added, removed: removed };
+  }
+  function clamp01(v, dflt) { var x = +v; return isFinite(x) ? Math.max(0, Math.min(1, x)) : dflt; }
+  function cropPlan(w, h, platform, fmt, focus) {
+    w = +w; h = +h;
+    if (!(w > 0 && h > 0)) return null;
+    var tall = platform === 'tiktok' || fmt === 'reel' || fmt === 'video';
+    var outW = 1080, outH = tall ? 1920 : 1350, ratio = outW / outH, shape = tall ? '9:16' : '4:5';
+    var fx = clamp01(focus && focus.x, 0.5), fy = clamp01(focus && focus.y, 0.5);
+    var r = w / h, sx = 0, sy = 0, sw = w, sh = h, cut = 'none';
+    if (Math.abs(r - ratio) / ratio > 0.01) {
+      if (r > ratio) { sw = Math.round(h * ratio); sx = Math.max(0, Math.min(w - sw, Math.round(fx * w - sw / 2))); cut = 'sides'; }
+      else { sh = Math.round(w / ratio); sy = Math.max(0, Math.min(h - sh, Math.round(fy * h - sh / 2))); cut = 'top and bottom'; }
+    }
+    var soft = sw < 1080;
+    var note = cut === 'none' ? 'Already the best shape.' : 'Cropped from the ' + cut + ' to ' + shape + '.';
+    if (soft) note += ' This photo is smaller than 1080 wide, so it will look soft.';
+    return { sx: sx, sy: sy, sw: sw, sh: sh, outW: outW, outH: outH, soft: soft, cut: cut, shape: shape, note: note };
+  }
+  function frameTimes(seconds) {
+    var s = +seconds, out = [];
+    if (!(s > 0)) return [0];
+    [0.3, 1, 2, 3, s * 0.5, s * 0.9].forEach(function (t) {
+      t = Math.round(t * 10) / 10;
+      if (t >= 0 && t < s - 0.05 && out.indexOf(t) < 0) out.push(t);
+    });
+    out.sort(function (a, b) { return a - b; });
+    return out.length ? out.slice(0, 6) : [0];
+  }
+  function analysisRequest(draft, ctx) {
+    draft = draft || {}; ctx = ctx || {};
+    var platform = draft.platform === 'tiktok' ? 'tiktok' : 'instagram';
+    var measured = ctx.measured || measurePost(draft, ctx);
+    var m = {};
+    Object.keys(measured.items).forEach(function (id) { m[id] = measured.items[id].got; });
+    var media = draft.media || {};
+    var at = typeof draft.at === 'number' && isFinite(draft.at) ? draft.at : (typeof ctx.now === 'number' ? ctx.now : 0);
+    var zp = zoneParts(at, ctx.timeZone || LA);
+    var song = draft.song && String(draft.song.title || '').trim() ? draft.song : null;
+    var t = ctx.targets || null, b = ctx.best || null;
+    return {
+      v: 1, platform: platform, format: pbFormat(platform, draft.format), caption: String(draft.caption || '').slice(0, 4000),
+      song: song ? { title: String(song.title).slice(0, 200), artists: String(song.artists || '').slice(0, 200), release_day: isDay(song.release_day) ? song.release_day : null, out: !!song.out } : null,
+      artist: String(draft.artist || '').slice(0, 120),
+      tags: (Array.isArray(draft.tags) ? draft.tags : []).map(function (x) { return String(x).slice(0, 80); }).filter(Boolean).slice(0, 20),
+      location: String(draft.location || '').slice(0, 120),
+      media: { count: Math.max(0, Math.floor(+media.count || 0)), width: +media.width || 0, height: +media.height || 0, seconds: +media.seconds || 0 },
+      measured: m, gate: { capped: !!measured.gate.capped, why: String(measured.gate.why || '') },
+      local: { date: zp.date, time: zp.time, weekday: zp.weekday, time_zone: ctx.timeZone || LA, phone_zone: String(ctx.phoneZone || '') },
+      best_time: b ? { at: b.at, day: b.day, words: b.words, why: b.why } : null,
+      history: t ? { posts: t.n, median: t.median || {}, targets: { views: t.views, likes: t.likes, comments: t.comments, basis: t.basis } } : null
+    };
+  }
+  function cleanWords(v, n) { return typeof v === 'string' ? cutWords(v.replace(/\s+/g, ' ').trim(), n || 200) : ''; }
+  function cleanList(v, n) { return (Array.isArray(v) ? v : []).map(function (x) { return cleanWords(x, 200); }).filter(Boolean).slice(0, n || 6); }
+  function mergeAnalysis(measured, server, ctx) {
+    ctx = ctx || {};
+    var draft = ctx.draft || {}, platform = measured.platform, fmt = measured.fmt, rules = pbRules(platform, fmt) || [];
+    var srv = server && typeof server === 'object' && !server.error ? server : null;
+    var judged = null, gate = { capped: !!measured.gate.capped, why: measured.gate.why || '' };
+    if (srv) {
+      judged = {};
+      var given = {};
+      (Array.isArray(srv.items) ? srv.items : []).forEach(function (it) { if (it && typeof it.id === 'string') given[it.id] = it; });
+      rules.forEach(function (r) {
+        if (r.kind !== 'J') return;
+        var it = given[r.id];
+        var got = it && isFinite(+it.got) ? intIn(it.got, r.max) : Math.floor(r.max / 2);
+        judged[r.id] = { got: got, note: it ? cleanWords(it.note, 200) : '' };
+      });
+      if (srv.gate && srv.gate.capped === true && !gate.capped) gate = { capped: true, why: cleanWords(srv.gate.why, 200) || 'It looks like mostly someone else\'s material, so the score stops at 40.' };
+    }
+    var before = String(draft.caption == null ? '' : draft.caption);
+    var upCtx = { song: ctx.song || draft.song || null, artist: draft.artist || '', today: ctx.today };
+    var after = null;
+    if (srv && srv.caption && typeof srv.caption.after === 'string' && srv.caption.after.trim() &&
+        codePoints(srv.caption.after).length <= PB_CAP_MAX[platform]) after = srv.caption.after.replace(/\r\n?/g, '\n');
+    var up = upgradeCaption(platform, after === null ? before : after, upCtx);
+    after = up.after;
+    var segs = captionDiff(before, after);
+    var mineM = measured;
+    var takeM = after === before ? measured : measurePost(Object.assign({}, draft, { caption: after }), ctx.measureCtx || {});
+    var fixWords = {};
+    if (srv) (Array.isArray(srv.fixes) ? srv.fixes : []).forEach(function (f) { if (f && typeof f.id === 'string' && cleanWords(f.words)) fixWords[f.id] = cleanWords(f.words); });
+    var finish = function (res) {
+      res.fixes.forEach(function (f) { var r = rules.filter(function (x) { return x.id === f.id; })[0]; if (r && r.kind === 'J' && fixWords[f.id]) f.words = fixWords[f.id]; });
+      if (res.fixes.length && res.score < 100) {
+        res.why = (res.judged ? '' : 'SIGNAL couldn\'t look at the pictures this time, so it counted the middle. ') + (res.capped ? (res.gateWhy || '') + ' ' : '') + res.fixes[0].words;
+        res.why = res.why.replace(/\s+/g, ' ').trim();
+      }
+      return res;
+    };
+    var res = finish(scorePost(platform, fmt, takeM, judged, gate));
+    var mine = finish(scorePost(platform, fmt, mineM, judged, gate));
+    var images = [];
+    if (srv && Array.isArray(srv.images)) {
+      srv.images.forEach(function (im) {
+        if (!im || typeof im !== 'object') return;
+        var i = Math.floor(+im.index);
+        if (!(i >= 0 && i < 40)) return;
+        images.push({ index: i, focus: { x: clamp01(im.focus && im.focus.x, 0.5), y: clamp01(im.focus && im.focus.y, 0.5) }, note: cleanWords(im.note, 200) });
+      });
+    }
+    var video = null;
+    if (fmt === 'reel' || fmt === 'video') {
+      var meas = [];
+      ['length', 'shape'].forEach(function (id) {
+        var it = measured.items[id], r = rules.filter(function (x) { return x.id === id; })[0];
+        if (!it || !r) return;
+        meas.push({ ok: it.got >= r.max, words: it.got >= r.max ? r.full : (it.note || r.half) });
+      });
+      video = { working: srv && srv.video ? cleanList(srv.video.working, 6) : [], not_working: srv && srv.video ? cleanList(srv.video.not_working, 6) : [], measured: meas, looked: !!srv };
+    }
+    res.mine = mine;
+    res.caption = { before: before, after: after, segments: segs, changed: after !== before, added: up.added, removed: up.removed };
+    res.images = images;
+    res.video = video;
+    res.best = ctx.best || null;
+    res.targets = ctx.targets || null;
+    res.boost = boostLine(platform, !!(ctx.hasSong || (draft.song && draft.song.title)), fmt);
+    res.offline = !srv;
+    return res;
+  }
+  var SONG_RULES = {
+    spotify: [
+      { id: 'perlistener', label: 'Plays per listener', max: 30, fix: 'More plays per listener: post a clip that sends your own fans back to it, and add an alternate version' },
+      { id: 'saves', label: 'Save rate', max: 30, fix: 'More saves: ask for a follow and a save in every post' },
+      { id: 'adds', label: 'Playlist adds', max: 15, fix: 'More playlist adds: ask fans to put it on their own playlists' },
+      { id: 'other', label: 'Listening from "Other"', max: 10, fix: 'Lower the "Other" share: check Discovered On and the new playlists for bot signs' },
+      { id: 'year', label: 'Over 1,000 streams in 12 months', max: 15, fix: 'Get it over 1,000 streams in 12 months: under that it earns no recording royalties' }
+    ],
+    apple: [
+      { id: 'perlistener', label: 'Plays per listener', max: 25, fix: 'More plays per Apple Music listener: post the Promote card so fans play it there' },
+      { id: 'usual', label: 'Against your usual song', max: 25, fix: 'Catch up with your usual song: share the Promote card and the pre-add link in the next post' },
+      { id: 'shazams', label: 'Shazams', max: 20, fix: 'More Shazams: play it where people hear it out loud, then use the Shazam cities in the next post' },
+      { id: 'adds', label: 'Playlist adds', max: 15, fix: 'No playlist adds yet: ask your distributor to file an Apple re-promotion pitch with the new numbers' },
+      { id: 'year', label: 'Over 1,000 plays in 12 months', max: 15, fix: 'Get it over 1,000 plays in 12 months' }
+    ]
+  };
+  function numOrNull(v) { return typeof v === 'number' && isFinite(v) ? v : null; }
+  function hasNums(w) { return numOrNull(w.streams) !== null || numOrNull(w.listeners) !== null; }
+  function songWindow(song) {
+    var all = (song && Array.isArray(song.weeks) ? song.weeks : []).filter(function (w) { return w && isDay(w.week) && hasNums(w); })
+      .slice().sort(function (a, b) { return a.week < b.week ? -1 : a.week > b.week ? 1 : 0; });
+    var R = song && isDay(song.releaseDay) ? song.releaseDay : null, kind = 'none', weeks = [];
+    if (R) {
+      weeks = all.filter(function (w) { return addDays(w.week, 6) >= R && w.week <= addDays(R, 27); });
+      if (weeks.length) kind = 'first28';
+    }
+    if (!weeks.length && all.length) { weeks = all.slice(-4); kind = 'latest4'; }
+    var sum = { streams: 0, listeners: 0, saves: 0, adds: 0, shazams: 0 }, has = { saves: false, adds: false, shazams: false };
+    weeks.forEach(function (w) {
+      Object.keys(sum).forEach(function (k) { var n = numOrNull(w[k]); if (n !== null) { sum[k] += n; if (has[k] !== undefined) has[k] = true; } });
+    });
+    return { kind: kind, weeks: weeks, sum: sum, has: has };
+  }
+  function perListenerOf(song) {
+    var w = songWindow(song);
+    return w.sum.listeners > 0 ? w.sum.streams / w.sum.listeners : null;
+  }
+  function otherShareOf(song, weeks) {
+    var on = {};
+    (weeks || []).forEach(function (w) { on[w.week] = true; });
+    var rows = (song && Array.isArray(song.sources) ? song.sources : []).filter(function (r) { return r && numOrNull(r.streams) !== null && (!weeks || !weeks.length || on[r.week]); });
+    if (!rows.length) return null;
+    var tot = 0, other = 0;
+    rows.forEach(function (r) { tot += r.streams; if (sourceKind(r.name) === 'other') other += r.streams; });
+    return tot > 0 ? other / tot : null;
+  }
+  function songScore(source, song, ctx) {
+    ctx = ctx || {};
+    var src = source === 'apple' ? 'apple' : 'spotify', rules = SONG_RULES[src], win = songWindow(song), s = win.sum;
+    var title = String(song && song.title || '');
+    if (win.kind === 'none' || (!(s.listeners > 0) && !(s.streams > 0))) {
+      return { score: null, band: null, needsFile: true, window: 'none', items: [], fixes: [], why: 'It needs this week’s file.', numbers: {} };
+    }
+    var per = s.listeners > 0 ? s.streams / s.listeners : null;
+    var others = (ctx.others || []).filter(function (o) { return o && String(o.title || '') !== title; });
+    var today = isDay(ctx.today) ? ctx.today : null;
+    var year = numOrNull(song.streams12m), yearKnown = year !== null, yearWeeks = 0;
+    if (year === null) {
+      var since = today ? addDays(today, -364) : null;
+      year = 0;
+      (song.weeks || []).forEach(function (w) {
+        if (w && isDay(w.week) && (!since || w.week >= since) && numOrNull(w.streams) !== null) { year += w.streams; yearWeeks += 1; }
+      });
+      yearKnown = year >= 1000 || yearWeeks >= 40;
+    }
+    var yearUnit = src === 'spotify' ? ' streams in 12 months' : ' plays in 12 months';
+    var putYear = function () {
+      if (!yearKnown) put('year', 8, 'Not known yet: the weeks SIGNAL has add up to ' + commas(year));
+      else put('year', year >= 1000 ? 15 : 0, commas(year) + yearUnit);
+    };
+    var got = {}, note = {};
+    var put = function (id, g, n) { got[id] = g; note[id] = n || ''; };
+    if (src === 'spotify') {
+      put('perlistener', per === null ? 8 : per >= 3 ? 30 : per >= 2 ? 20 : 8, per === null ? 'No listeners in the file' : per.toFixed(1) + ' plays per listener');
+      var sr = s.listeners > 0 && win.has.saves ? s.saves / s.listeners : null;
+      put('saves', sr === null ? 15 : sr >= 0.10 ? 30 : sr >= 0.05 ? 18 : 6, sr === null ? 'Saves not in the file yet, so it counts the middle' : Math.round(sr * 1000) / 10 + '% of listeners saved it');
+      var ar = s.listeners > 0 && win.has.adds ? s.adds / s.listeners : null;
+      var arOthers = others.map(function (o) { var w = songWindow(o); return w.sum.listeners > 0 && w.has.adds ? w.sum.adds / w.sum.listeners : null; })
+        .filter(function (x) { return x !== null; });
+      if (ar === null) put('adds', 7, 'Playlist adds not in the file yet, so it counts the middle');
+      else if (arOthers.length + 1 >= 3) {
+        var med = median(arOthers.concat([ar])), rr = med > 0 ? ar / med : (ar > 0 ? 2 : 1);
+        put('adds', rr >= 1.2 ? 15 : rr >= 0.8 ? 10 : 5, rr >= 1.2 ? 'Above your usual song' : rr >= 0.8 ? 'About your usual song' : 'Below your usual song');
+      } else put('adds', ar >= 0.02 ? 15 : ar >= 0.01 ? 10 : 5, Math.round(ar * 1000) / 10 + ' adds per 100 listeners');
+      var os = otherShareOf(song, win.weeks);
+      put('other', os === null ? 5 : os < 0.08 ? 10 : os <= 0.12 ? 5 : 0, os === null ? 'Not known yet' : Math.round(os * 100) + '% of the listening');
+      putYear();
+    } else {
+      var sp = ctx.spotify ? perListenerOf(ctx.spotify) : null;
+      if (per === null) put('perlistener', 5, 'No listeners in the file');
+      else if (sp !== null && sp > 0) {
+        var vs = per / sp;
+        put('perlistener', vs >= 1.1 ? 25 : vs >= 0.9 ? 15 : 5, per.toFixed(1) + ' per listener, ' + (vs >= 1.1 ? 'above' : vs >= 0.9 ? 'about the same as' : 'below') + ' Spotify’s ' + sp.toFixed(1));
+      } else put('perlistener', per >= 3 ? 25 : per >= 2 ? 15 : 5, per.toFixed(1) + ' plays per listener');
+      var plays = others.map(function (o) { var w = songWindow(o); return w.kind === 'none' ? null : w.sum.streams; }).filter(function (x) { return x !== null; });
+      if (plays.length + 1 >= 3) {
+        var m2 = median(plays.concat([s.streams])), r2 = m2 > 0 ? s.streams / m2 : 1;
+        put('usual', r2 >= 1.2 ? 25 : r2 >= 0.8 ? 15 : 5, r2 >= 1.2 ? 'Above your usual song' : r2 >= 0.8 ? 'About your usual song' : 'Below your usual song');
+      } else put('usual', 15, 'Not enough songs yet to compare');
+      var shz = (song.weeks || []).filter(function (w) { return w && isDay(w.week) && numOrNull(w.shazams) !== null; })
+        .slice().sort(function (a, b) { return a.week < b.week ? -1 : 1; });
+      var shTot = shz.reduce(function (t, w) { return t + w.shazams; }, 0);
+      if (!shTot) put('shazams', 0, 'No Shazams yet');
+      else if (shz.length < 2) put('shazams', 10, commas(shTot) + ' Shazams');
+      else {
+        var last = shz[shz.length - 1].shazams, prev = shz[shz.length - 2].shazams;
+        put('shazams', last > prev ? 20 : 10, last > prev ? 'Rising week over week' : 'Flat or falling week over week');
+      }
+      put('adds', win.has.adds && s.adds > 0 ? 15 : 0, win.has.adds && s.adds > 0 ? commas(s.adds) + ' playlist adds' : 'No playlist adds');
+      putYear();
+    }
+    var items = rules.map(function (r) { return { id: r.id, label: r.label, max: r.max, got: Math.max(0, Math.min(r.max, got[r.id] || 0)), note: note[r.id] }; });
+    var score = items.reduce(function (t, it) { return t + it.got; }, 0);
+    var fixes = items.filter(function (it) { return it.got < it.max; }).map(function (it) {
+      var r = rules.filter(function (x) { return x.id === it.id; })[0];
+      return { id: it.id, pts: it.max - it.got, words: r.fix };
+    }).sort(function (a, b) { return b.pts - a.pts; });
+    var band = meterBand(score);
+    return {
+      score: band.score, band: band, needsFile: false, window: win.kind, items: items, fixes: fixes,
+      why: fixes.length ? fixes[0].words : 'It’s at Peak. Keep sharing it so the numbers hold.',
+      numbers: { streams: s.streams, listeners: s.listeners, perListener: per, saveRate: s.listeners > 0 && win.has.saves ? s.saves / s.listeners : null,
+        addRate: s.listeners > 0 && win.has.adds ? s.adds / s.listeners : null, adds: win.has.adds ? s.adds : null,
+        otherShare: src === 'spotify' ? otherShareOf(song, win.weeks) : null, shazams: win.has.shazams ? s.shazams : null, year: year }
+    };
+  }
+  var TODO_PITCH = { spotify: { masterpitch: true, spotify: true }, apple: { brief: true, applepitchnotes: true } };
+  function todoList(release, steps, platform, today) {
+    var plat = platform === 'apple' ? 'apple' : 'spotify', R = release && isDay(release.release_day) ? release.release_day : null;
+    var mine = (steps || []).filter(function (s) {
+      return s && (!release || s.release_id === release.id) && (s.platform === plat || s.platform === 'all') && s.status !== 'skipped';
+    }).slice().sort(function (a, b) {
+      var x = a.due_day || '9999', y = b.due_day || '9999';
+      return x < y ? -1 : x > y ? 1 : (a.sort_order || 0) - (b.sort_order || 0);
+    });
+    var out = { before: [], after: [], done: 0, of: mine.length };
+    mine.forEach(function (s) {
+      var due = isDay(s.due_day) ? s.due_day : null, done = s.status === 'done';
+      var it = { id: s.id, rule: s.rule || '', title: String(s.title || ''), due: due, status: s.status || 'todo', done: done,
+        overdue: !done && (s.status === 'todo' || s.status === 'waiting' || !s.status) && !!due && isDay(today) && due < today,
+        needsOk: !!s.needs_ok, who: s.who === 'distributor' ? 'distributor' : 'me', platform: s.platform, pitch: !!TODO_PITCH[plat][s.rule] };
+      if (done) out.done += 1;
+      (R && due && due >= R ? out.after : out.before).push(it);
+    });
+    return out;
+  }
   root.GSIG = {
     SCORER_VERSION: SCORER_VERSION, METER_VERSION: METER_VERSION,
     addDays: addDays, daysBetween: daysBetween, weekdayOf: weekdayOf, mondayOf: mondayOf, isDay: isDay, dayWords: dayWords, dueWords: dueWords,
@@ -1293,6 +2213,13 @@
     median: median, sourceKind: sourceKind, songDoctor: songDoctor, under1000: under1000, streamCheckup: streamCheckup,
     TEST_GAP: TEST_GAP, cityKey: cityKey, cityTable: cityTable,
     weekly: weekly, urgency: urgency, POST_RESULT_FIELDS: POST_RESULT_FIELDS, POST_CHECKLIST: POST_CHECKLIST,
-    CSV_FIELDS: CSV_FIELDS, csvColumns: csvColumns, csvNumber: csvNumber, csvDay: csvDay, readCsv: readCsv, csvSnapshots: csvSnapshots
+    CSV_FIELDS: CSV_FIELDS, csvColumns: csvColumns, csvNumber: csvNumber, csvDay: csvDay, readCsv: readCsv, csvSnapshots: csvSnapshots,
+    PLAYBOOK_VERSION: PLAYBOOK_VERSION, PB_RULES: PB_RULES, PB_PLATFORMS: PB_PLATFORMS, METER_BANDS: METER_BANDS, meterBand: meterBand,
+    pbFormat: pbFormat, pbRules: pbRules, captionChecks: captionChecks, zoneParts: zoneParts, postWindows: postWindows, timePoints: timePoints,
+    bestTime: bestTime, windowWords: windowWords, zoneInstant: zoneInstant, bestInstant: bestInstant, measurePost: measurePost, scorePost: scorePost, postTargets: postTargets, boostLine: boostLine,
+    utf8Bytes: utf8Bytes, packAnswers: packAnswers, readAnswers: readAnswers, postResult: postResult,
+    captionDiff: captionDiff, segmentsText: segmentsText, upgradeCaption: upgradeCaption, cropPlan: cropPlan, frameTimes: frameTimes,
+    analysisRequest: analysisRequest, mergeAnalysis: mergeAnalysis, PB_ASK_ADD: PB_ASK_ADD, PB_FOLLOW_ADD: PB_FOLLOW_ADD,
+    SONG_RULES: SONG_RULES, songWindow: songWindow, songScore: songScore, todoList: todoList
   };
 })(typeof globalThis !== 'undefined' ? globalThis : this);
