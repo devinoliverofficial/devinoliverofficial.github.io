@@ -452,6 +452,11 @@
     try {
       Object.keys(localStorage).forEach(function (k) { if (/^gr-keep-(crew|fw):|^gr-card:|^gr-off-pick:/.test(k)) localStorage.removeItem(k); });
     } catch (e) {   }
+    try { if (typeof window !== 'undefined' && typeof window.GR_SIGNAL_FORGET === 'function') window.GR_SIGNAL_FORGET(); } catch (e) {   }
+    try { if (typeof indexedDB !== 'undefined' && indexedDB) indexedDB.deleteDatabase('gr-signal'); } catch (e) {   }
+    try {
+      Object.keys(localStorage).forEach(function (k) { if (/^gr\.signal\./.test(k)) localStorage.removeItem(k); });
+    } catch (e) {   }
   }
   function suggestClear() {
     try { localStorage.removeItem(SUGGEST_KEY); } catch (e) {   }
@@ -1954,6 +1959,31 @@
       var fn = Object.prototype.hasOwnProperty.call(SIGNAL_DELETES, kind) ? SIGNAL_DELETES[kind] : '';
       if (!fn || !id) throw err('invalid');
       return (await signalRpc(fn, { p_id: String(id) })) === true;
+    },
+    signalAnalyze: async function (req, opts) {
+      var o = opts || {};
+      if (!sb || !session) throw err('unavailable');
+      if (window.GR_AI_CONSENT && !(await window.GR_AI_CONSENT('signal'))) throw err('cancelled');
+      var ctl = typeof AbortController === 'function' ? new AbortController() : null;
+      var stop = function () { if (ctl) ctl.abort(); };
+      if (o.signal && o.signal.addEventListener) o.signal.addEventListener('abort', stop);
+      var timer = ctl ? setTimeout(stop, 95000) : 0;
+      var res;
+      try {
+        res = await callFn('signal', { method: 'POST', signal: ctl ? ctl.signal : undefined, body: JSON.stringify(isObj(req) ? req : {}) });
+      } catch (e) {
+        if (o.signal && o.signal.aborted) throw err('cancelled');
+        throw err('unavailable');
+      } finally { if (timer) clearTimeout(timer); }
+      if (!res || res.status === 404) throw err('unavailable');
+      if (res.status === 401 || res.status === 403) throw err('session_expired');
+      if (res.status === 429) throw err('rate_limited');
+      if (!res.ok) throw err('unavailable');
+      var out;
+      try { out = await res.json(); } catch (e) { throw err('unavailable'); }
+      if (!isObj(out)) throw err('unavailable');
+      if (out.error) throw err(String(out.error));
+      return out;
     },
     reportSet: async function (id, act) {
       if (!sb || !session) throw err('unavailable');
