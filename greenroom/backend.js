@@ -48,6 +48,7 @@
   var flyerRightsCache = {}, flyerRightsKnown = null;
   var pnlKnown = null, pnlProbing = false, pnlList = [], pnlCache = {}, pnlAsk = {}, pnlGen = {};
   var bookCache = {}, bookAsk = {}, bookGen = 0, finishKnown = null, finishProbing = false;
+  var pnlBookKnown = null, pnlBookProbing = false;
   var foldsAsked = false, foldsList = [];
   var PNL_FRESH = 5 * 60 * 1000;
   var FLYER_FRESH = 300e3;
@@ -371,6 +372,29 @@
     return !!e && (e.code === 'PGRST204' || e.code === '42703' ||
       /could not find the .* column|column .* does not exist/i.test(String(e.message || '')));
   }
+  var SIGNAL_SAVES = { settings: 'signal_settings_save', artist: 'signal_artist_save', release: 'signal_release_save',
+    step: 'signal_step_save', fact: 'signal_fact_save', pitch: 'signal_pitch_save', confirmation: 'signal_confirmation_save',
+    asset: 'signal_asset_save', post: 'signal_post_save', result: 'signal_result_save', campaign: 'signal_campaign_save' };
+  var SIGNAL_DELETES = { artist: 'signal_artist_delete', release: 'signal_release_delete', step: 'signal_step_delete',
+    fact: 'signal_fact_delete', pitch: 'signal_pitch_delete', confirmation: 'signal_confirmation_delete',
+    asset: 'signal_asset_delete', post: 'signal_post_delete', result: 'signal_result_delete',
+    campaign: 'signal_campaign_delete', snapshot: 'signal_snapshot_delete' };
+  function signalError(e) {
+    var msg = String(e && e.message || '');
+    var bad = /signal_bad: ?([a-z_]*)/.exec(msg);
+    if (bad) { var x = err('invalid'); x.field = bad[1] || ''; return x; }
+    if (/signal_full/.test(msg)) return err('full');
+    if (e && e.code === '42501') return err('permission');
+    return mapError(e);
+  }
+  async function signalRpc(fn, args) {
+    if (!sb || !session) throw err('unavailable');
+    var q;
+    try { q = await sgLimit(sb.rpc(fn, args), 20000); }
+    catch (e) { throw e && e.code === 'offline' ? e : err('offline'); }
+    if (q.error) throw fnMissing(q.error) ? err('unavailable') : signalError(q.error);
+    return q.data;
+  }
   async function reimburseCall(fn, args) {
     if (!sb || !session || !session.user) return { ok: false, why: 'unavailable' };
     var q = null;
@@ -426,7 +450,7 @@
   }
   function keptClear() {
     try {
-      Object.keys(localStorage).forEach(function (k) { if (/^gr-keep-(crew|fw):|^gr-card:/.test(k)) localStorage.removeItem(k); });
+      Object.keys(localStorage).forEach(function (k) { if (/^gr-keep-(crew|fw):|^gr-card:|^gr-off-pick:/.test(k)) localStorage.removeItem(k); });
     } catch (e) {   }
   }
   function suggestClear() {
@@ -1898,6 +1922,39 @@
         return q.error || !isObj(q.data) ? null : q.data;
       } catch (e) { return null; }
     },
+    signalMay: async function () {
+      if (!sb || !session) return false;
+      try {
+        var q = await sgLimit(sb.rpc('signal_may'), 15000);
+        return !q.error && q.data === true;
+      } catch (e) { return false; }
+    },
+    signalRoom: async function () {
+      if (!sb || !session) return null;
+      var q;
+      try { q = await sgLimit(sb.rpc('signal_room'), 20000); }
+      catch (e) { throw e && e.code === 'offline' ? e : err('offline'); }
+      if (q.error) { if (fnMissing(q.error)) return null; throw signalError(q.error); }
+      return isObj(q.data) ? q.data : null;
+    },
+    signalSave: async function (kind, row) {
+      var fn = Object.prototype.hasOwnProperty.call(SIGNAL_SAVES, kind) ? SIGNAL_SAVES[kind] : '';
+      if (!fn) throw err('invalid');
+      var d = await signalRpc(fn, { p: isObj(row) ? row : {} });
+      return isObj(d) ? d : null;
+    },
+    signalSaveSnapshots: async function (rows) {
+      var list = Array.isArray(rows) ? rows.filter(isObj) : [];
+      if (!list.length) return { saved: 0 };
+      if (list.length > 500) throw err('invalid');
+      var d = await signalRpc('signal_snapshots_save', { p: list });
+      return isObj(d) ? d : { saved: 0 };
+    },
+    signalDelete: async function (kind, id) {
+      var fn = Object.prototype.hasOwnProperty.call(SIGNAL_DELETES, kind) ? SIGNAL_DELETES[kind] : '';
+      if (!fn || !id) throw err('invalid');
+      return (await signalRpc(fn, { p_id: String(id) })) === true;
+    },
     reportSet: async function (id, act) {
       if (!sb || !session) throw err('unavailable');
       var q = await sb.rpc('report_set', { r_id: id, act: String(act || '') });
@@ -2456,6 +2513,16 @@
     },
     finishTour: function (id) {
       return finishCall('finish_tour', id);
+    },
+    pnlBookOn: function () {
+      if (pnlBookKnown === null) pnlBookProbe();
+      return pnlBookKnown === true;
+    },
+    tourFresh: async function (id) {
+      if (!session || !id) return null;
+      var q = await sb.from('tours').select('doc').eq('id', String(id)).maybeSingle();
+      if (q.error) throw mapError(q.error);
+      return q.data && isObj(q.data.doc) ? q.data.doc : null;
     },
     reopenTour: function (id) {
       return finishCall('reopen_tour', id);
@@ -3532,6 +3599,15 @@
       await loadFeed(false);
       return n;
     },
+    feedLineFollow: async function (ids) {
+      var list = (Array.isArray(ids) ? ids : []).map(String).filter(Boolean).slice(0, 200);
+      if (!list.length) return 0;
+      try {
+        var q = await sb.rpc('feed_line_follow', { ids: list });
+        if (q.error) { if (!fnMissing(q.error)) noteError('cards:follow', q.error); return null; }
+        return Number(q.data) || 0;
+      } catch (e) { return null; }
+    },
     feedLeftOut: async function (status, reason, page, after) {
       var st = status === 'skipped' ? 'skipped' : 'left_out', from = Math.max(0, Math.round(Number(page)) || 0) * FEED_LIST;
       var ask = function () {
@@ -4074,6 +4150,15 @@
       if (!q.error) { finishKnown = q.data === true; if (finishKnown) emit('tours'); }
       else if (fnMissing(q.error)) finishKnown = false;
     }, function () { finishProbing = false; });
+  }
+  function pnlBookProbe() {
+    if (pnlBookProbing || !session) return;
+    pnlBookProbing = true;
+    sb.rpc('pnl_book_on').then(function (q) {
+      pnlBookProbing = false;
+      if (!q.error) { pnlBookKnown = q.data === true; if (pnlBookKnown) emit('tours'); }
+      else if (fnMissing(q.error)) pnlBookKnown = false;
+    }, function () { pnlBookProbing = false; });
   }
   async function finishCall(fn, id) {
     if (!session) throw err('session');
