@@ -1182,12 +1182,14 @@
   }
   function tourRun(tour) {
     if (isStudioDoc(tour)) return studioSpan(tour);
+    if (isPnlBook(tour)) return pnlBookSpan(tour);
     var a = tourStart(tour), b = tourEnd(tour);
     if (!a || !b) return null;
     if (parseDay(tour.rehearsalStart) && tour.rehearsalStart < a) a = tour.rehearsalStart;
     return { from: a, to: b };
   }
   function tourDays(tour) {
+    if (pnlType(tour) === 'studio') return pnlBookDates(tour).length;
     var r = tourRun(tour);
     return r ? Math.max(0, daysBetween(r.from, r.to)) + 1 : 0;
   }
@@ -1196,6 +1198,10 @@
     if (!r) return null;
     var from = p && parseDay(p.from) && p.from > r.from ? p.from : r.from;
     var to = p && parseDay(p.to) && p.to < r.to ? p.to : r.to;
+    if (pnlType(tour) === 'studio') {
+      var mine = pnlBookDates(tour).filter(function (d) { return d >= from && d <= to; });
+      return mine.length ? { from: mine[0], to: mine[mine.length - 1], days: mine.length } : { from: from, to: to, days: 0 };
+    }
     return to < from ? { from: from, to: to, days: 0 } : { from: from, to: to, days: daysBetween(from, to) + 1 };
   }
   function personDays(tour, p) { var r = personRun(tour, p); return r ? r.days : 0; }
@@ -1653,12 +1659,16 @@
       return { date: d, income: round(ci * 100) / 100, spent: round(co * 100) / 100 };
     });
   }
-  function payStanding(info) {
-    var i = isObj(info) ? info : {};
-    var tour = isObj(i.tour) ? i.tour : {};
+  function payRunOf(doc, tour) {
+    if (isPnlBook(doc) || (isStudioDoc(doc) && studioSpan(doc))) return doc;
     var like = { shows: {}, spanStart: tour.spanStart, spanEnd: tour.spanEnd, rehearsalStart: tour.rehearsalStart };
     if (parseDay(tour.first)) like.shows.a = { date: tour.first };
     if (parseDay(tour.last)) like.shows.b = { date: tour.last };
+    return like;
+  }
+  function payStanding(info) {
+    var i = isObj(info) ? info : {};
+    var like = payRunOf(i.doc, isObj(i.tour) ? i.tour : {});
     var total = isObj(i.crew) ? crewPay(like, i.crew) : 0;
     var list = Array.isArray(i.payments) ? i.payments : rows(i.payments);
     var paid = round(list.reduce(function (t, p) { return t + num(p && p.amount); }, 0) * 100) / 100;
@@ -2385,7 +2395,21 @@
     return studioSpanWords(t.pnlFrom, parseDay(t.pnlTo) ? t.pnlTo : t.pnlFrom);
   }
   function pnlBookSummary(t) {
-    var x = isObj(t) ? t : {}, d = pnlClean(x.pnl), tot = pnlTotals(d), inc = d.income;
+    var x = isObj(t) ? t : {};
+    if (isPnlBook(x)) {
+      var bm = tourSummary(x), played = pnlBookShows(x).length, old = pnlOldTyped(x);
+      bm.kind = 'pnl'; bm.kicker = 'P&L'; bm.title = pnlBookName(x.name) || 'Untitled P&L';
+      bm.sub = [String(x.artist || '').trim(), pnlTypeLabel(pnlType(x)), pnlKindWhen(x), played ? sumPlural(played, 'show') : ''].filter(Boolean).join(' \u00b7 ');
+      if (old) {
+        var oLines = old.income.map(function (l) { return sumLine('Came in: ' + l.label, l.amount); })
+          .concat(old.out.map(function (l) { return sumLine('Went out: ' + l.label, l.amount); }));
+        bm.sections.push({ key: 'older', title: 'Typed on an older version of Greenroom', lines: oLines,
+          total: { label: 'Net of what was typed there', amount: old.total.net }, notes: ['Not in this P&L\u2019s totals: it may be the same money typed again here.'] });
+        (bm.sheets || []).push({ name: 'Typed on an older version', rows: [['Line', 'Amount']].concat(oLines.map(function (l) { return [l.label, l.amount]; }), [['NET', old.total.net]]) });
+      }
+      return bm;
+    }
+    var d = pnlClean(x.pnl), tot = pnlTotals(d), inc = d.income;
     var label = {};
     PNL_INCOME.concat(PNL_OUT, PNL_EXTRA, PNL_MORE).forEach(function (l) { if (!pnlHas(label, l[0])) label[l[0]] = l[1]; });
     var top = PNL_INCOME.slice(0, PNL_INCOME_TOP).map(function (l) {
@@ -2416,6 +2440,232 @@
       sections: sections, notes: notes, details: [], sheets: [{ name: 'P&L', rows: rowsOut }]
     };
   }
+  var PNL_TYPES = [['show', 'Show'], ['tour', 'Tour'], ['studio', 'Studio'], ['other', 'Other']];
+  var PNL_DATES_MAX = 120, PNL_LIST_MAX = 150;
+  function pnlType(t) {
+    if (!isPnlDoc(t) || !isObj(t.pnl)) return '';
+    var k = t.pnl.type;
+    return PNL_TYPES.some(function (x) { return x[0] === k; }) ? k : '';
+  }
+  function isPnlBook(t) { return !!pnlType(t); }
+  function pnlTypeLabel(k) { var hit = PNL_TYPES.filter(function (x) { return x[0] === k; })[0]; return hit ? hit[1] : ''; }
+  function pnlDatesClean(list) {
+    var seen = {};
+    return (Array.isArray(list) ? list : []).filter(function (d) {
+      if (typeof d !== 'string' || !parseDay(d) || seen[d]) return false;
+      seen[d] = true;
+      return true;
+    }).sort().slice(0, PNL_DATES_MAX);
+  }
+  function pnlListClean(list) {
+    return (Array.isArray(list) ? list : []).filter(function (x) { return isObj(x) && typeof x.d === 'string' && !!parseDay(x.d); }).map(function (x) {
+      var o = { d: x.d }, c = pnlWord(x.c, 50), v = pnlWord(x.v, 50);
+      if (c) o.c = c;
+      if (v) o.v = v;
+      return o;
+    }).sort(function (a, b) { return a.d.localeCompare(b.d); }).slice(0, PNL_LIST_MAX);
+  }
+  function pnlPlaceClean(x) {
+    if (!isObj(x)) return null;
+    var o = {}, c = pnlWord(x.c, 50), v = pnlWord(x.v, 50);
+    if (c) o.c = c;
+    if (v) o.v = v;
+    return c || v ? o : null;
+  }
+  function pnlShowPlace(t) {
+    if (pnlType(t) !== 'show') return null;
+    if (isObj(t.pnl.place)) return pnlPlaceClean(t.pnl.place);
+    var one = pnlListClean(t.pnl.list)[0];
+    return one ? pnlPlaceClean(one) : null;
+  }
+  function pnlBookShows(t) {
+    var type = pnlType(t);
+    if (type === 'tour') return pnlListClean(t.pnl.list);
+    if (type !== 'show' || !parseDay(t.pnlFrom)) return [];
+    var o = { d: t.pnlFrom }, pl = pnlShowPlace(t) || {};
+    if (pl.c) o.c = pl.c;
+    if (pl.v) o.v = pl.v;
+    return [o];
+  }
+  function pnlBookDates(t) { return pnlType(t) === 'studio' ? pnlDatesClean(t.pnl.dates) : []; }
+  function pnlBookSpan(t) {
+    if (!isPnlBook(t) || !parseDay(t.pnlFrom)) return null;
+    return { from: t.pnlFrom, to: parseDay(t.pnlTo) && t.pnlTo >= t.pnlFrom ? t.pnlTo : t.pnlFrom };
+  }
+  function pnlKindCheck(o) {
+    o = isObj(o) ? o : {};
+    if (!pnlTypeLabel(o.type)) return 'Pick Show, Tour, Studio or Other';
+    if (!pnlBookName(o.name)) return 'Give the P&L a name';
+    if (o.type === 'studio') {
+      return (Array.isArray(o.dates) ? o.dates : []).filter(function (d) { return !!parseDay(d); }).length > PNL_DATES_MAX
+        ? 'Keep it to ' + PNL_DATES_MAX + ' days or fewer' : '';
+    }
+    if (o.type === 'show') return '';
+    var from = parseDay(o.from) ? o.from : '', to = parseDay(o.to) ? o.to : '';
+    if (o.type === 'tour' && !from && to) { var first = pnlListClean(o.list)[0]; if (first) from = first.d; }
+    if (to && !from) return 'Pick the first day';
+    if (from && to && to < from) return 'The last day is before the first day';
+    if (o.type === 'tour') {
+      var list = pnlListClean(o.list);
+      if (from && list.some(function (x) { return x.d < from; })) return 'A show is before the first day';
+      if (to && list.some(function (x) { return x.d > to; })) return 'A show is after the last day';
+    }
+    return '';
+  }
+  function pnlKindParts(o) {
+    if (pnlKindCheck(o)) return null;
+    var type = o.type, dates = type === 'studio' ? pnlDatesClean(o.dates) : [];
+    var list = type === 'tour' ? pnlListClean(o.list) : [];
+    var from = type === 'studio' ? (dates[0] || '') : parseDay(o.from) ? o.from : '';
+    var to = type === 'studio' ? (dates[dates.length - 1] || '') : type === 'show' ? from : parseDay(o.to) ? o.to : '';
+    if (type === 'tour' && list.length) {
+      if (!from) from = list[0].d;
+      if (!to) to = list[list.length - 1].d;
+    }
+    var place = type === 'show' ? pnlPlaceClean({ c: o.city, v: o.venue }) : null;
+    return { type: type, name: pnlBookName(o.name), from: from, to: to, dates: dates, list: list, place: place };
+  }
+  function pnlKindDoc(o) {
+    var p = pnlKindParts(o);
+    if (!p) return null;
+    var cats = {};
+    if (p.type === 'studio') STUDIO_CATS.forEach(function (label) { cats[slugCategory(label)] = label; });
+    var nums = pnlClean({});
+    nums.type = p.type;
+    if (p.dates.length) nums.dates = p.dates;
+    if (p.list.length) nums.list = p.list;
+    if (p.place) nums.place = p.place;
+    var doc = { kind: 'pnl', name: p.name, artist: String(o.artist || '').trim(), createdAt: typeof o.now === 'number' ? o.now : Date.now(),
+      setupDone: true, setupStep: 5, pnl: nums,
+      expenses: emptyExpenses(), commission: emptyCommission(), crew: {}, debts: {}, shows: {}, extras: {}, charges: {}, imports: {}, extraCats: cats };
+    if (o.artistId) doc.artistId = String(o.artistId);
+    if (p.from) doc.pnlFrom = p.from;
+    if (p.to) doc.pnlTo = p.to;
+    return doc;
+  }
+  function pnlKindEditPatch(was, o, keepLog) {
+    if (!isPnlBook(was)) return null;
+    var p = pnlKindParts(Object.assign({}, isObj(o) ? o : {}, { type: pnlType(was) }));
+    if (!p) return null;
+    var out = {}, inner = {}, same = function (x, y) { return JSON.stringify(x) === JSON.stringify(y); };
+    if (p.name !== pnlBookName(was.name)) out.name = p.name;
+    var had = { from: parseDay(was.pnlFrom) ? was.pnlFrom : '', to: parseDay(was.pnlTo) ? was.pnlTo : '' };
+    if (p.from !== had.from) out.pnlFrom = p.from || null;
+    if (p.to !== had.to) out.pnlTo = p.to || null;
+    if (p.type === 'studio' && !same(p.dates, pnlBookDates(was))) inner.dates = p.dates;
+    if (p.type === 'tour' && !same(p.list, pnlBookShows(was))) inner.list = p.list;
+    if (p.type === 'show' && !same(p.place || null, pnlShowPlace(was))) inner.place = p.place || null;
+    if (Object.keys(inner).length) out.pnl = inner;
+    if (!keepLog && pnlCards(was).length && ('pnlFrom' in out || 'pnlTo' in out || 'dates' in inner)) {
+      var now = p.type === 'studio' ? (p.dates.length ? { from: p.dates[0], to: p.dates[p.dates.length - 1], days: p.dates } : null)
+        : p.from ? { from: p.from, to: p.type === 'show' ? p.from : (p.to && p.to >= p.from ? p.to : p.from), days: null } : null;
+      out.cardLog = pnlLogFor(was, now);
+    }
+    return out;
+  }
+  function pnlKindClash(was, now, patch) {
+    if (!isPnlBook(was) || !isPnlBook(now) || now.deletedAt) return true;
+    patch = isObj(patch) ? patch : {};
+    var day = function (v) { return parseDay(v) ? v : null; }, same = function (x, y) { return JSON.stringify(x) === JSON.stringify(y); };
+    if ('name' in patch && pnlBookName(was.name) !== pnlBookName(now.name)) return true;
+    if ('pnlFrom' in patch && day(was.pnlFrom) !== day(now.pnlFrom)) return true;
+    if ('pnlTo' in patch && day(was.pnlTo) !== day(now.pnlTo)) return true;
+    var inner = isObj(patch.pnl) ? patch.pnl : {};
+    if ('dates' in inner && !same(pnlBookDates(was), pnlBookDates(now))) return true;
+    if ('list' in inner && !same(pnlBookShows(was), pnlBookShows(now))) return true;
+    if ('place' in inner && !same(pnlShowPlace(was), pnlShowPlace(now))) return true;
+    return false;
+  }
+  var PNL_CARDS_MAX = 20;
+  function pnlCards(t) {
+    if (!isPnlBook(t) || !isObj(t.cardLog) || !Array.isArray(t.cardLog.cards)) return [];
+    var seen = {};
+    return t.cardLog.cards.filter(function (c) {
+      var id = isObj(c) ? String(c.id == null ? '' : c.id).trim() : '';
+      if (!id || seen[id]) return false;
+      seen[id] = true;
+      return true;
+    }).map(function (c) { return { id: String(c.id).trim(), name: String(c.name == null ? '' : c.name).replace(/\s+/g, ' ').trim().slice(0, 80) }; })
+      .slice(0, PNL_CARDS_MAX);
+  }
+  function pnlCardDays(t) {
+    var type = pnlType(t);
+    if (!type) return null;
+    if (type === 'studio') {
+      var d = pnlBookDates(t);
+      return d.length ? { from: d[0], to: d[d.length - 1], days: d, n: d.length } : null;
+    }
+    var sp = pnlBookSpan(t);
+    if (!sp) return null;
+    if (type === 'show') return { from: sp.from, to: sp.from, days: null, n: 1 };
+    return { from: sp.from, to: sp.to, days: null, n: daysBetween(sp.from, sp.to) + 1 };
+  }
+  function pnlLogFor(t, d) {
+    var own = d === undefined ? pnlCardDays(t) : d;
+    if (pnlType(t) === 'studio') return { days: own && own.days ? own.days.slice() : [] };
+    return { span: own ? { from: own.from, to: own.to } : null };
+  }
+  function pnlLogDays(t) {
+    var own = pnlCardDays(t);
+    if (!own) return null;
+    var log = isObj(t.cardLog) ? t.cardLog : {};
+    if (own.days) {
+      var linked = {};
+      (Array.isArray(log.days) ? log.days : []).forEach(function (x) { if (typeof x === 'string' && parseDay(x)) linked[x] = true; });
+      var d = own.days.filter(function (x) { return linked[x]; });
+      return d.length ? { from: d[0], to: d[d.length - 1], days: d, n: d.length } : null;
+    }
+    var sp = isObj(log.span) ? log.span : {}, sf = parseDay(sp.from) ? sp.from : '', sl = sf && parseDay(sp.to) && sp.to >= sf ? sp.to : sf;
+    if (!sf) return null;
+    var from = own.from > sf ? own.from : sf, to = own.to < sl ? own.to : sl;
+    return to >= from ? { from: from, to: to, days: null, n: daysBetween(from, to) + 1 } : null;
+  }
+  function pnlDaysOverlap(a, b) {
+    if (!isObj(a) || !isObj(b) || !parseDay(a.from) || !parseDay(b.from)) return null;
+    var inside = function (x, o) { return o.days ? o.days.indexOf(x) >= 0 : x >= o.from && x <= o.to; };
+    if (a.days || b.days) {
+      var list = (a.days || b.days).filter(function (x) { return inside(x, a) && inside(x, b); });
+      return list.length ? { from: list[0], to: list[list.length - 1], days: list, n: list.length } : null;
+    }
+    var from = a.from > b.from ? a.from : b.from, to = a.to < b.to ? a.to : b.to;
+    return to >= from ? { from: from, to: to, days: null, n: daysBetween(from, to) + 1 } : null;
+  }
+  function pnlKindWhen(t) {
+    var d = pnlBookDates(t), when = pnlBookWhen(t);
+    return d.length > 1 && d.length < daysBetween(d[0], d[d.length - 1]) + 1 ? sumPlural(d.length, 'day') + ' · ' + when : when;
+  }
+  function pnlOldTyped(t) {
+    if (!isPnlBook(t)) return null;
+    var d = pnlClean(t.pnl), label = {};
+    PNL_INCOME.concat(PNL_OUT, PNL_EXTRA, PNL_MORE).forEach(function (l) { if (!pnlHas(label, l[0])) label[l[0]] = l[1]; });
+    var inc = PNL_INCOME.map(function (l) { var v = l[0] === 'guarantee' || l[0] === 'merch' ? pnlBox(d, l[0]) : d.income[l[0]]; return v == null ? null : { label: l[1], amount: num(v) }; }).filter(Boolean);
+    var out = Object.keys(d.lines).sort(function (a, b) { return (pnlHas(label, a) ? 0 : 1) - (pnlHas(label, b) ? 0 : 1) || a.localeCompare(b); })
+      .map(function (k) { return { label: pnlHas(label, k) ? label[k] : extraCatLabel(k), amount: num(d.lines[k]) }; })
+      .concat(d.other.map(function (o) { return { label: o.label || 'Other', amount: num(o.amount) }; }));
+    if (!inc.length && !out.length) return null;
+    return { income: inc, out: out, total: pnlTotals(d) };
+  }
+  function pnlFromFlyer(type, had, rows) {
+    had = isObj(had) ? had : {};
+    var got = (Array.isArray(rows) ? rows : []).filter(function (r) { return isObj(r) && typeof r.date === 'string' && !!parseDay(r.date); })
+      .map(function (r) { return { d: r.date, c: pnlWord(r.city, 50), v: pnlWord(r.venue, 50) }; });
+    var out = { from: had.from || '', to: had.to || '', list: pnlListClean(had.list), city: had.city || '', venue: had.venue || '', added: 0 };
+    if (!got.length) return out;
+    if (type === 'show') {
+      var one = got[0];
+      return { from: one.d, to: one.d, list: [], city: one.c, venue: one.v, added: 1 };
+    }
+    var key = function (x) { return x.d + '|' + String(x.c || '').toLowerCase(); }, seen = {};
+    out.list.forEach(function (x) { seen[key(x)] = true; });
+    got.forEach(function (x) { if (seen[key(x)]) return; seen[key(x)] = true; out.list.push(x); out.added += 1; });
+    out.list = pnlListClean(out.list);
+    if (out.list.length) {
+      var a = out.list[0].d, b = out.list[out.list.length - 1].d;
+      out.from = parseDay(had.from) && had.from < a ? had.from : a;
+      out.to = parseDay(had.to) && had.to > b ? had.to : b;
+    }
+    return out;
+  }
   function catsUsed(tour) {
     var out = {};
     if (!isObj(tour)) return out;
@@ -2430,7 +2680,7 @@
     return out;
   }
   function studioCategories(tour, list) {
-    if (!isStudioDoc(tour)) return list;
+    if (!isStudioDoc(tour) && pnlType(tour) !== 'studio') return list;
     var used = catsUsed(tour);
     return (list || []).filter(function (c) { return STUDIO_TOUR_ONLY.indexOf(c.key) < 0 || used[c.key]; })
       .map(function (c) { return c.key === 'studio' ? { key: 'studio', label: 'Studio rental' } : c; });
@@ -2522,6 +2772,7 @@
   function cardWindow(tour) {
     var w = tour && tour.cardLog;
     if (!w || !w.from || !w.to) return null;
+    if (isPnlDoc(tour)) return null;
     var span = isStudioDoc(tour) ? studioSpan(tour) : null;
     var start = span ? span.from : tourStart(tour), end = span ? span.to : tourEnd(tour);
     var from = w.from === 'tour' ? start
@@ -4240,7 +4491,9 @@
       showRows.push(row);
     });
     c.otherRows.forEach(function (x) {
-      var row = [x.date || '', 'Other income', otherEntryLabel(x), ''];
+      var pt = pnlTypedOf(tour, x);
+      var row = pt ? [x.date || '', pt.city || 'Typed by hand', pt.venue ? pt.venue + ' \u00b7 ' + pt.what : pt.what, '']
+        : [x.date || '', 'Other income', otherEntryLabel(x), ''];
       while (row.length < head.length - 2) row.push('');
       row.push(num(x.amount), x.unsorted ? 'a guarantee not placed on a show yet' : '');
       showRows.push(row);
@@ -4398,6 +4651,17 @@
     var nm = otherEntryLabel(x);
     return 'Other income' + (x && x.kind === 'other' && nm === otherKindLabel('other') ? '' : ' · ' + nm);
   }
+  function pnlTypedOf(tour, x) {
+    if (!isPnlBook(tour) || !isObj(x) || x.typed !== true) return null;
+    var night = parseDay(x.on) ? pnlBookShows(tour).filter(function (s) { return s.d === x.on; })[0] : null;
+    return { what: otherEntryLabel(x), night: night ? night.d : '', city: night ? night.c || '' : '', venue: night ? night.v || '' : '' };
+  }
+  function bookIncomeLabel(tour, x) {
+    var p = pnlTypedOf(tour, x);
+    if (!p) return otherIncomeLabel(x);
+    var where = [p.city, p.venue].filter(Boolean).join(' · ');
+    return p.what + (where ? ' · ' + where : '');
+  }
   function payPeople(tour) {
     var paid = crewPaidBy(tour);
     var people = rows(tour && tour.crew).filter(function (p) { return String(p.name || '').trim(); });
@@ -4426,7 +4690,7 @@
     var NAMES = { guarantee: 'Guarantees', buyouts: 'Buyouts (Members’ part)' };
     var cameIn = [];
     INCOME_FIELDS.forEach(function (f) { var v = by(f.key); if (Math.abs(v) > 0.004) cameIn.push(sumLine(NAMES[f.key] || f.label, v)); });
-    sumGroup(c.otherRows, otherIncomeLabel).forEach(function (g) { cameIn.push(sumLine(g.label, g.amount)); });
+    sumGroup(c.otherRows, function (x) { return bookIncomeLabel(t, x); }).forEach(function (g) { cameIn.push(sumLine(g.label, g.amount)); });
     var cityOf = function (s) { return String(s.city || 'Show').split(',')[0] + ' ' + sumDay(s.date, true); };
     var waiting = [], owedBy = [], tipNights = [], offTop = 0, crewBuyouts = 0;
     shows.forEach(function (s, i) {
@@ -4494,7 +4758,7 @@
         .concat(used.map(function (f) { return k.by[f.key] || ''; }), [k.total]);
     });
     c.otherRows.forEach(function (x) {
-      gigRows.push([x.date || '', otherIncomeLabel(x)].concat(used.map(function () { return ''; }), [num(x.amount)]));
+      gigRows.push([x.date || '', bookIncomeLabel(t, x)].concat(used.map(function () { return ''; }), [num(x.amount)]));
     });
     gigRows.push(['', 'Total'].concat(used.map(function (f) { return cents(by(f.key)); }), [cents(c.income)]));
     var details = [
@@ -5604,12 +5868,13 @@
     var today = parseDay(inp.today) ? inp.today : ymd(new Date());
     var inY = function (d) { return !!Y && !!d && !!parseDay(d) && d.slice(0, 4) === Y; };
     var C = cpaCents;
-    var bookStart = function (doc) { return tourStart(doc) || studioDays(doc)[0] || ''; };
+    var bookStart = function (doc) { return tourStart(doc) || studioDays(doc)[0] || (isPnlBook(doc) && parseDay(doc.pnlFrom) ? doc.pnlFrom : '') || ''; };
     var tours = (Array.isArray(inp.tours) ? inp.tours : []).filter(function (b) {
-      return isObj(b) && isObj(b.doc) && !b.doc.deletedAt && b.doc.kind !== 'offtour' && !isPnlDoc(b.doc);
+      return isObj(b) && isObj(b.doc) && !b.doc.deletedAt && b.doc.kind !== 'offtour' && (!isPnlDoc(b.doc) || isPnlBook(b.doc));
     }).map(function (b) {
       return { id: String(b.id == null ? '' : b.id), doc: b.doc, kind: 'tour',
-        name: isStudioDoc(b.doc) ? studioBookName(b.doc) : String(b.doc.name || '').replace(/\s+/g, ' ').trim() || 'Untitled tour',
+        name: isStudioDoc(b.doc) ? studioBookName(b.doc) : isPnlBook(b.doc) ? (pnlBookName(b.doc.name) || 'Untitled') + ' (P&L)'
+          : String(b.doc.name || '').replace(/\s+/g, ' ').trim() || 'Untitled tour',
         first: bookStart(b.doc) };
     }).sort(function (a, b) { return (a.first || '9999').localeCompare(b.first || '9999') || a.id.localeCompare(b.id); });
     var off = isObj(inp.off) && isObj(inp.off.doc) && !inp.off.doc.deletedAt
@@ -6074,6 +6339,16 @@
         if (inY(sd) || one.guarantee || one.vip || one.buyouts || one.merchGross || one.tips || one.tax || one.expected || one.merchDue) showList.push(one);
       });
     });
+    var pnlNights = {};
+    var pnlNightOf = function (book, sh) {
+      var nk = book.id + '|' + sh.d;
+      return pnlNights[nk] || (pnlNights[nk] = { date: sh.d, city: sh.c || '', state: cpaStateOf({ city: sh.c || '' }), venue: sh.v || '', book: book.name, bookId: book.id,
+        showId: 'pnl:' + sh.d, guarantee: 0, vip: 0, buyouts: 0, merchGross: 0, cut: 0, fees: 0, salesTax: 0, merchBand: 0, merchDue: 0, tips: 0, tax: 0,
+        expected: 0, paid: '', received: '', atNet: false });
+    };
+    books.forEach(function (book) {
+      pnlBookShows(book.doc).forEach(function (sh) { if (inY(sh.d) && sh.d <= today) pnlNightOf(book, sh); });
+    });
     books.forEach(function (book) {
       var map = isObj(book.doc.otherIncome) ? book.doc.otherIncome : {};
       Object.keys(map).sort().forEach(function (k) {
@@ -6082,17 +6357,26 @@
         var d = cpaDay(x.date);
         if (!inY(d)) return;
         var amt = C(x.amount), lab = cpaLabelFor(book, 'otherIncome', x), kind = String(x.kind || '');
-        var word = otherEntryLabel(x);
+        var word = otherEntryLabel(x), typedOn = pnlTypedOf(book.doc, x);
+        var night = typedOn && typedOn.night && (kind === 'guarantee' || kind === 'merch') ? { showDate: typedOn.night, city: typedOn.city, state: cpaStateOf({ city: typedOn.city }) } : null;
         var dep = isObj(inp.deposits) && isObj(inp.deposits[k]) ? String(inp.deposits[k].payer || '').replace(/\s+/g, ' ').trim() : '';
         tally(d, { I: amt });
-        cpaPut({ at: 'row', kind: 'income', date: d, cents: amt, who: dep || word, what: otherIncomeLabel(x), bankId: k, account: 'Bank deposit',
+        cpaPut({ at: 'row', kind: 'income', date: d, cents: amt, who: dep || word, what: x.typed === true ? bookIncomeLabel(book.doc, x) : otherIncomeLabel(x), bankId: x.typed === true ? '' : k, account: x.typed === true ? 'Typed by hand' : 'Bank deposit',
           catKey: 'income:' + (kind || 'other'), category: otherKindLabel(kind), book: lab.book, note: lab.note || '', during: lab.during || null,
+          showDate: night ? night.showDate : '', city: night ? night.city : '', state: night ? night.state : '',
           line: kind === 'guarantee' || kind === 'merch' ? '1a' : kind === 'royalties' ? 'royalty' : kind === 'advance' ? 'advance' : '7',
-          payer: dep || 'Bank deposits: ' + word, src: book.id + ':otherIncome:' + k, bookId: book.id, coll: 'otherIncome' });
+          payer: dep || (x.typed === true ? 'Typed by hand: ' : 'Bank deposits: ') + word, src: book.id + ':otherIncome:' + k, bookId: book.id, coll: 'otherIncome' });
+        if (night) {
+          var one = pnlNightOf(book, { d: night.showDate, c: night.city, v: typedOn.venue });
+          one.received = 'typed by hand';
+          if (kind === 'guarantee') one.guarantee += amt; else { one.merchGross += amt; one.merchBand += amt; }
+          if (!one.paid || d > one.paid) one.paid = d;
+        }
         if (x.unsorted && kind === 'guarantee') cpaPut({ at: 'open', what: 'a guarantee to sort: counted as income, not on a show yet', date: d, cents: amt,
           book: lab.book, todo: 'Put it on its show in Greenroom', src: book.id + ':otherIncome:' + k });
       });
     });
+    Object.keys(pnlNights).sort().forEach(function (k) { showList.push(pnlNights[k]); });
     books.forEach(function (book) {
       var map = isObj(book.doc.merchToSort) ? book.doc.merchToSort : {};
       Object.keys(map).sort().forEach(function (k) {
@@ -6224,18 +6508,28 @@
       'Edit the show: fix the City or the State', stateOff.map(function (s) {
         return sumDay(s.date, true) + ', ' + (s.venue || s.city) + ': saved ' + s.state + ', the city says ' + cpaCityState(s.city);
       }));
-    var noPlace = {}, noPlaceApart = 0;
+    var pnlBookIds = {};
+    tours.forEach(function (b) { if (isPnlBook(b.doc)) pnlBookIds[b.id] = true; });
+    var noPlace = {}, noPlaceApart = 0, noPlaceTyped = {}, noPlaceOnPnl = {};
     out.forEach(function (r) {
       if (r.kind !== 'income' || r.state) return;
       noPlace[r.lineSrc] = (noPlace[r.lineSrc] || 0) + r.cents;
+      if (r.coll === 'otherIncome' && r.account === 'Typed by hand') noPlaceTyped[r.lineSrc] = true;
+      else if (r.coll === 'otherIncome' && pnlBookIds[r.bookId]) noPlaceOnPnl[r.lineSrc] = true;
       if (!cpaPage1(r.line)) noPlaceApart += r.cents;
     });
-    var noPlaceDeps = Object.keys(noPlace).filter(function (k) { return /:otherIncome:/.test(k); }).length, noPlaceRest = Object.keys(noPlace).length - noPlaceDeps;
+    var noPlaceTypedN = Object.keys(noPlaceTyped).length, noPlacePnlN = Object.keys(noPlaceOnPnl).length;
+    var noPlaceDeps = Object.keys(noPlace).filter(function (k) { return /:otherIncome:/.test(k) && !noPlaceTyped[k] && !noPlaceOnPnl[k]; }).length;
+    var noPlaceRest = Object.keys(noPlace).length - noPlaceDeps - noPlaceTypedN - noPlacePnlN;
     check('Income tied to no show or state: ' + m$(sumOf(noPlace)) + ' (' + [noPlaceDeps ? sumPlural(noPlaceDeps, 'bank deposit') + ' logged on a book' : '',
+      noPlacePnlN ? sumPlural(noPlacePnlN, 'bank deposit') + ' logged on a P&L' : '',
+      noPlaceTypedN ? (noPlaceTypedN === 1 ? '1 entry' : noPlaceTypedN + ' entries') + ' typed by hand on a P&L' : '',
       noPlaceRest ? sumPlural(noPlaceRest, 'line') + ' from a night with no state' : '',
       noPlaceApart ? m$(noPlaceApart) + ' of it listed apart' : ''].filter(Boolean).join(', ') +
       '). The state returns are built from Shows by state, so this money is in none of them',
-      Object.keys(noPlace).length, sumOf(noPlace), 'Put each deposit on its show in Greenroom, or tell your CPA where the money was earned');
+      Object.keys(noPlace).length, sumOf(noPlace), noPlaceDeps || noPlaceRest
+        ? 'Put each deposit on its show in Greenroom, or tell your CPA where the money was earned' + (noPlacePnlN || noPlaceTypedN ? ' (money on a P&L has no show to be put on: tell your CPA)' : '')
+        : 'Tell your CPA where the money was earned (on a P&L, a guarantee or merch typed from one of its shows is placed on that show)');
     var receipts = lines(out.filter(cpaNeedsReceipt));
     check('Lines that need a receipt kept (lodging, or $75 or more): Greenroom keeps no receipts', Object.keys(receipts).length, sumOf(receipts),
       'Keep the receipts where your CPA can see them');
@@ -6344,10 +6638,10 @@
           : x.nights.join('; ') + ': a deposit landed for ' + these + ' (' + m$(x.cents) + ' on ' + sumDay(x.date, true) + '), and a Received box isn’t ticked: tick the one it paid';
       }));
     var pnlsIn = (Array.isArray(inp.pnls) ? inp.pnls : []).filter(function (b) {
-      return isObj(b) && isPnlDoc(b.doc) && !b.doc.deletedAt && !!Y && pnlBookYear(b.doc) === Y;
+      return isObj(b) && isPnlDoc(b.doc) && (!isPnlBook(b.doc) || !!pnlOldTyped(b.doc)) && !b.doc.deletedAt && !!Y && pnlBookYear(b.doc) === Y;
     }).map(function (b) {
       var t = pnlTotals(pnlClean(b.doc.pnl)), nm = String(b.doc.name || '').replace(/\s+/g, ' ').trim() || 'Untitled P&L', when = pnlBookWhen(b.doc);
-      return nm + (when ? ' (' + when + ')' : '') + ': came in ' + moneyCents(t.income) + ', went out ' + moneyCents(t.out) + ', net ' + moneyCents(t.net);
+      return nm + (when ? ' (' + when + ')' : '') + (isPnlBook(b.doc) ? ', typed on an older version of Greenroom' : '') + ': came in ' + moneyCents(t.income) + ', went out ' + moneyCents(t.out) + ', net ' + moneyCents(t.net);
     }).sort();
     check('P&Ls typed by hand in Greenroom for ' + Y + ': totals with no dates, so not in this pack', pnlsIn.length, 0,
       'Give your CPA each one’s PDF from Greenroom (its page, PDF)', pnlsIn);
@@ -6615,7 +6909,8 @@
     var stateAt = function (k) { return states[k || 'No state'] || (states[k || 'No state'] = { gross: 0, tax: 0, shows: {} }); };
     (p.shows || []).forEach(function (s) { if (String(s.date).slice(0, 4) === p.year) stateAt(s.state).shows[s.book + '|' + s.date + '|' + s.city] = true; });
     p.rows.forEach(function (r) {
-      if (r.coll !== 'shows' || (r.kind !== 'income' && r.kind !== 'tax held back')) return;
+      var pnlNight = r.coll === 'otherIncome' && r.account === 'Typed by hand' && !!r.state && r.kind === 'income';
+      if (!pnlNight && (r.coll !== 'shows' || (r.kind !== 'income' && r.kind !== 'tax held back'))) return;
       var s = stateAt(r.state);
       if (r.kind === 'income') s.gross += r.cents; else s.tax -= r.cents;
       s.shows[r.book + '|' + r.showDate + '|' + r.city] = true;
@@ -7793,6 +8088,11 @@
     var nights = (Array.isArray(r.nights) ? r.nights : []).map(pnlNight).filter(Boolean).slice(0, PNL.nightsMax);
     if (nights.length) out.nights = nights;
     out.from = r.from === 'read' ? 'read' : 'typed';
+    if (pnlTypeLabel(r.type)) out.type = r.type;
+    var picked = pnlDatesClean(r.dates), played = pnlListClean(r.list), place = out.type === 'show' ? pnlPlaceClean(r.place) : null;
+    if (picked.length) out.dates = picked;
+    if (played.length) out.list = played;
+    if (place) out.place = place;
     return out;
   }
   var PNL_NIGHT_FIELD = { guarantee: 'g', merch: 'm' };
@@ -9002,6 +9302,11 @@
     studioSpanWords: studioSpanWords, studioTimeWords: studioTimeWords, clockMins: clockMins, studioHomeLines: studioHomeLines,
     catsUsed: catsUsed, studioCategories: studioCategories,
     PNL_BOOK_NAME_MAX: PNL_BOOK_NAME_MAX, isPnlDoc: isPnlDoc, pnlBookCheck: pnlBookCheck, pnlBookDoc: pnlBookDoc, pnlBookPatch: pnlBookPatch, pnlBookClash: pnlBookClash,
+    PNL_TYPES: PNL_TYPES, PNL_DATES_MAX: PNL_DATES_MAX, PNL_LIST_MAX: PNL_LIST_MAX, PNL_CARDS_MAX: PNL_CARDS_MAX, pnlType: pnlType, isPnlBook: isPnlBook,
+    pnlTypeLabel: pnlTypeLabel, pnlDatesClean: pnlDatesClean, pnlListClean: pnlListClean, pnlBookShows: pnlBookShows, pnlBookDates: pnlBookDates,
+    pnlBookSpan: pnlBookSpan, pnlKindCheck: pnlKindCheck, pnlKindParts: pnlKindParts, pnlKindDoc: pnlKindDoc, pnlKindEditPatch: pnlKindEditPatch, pnlKindClash: pnlKindClash,
+    pnlKindWhen: pnlKindWhen, pnlFromFlyer: pnlFromFlyer, pnlCards: pnlCards, pnlCardDays: pnlCardDays, pnlLogFor: pnlLogFor, pnlLogDays: pnlLogDays, pnlDaysOverlap: pnlDaysOverlap, pnlPlaceClean: pnlPlaceClean, pnlShowPlace: pnlShowPlace,
+    pnlOldTyped: pnlOldTyped, pnlTypedOf: pnlTypedOf, bookIncomeLabel: bookIncomeLabel, payRunOf: payRunOf,
     pnlBookYear: pnlBookYear, pnlBookWhen: pnlBookWhen, pnlBookSummary: pnlBookSummary,
     SHOW_DAYS_REACH: SHOW_DAYS_REACH, isShowDoc: isShowDoc, showDocName: showDocName, showDocDays: showDocDays, showDoc: showDoc, showDocLogged: showDocLogged, showDaysPatch: showDaysPatch,
     monthGrid: monthGrid, monthStep: monthStep, dayMarks: dayMarks,
