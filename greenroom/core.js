@@ -241,11 +241,11 @@
       .map(function (k) { return { key: k, label: names[k] }; });
   }
   function withMemberLabel(tour, list) {
-    if (!rows(tour && tour.crew).some(isMember)) return list;
+    if (!crewTwoLines(tour)) return list;
     return list.map(function (c) { return c.key === 'crew' ? { key: 'crew', label: 'Members & Crew' } : c; });
   }
-  function typedCategoriesFor(tour) { return studioCategories(tour, withMemberLabel(tour, TYPED_CATEGORIES)).concat(extraCategories(tour)); }
-  function chargeCategoriesFor(tour) { return studioCategories(tour, withMemberLabel(tour, CHARGE_CATEGORIES)).concat(extraCategories(tour)); }
+  function typedCategoriesFor(tour) { return pnlCatsOf(tour, studioCategories(tour, withMemberLabel(tour, TYPED_CATEGORIES)).concat(extraCategories(tour))); }
+  function chargeCategoriesFor(tour) { return pnlCatsOf(tour, studioCategories(tour, withMemberLabel(tour, CHARGE_CATEGORIES)).concat(extraCategories(tour))); }
   function slugCategory(label) {
     var s = String(label == null ? '' : label).toLowerCase()
       .replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 24);
@@ -1182,12 +1182,14 @@
   }
   function tourRun(tour) {
     if (isStudioDoc(tour)) return studioSpan(tour);
+    if (isPnlBook(tour)) return pnlBookSpan(tour);
     var a = tourStart(tour), b = tourEnd(tour);
     if (!a || !b) return null;
     if (parseDay(tour.rehearsalStart) && tour.rehearsalStart < a) a = tour.rehearsalStart;
     return { from: a, to: b };
   }
   function tourDays(tour) {
+    if (pnlType(tour) === 'studio') return pnlBookDates(tour).length;
     var r = tourRun(tour);
     return r ? Math.max(0, daysBetween(r.from, r.to)) + 1 : 0;
   }
@@ -1196,6 +1198,10 @@
     if (!r) return null;
     var from = p && parseDay(p.from) && p.from > r.from ? p.from : r.from;
     var to = p && parseDay(p.to) && p.to < r.to ? p.to : r.to;
+    if (pnlType(tour) === 'studio') {
+      var mine = pnlBookDates(tour).filter(function (d) { return d >= from && d <= to; });
+      return mine.length ? { from: mine[0], to: mine[mine.length - 1], days: mine.length } : { from: from, to: to, days: 0 };
+    }
     return to < from ? { from: from, to: to, days: 0 } : { from: from, to: to, days: daysBetween(from, to) + 1 };
   }
   function personDays(tour, p) { var r = personRun(tour, p); return r ? r.days : 0; }
@@ -1220,22 +1226,35 @@
     if (p.band === false) return false;
     return /^\s*(artist|member|band member)\s*$/i.test(String(p.title || ''));
   }
-  function crewProjection(tour) {
-    return rows(tour && tour.crew).reduce(function (t, p) { return t + crewPay(tour, p); }, 0);
+  function crewProjection(tour, list) {
+    return rows(tour && tour.crew).reduce(function (t, p) { return list && pnlListOf(tour, p.id) !== list ? t : t + crewPay(tour, p); }, 0);
   }
   function crewSplit(tour) {
     var out = { members: 0, crew: 0, hasMembers: false };
     rows(tour && tour.crew).forEach(function (p) {
+      if (pnlListOf(tour, p.id) !== 'crew') return;
       if (isMember(p)) { out.hasMembers = true; out.members += crewPay(tour, p); } else out.crew += crewPay(tour, p);
     });
     return out;
   }
+  function pnlOneCrew(tour) {
+    var ty = pnlType(tour);
+    return (ty === 'studio' || ty === 'other') && isObj(tour.pnl.cats);
+  }
+  function crewTwoLines(tour) {
+    var listed = rows(tour && tour.crew).filter(function (p) { return isMember(p) && pnlListOf(tour, p.id) === 'crew'; });
+    if (!listed.length) return false;
+    if (!pnlOneCrew(tour)) return true;
+    if (listed.some(function (p) { return crewPay(tour, p) > 0; })) return true;
+    return rows(tour.charges).some(function (x) { return !x.accounted && chargeLineParts(tour, x).some(function (q) { return q.line === 'members' && q.amount !== 0; }); }) ||
+      rows(tour.cashLog).some(function (x) { return !CASH_MOVES[x.category] && chargeLineParts(tour, x).some(function (q) { return q.line === 'members' && q.amount !== 0; }); });
+  }
   function chargeLine(tour, x) {
     var k = x && x.category ? x.category : null;
-    if (k !== 'crew') return k;
-    if (crewSplitOf(x)) { var parts = chargeLineParts(tour, x); return parts.length === 1 ? parts[0].line : 'crew'; }
+    if (!isPeopleCat(tour, k)) return k;
+    if (crewSplitOf(x)) { var parts = chargeLineParts(tour, x); return parts.length === 1 ? parts[0].line : k; }
     var p = crewOf(tour, x);
-    return p && isMember(p) ? 'members' : 'crew';
+    return p ? personLine(tour, x.crewId, p) : k;
   }
   function crewOf(tour, x) {
     var p = x && x.crewId && tour && isObj(tour.crew) ? tour.crew[x.crewId] : null;
@@ -1276,10 +1295,10 @@
   function chargeLineParts(tour, x) {
     var k = x && x.category ? x.category : null;
     if (!k) return [];
-    if (k !== 'crew') return [{ line: k, amount: num(x.amount) }];
+    if (!isPeopleCat(tour, k)) return [{ line: k, amount: num(x.amount) }];
     var sh = crewShares(tour, x), by = {};
-    sh.shares.forEach(function (s) { var l = isMember(s.person) ? 'members' : 'crew'; by[l] = (by[l] || 0) + s.amount; });
-    if (sh.loose > 0) by.crew = (by.crew || 0) + sh.loose;
+    sh.shares.forEach(function (s) { var l = personLine(tour, s.crewId, s.person); by[l] = (by[l] || 0) + s.amount; });
+    if (sh.loose > 0) by[k] = (by[k] || 0) + sh.loose;
     return Object.keys(by).map(function (l) { return { line: l, amount: round(by[l] * 100) / 100 }; });
   }
   function isHelper(p) { return !!(p && p.helper === true); }
@@ -1653,12 +1672,16 @@
       return { date: d, income: round(ci * 100) / 100, spent: round(co * 100) / 100 };
     });
   }
-  function payStanding(info) {
-    var i = isObj(info) ? info : {};
-    var tour = isObj(i.tour) ? i.tour : {};
+  function payRunOf(doc, tour) {
+    if (isPnlBook(doc) || (isStudioDoc(doc) && studioSpan(doc))) return doc;
     var like = { shows: {}, spanStart: tour.spanStart, spanEnd: tour.spanEnd, rehearsalStart: tour.rehearsalStart };
     if (parseDay(tour.first)) like.shows.a = { date: tour.first };
     if (parseDay(tour.last)) like.shows.b = { date: tour.last };
+    return like;
+  }
+  function payStanding(info) {
+    var i = isObj(info) ? info : {};
+    var like = payRunOf(i.doc, isObj(i.tour) ? i.tour : {});
     var total = isObj(i.crew) ? crewPay(like, i.crew) : 0;
     var list = Array.isArray(i.payments) ? i.payments : rows(i.payments);
     var paid = round(list.reduce(function (t, p) { return t + num(p && p.amount); }, 0) * 100) / 100;
@@ -2374,18 +2397,38 @@
       return !same(a[k], b[k]);
     });
   }
+  function pnlEnds(t) {
+    if (pnlType(t) === 'studio') { var d = pnlBookDates(t); return { from: d[0] || '', to: d[d.length - 1] || '' }; }
+    return { from: isObj(t) && parseDay(t.pnlFrom) ? t.pnlFrom : '', to: isObj(t) && parseDay(t.pnlTo) ? t.pnlTo : '' };
+  }
   function pnlBookYear(t) {
     if (!isPnlDoc(t)) return '';
-    if (parseDay(t.pnlFrom)) return t.pnlFrom.slice(0, 4);
-    if (parseDay(t.pnlTo)) return t.pnlTo.slice(0, 4);
+    var e = pnlEnds(t);
+    if (e.from) return e.from.slice(0, 4);
+    if (e.to) return e.to.slice(0, 4);
     return typeof t.createdAt === 'number' && isFinite(t.createdAt) ? String(new Date(t.createdAt).getFullYear()) : '';
   }
   function pnlBookWhen(t) {
-    if (!isPnlDoc(t) || !parseDay(t.pnlFrom)) return '';
-    return studioSpanWords(t.pnlFrom, parseDay(t.pnlTo) ? t.pnlTo : t.pnlFrom);
+    var e = pnlEnds(t);
+    if (!isPnlDoc(t) || !e.from) return '';
+    return studioSpanWords(e.from, e.to || e.from);
   }
   function pnlBookSummary(t) {
-    var x = isObj(t) ? t : {}, d = pnlClean(x.pnl), tot = pnlTotals(d), inc = d.income;
+    var x = isObj(t) ? t : {};
+    if (isPnlBook(x)) {
+      var bm = tourSummary(x), played = pnlBookShows(x).length, old = pnlOldTyped(x);
+      bm.kind = 'pnl'; bm.kicker = 'P&L'; bm.title = pnlBookName(x.name) || 'Untitled P&L';
+      bm.sub = [String(x.artist || '').trim(), pnlTypeLabel(pnlType(x)), pnlKindWhen(x), played ? sumPlural(played, 'show') : ''].filter(Boolean).join(' \u00b7 ');
+      if (old) {
+        var oLines = old.income.map(function (l) { return sumLine('Came in: ' + l.label, l.amount); })
+          .concat(old.out.map(function (l) { return sumLine('Went out: ' + l.label, l.amount); }));
+        bm.sections.push({ key: 'older', title: 'Typed on an older version of Greenroom', lines: oLines,
+          total: { label: 'Net of what was typed there', amount: old.total.net }, notes: ['Not in this P&L\u2019s totals: it may be the same money typed again here.'] });
+        (bm.sheets || []).push({ name: 'Typed on an older version', rows: [['Line', 'Amount']].concat(oLines.map(function (l) { return [l.label, l.amount]; }), [['NET', old.total.net]]) });
+      }
+      return bm;
+    }
+    var d = pnlClean(x.pnl), tot = pnlTotals(d), inc = d.income;
     var label = {};
     PNL_INCOME.concat(PNL_OUT, PNL_EXTRA, PNL_MORE).forEach(function (l) { if (!pnlHas(label, l[0])) label[l[0]] = l[1]; });
     var top = PNL_INCOME.slice(0, PNL_INCOME_TOP).map(function (l) {
@@ -2416,6 +2459,727 @@
       sections: sections, notes: notes, details: [], sheets: [{ name: 'P&L', rows: rowsOut }]
     };
   }
+  var PNL_TYPES = [['show', 'Show'], ['tour', 'Tour'], ['studio', 'Studio'], ['other', 'Other']];
+  var PNL_DATES_MAX = 120, PNL_LIST_MAX = 150;
+  function pnlType(t) {
+    if (!isPnlDoc(t) || !isObj(t.pnl)) return '';
+    var k = t.pnl.type;
+    return PNL_TYPES.some(function (x) { return x[0] === k; }) ? k : '';
+  }
+  function isPnlBook(t) { return !!pnlType(t); }
+  function pnlTypeLabel(k) { var hit = PNL_TYPES.filter(function (x) { return x[0] === k; })[0]; return hit ? hit[1] : ''; }
+  function pnlDatesClean(list) {
+    var seen = {};
+    return (Array.isArray(list) ? list : []).filter(function (d) {
+      if (typeof d !== 'string' || !parseDay(d) || seen[d]) return false;
+      seen[d] = true;
+      return true;
+    }).sort().slice(0, PNL_DATES_MAX);
+  }
+  function pnlListClean(list) {
+    return (Array.isArray(list) ? list : []).filter(function (x) { return isObj(x) && typeof x.d === 'string' && !!parseDay(x.d); }).map(function (x) {
+      var o = { d: x.d }, c = pnlWord(x.c, 50), v = pnlWord(x.v, 50);
+      if (c) o.c = c;
+      if (v) o.v = v;
+      return o;
+    }).sort(function (a, b) { return a.d.localeCompare(b.d); }).slice(0, PNL_LIST_MAX);
+  }
+  function pnlPlaceClean(x) {
+    if (!isObj(x)) return null;
+    var o = {}, c = pnlWord(x.c, 50), v = pnlWord(x.v, 50);
+    if (c) o.c = c;
+    if (v) o.v = v;
+    return c || v ? o : null;
+  }
+  function pnlShowPlace(t) {
+    if (pnlType(t) !== 'show') return null;
+    if (isObj(t.pnl.place)) return pnlPlaceClean(t.pnl.place);
+    var one = pnlListClean(t.pnl.list)[0];
+    return one ? pnlPlaceClean(one) : null;
+  }
+  function pnlBookShows(t) {
+    var type = pnlType(t);
+    if (type === 'tour') return pnlListClean(t.pnl.list);
+    if (type !== 'show' || !parseDay(t.pnlFrom)) return [];
+    var o = { d: t.pnlFrom }, pl = pnlShowPlace(t) || {};
+    if (pl.c) o.c = pl.c;
+    if (pl.v) o.v = pl.v;
+    return [o];
+  }
+  function pnlBookDates(t) { return pnlType(t) === 'studio' ? pnlDatesClean(t.pnl.dates) : []; }
+  function pnlBookSpan(t) {
+    var e = pnlEnds(t);
+    if (!isPnlBook(t) || !e.from) return null;
+    return { from: e.from, to: e.to && e.to >= e.from ? e.to : e.from };
+  }
+  function pnlKindCheck(o) {
+    o = isObj(o) ? o : {};
+    if (!pnlTypeLabel(o.type)) return 'Pick Show, Tour, Studio or Other';
+    if (!pnlBookName(o.name)) return 'Give the P&L a name';
+    if (o.type === 'studio') {
+      return (Array.isArray(o.dates) ? o.dates : []).filter(function (d) { return !!parseDay(d); }).length > PNL_DATES_MAX
+        ? 'Keep it to ' + PNL_DATES_MAX + ' days or fewer' : '';
+    }
+    if (o.type === 'show') return '';
+    var from = parseDay(o.from) ? o.from : '', to = parseDay(o.to) ? o.to : '';
+    if (o.type === 'tour' && !from && to) { var first = pnlListClean(o.list)[0]; if (first) from = first.d; }
+    if (to && !from) return 'Pick the first day';
+    if (from && to && to < from) return 'The last day is before the first day';
+    if (o.type === 'tour') {
+      var list = pnlListClean(o.list);
+      if (from && list.some(function (x) { return x.d < from; })) return 'A show is before the first day';
+      if (to && list.some(function (x) { return x.d > to; })) return 'A show is after the last day';
+    }
+    return '';
+  }
+  function pnlKindParts(o) {
+    if (pnlKindCheck(o)) return null;
+    var type = o.type, dates = type === 'studio' ? pnlDatesClean(o.dates) : [];
+    var list = type === 'tour' ? pnlListClean(o.list) : [];
+    var from = type === 'studio' ? (dates[0] || '') : parseDay(o.from) ? o.from : '';
+    var to = type === 'studio' ? (dates[dates.length - 1] || '') : type === 'show' ? from : parseDay(o.to) ? o.to : '';
+    if (type === 'tour' && list.length) {
+      if (!from) from = list[0].d;
+      if (!to) to = list[list.length - 1].d;
+    }
+    var place = type === 'show' ? pnlPlaceClean({ c: o.city, v: o.venue }) : null;
+    return { type: type, name: pnlBookName(o.name), from: from, to: to, dates: dates, list: list, place: place };
+  }
+  function pnlKindDoc(o) {
+    var p = pnlKindParts(o);
+    if (!p) return null;
+    var cats = {};
+    var nums = pnlClean({});
+    if (p.type === 'studio') {
+      nums.cats = {};
+      PNL_STUDIO_CATS.forEach(function (x, i) {
+        var e = { at: i + 1 };
+        if (x[1].indexOf('x-') === 0) cats[x[1]] = x[0];
+        else if (x[0] !== pnlBuiltInLabel(x[1])) e.name = x[0];
+        if (x[2]) e.people = true;
+        nums.cats[x[1]] = e;
+      });
+    }
+    if (p.type === 'other') nums.cats = {};
+    nums.type = p.type;
+    if (p.dates.length) nums.dates = p.dates;
+    if (p.list.length) nums.list = p.list;
+    if (p.place) nums.place = p.place;
+    var doc = { kind: 'pnl', name: p.name, artist: String(o.artist || '').trim(), createdAt: typeof o.now === 'number' ? o.now : Date.now(),
+      setupDone: true, setupStep: 5, pnl: nums,
+      expenses: emptyExpenses(), commission: emptyCommission(), crew: {}, debts: {}, shows: {}, extras: {}, charges: {}, imports: {}, extraCats: cats };
+    if (o.artistId) doc.artistId = String(o.artistId);
+    if (p.from) doc.pnlFrom = p.from;
+    if (p.to) doc.pnlTo = p.to;
+    return doc;
+  }
+  var PNL_STUDIO_CATS = [['Producer Fee', 'x-producer-fee'], ['Studio Rental', 'studio'], ['Flights', 'flights'], ['Lodging', 'hotels'],
+    ['Crew', 'crew'], ['Food', 'food'], ['Uber/Lyft', 'rideshare'], ['Gear', 'x-gear'], ['Supplies', 'supplies'],
+    ['Features', 'x-features', true], ['Engineer', 'x-engineer', true], ['Session Musicians', 'x-session-musicians', true],
+    ['Mixing', 'x-mixing'], ['Mastering', 'x-mastering'], ['Software/plugins', 'x-software-plugins'], ['Hard Drives', 'x-hard-drives'],
+    ['MISC', 'misc']];
+  var PNL_CAT_NAME_MAX = 30;
+  function pnlBuiltInLabel(k) {
+    var hit = CHARGE_CATEGORIES.filter(function (c) { return c.key === k; })[0];
+    return hit ? hit.label : '';
+  }
+  function pnlCatKeyOk(k) {
+    return typeof k === 'string' && (k === 'commission' || TYPED_CATEGORIES.some(function (c) { return c.key === k; }) || /^x-[a-z0-9-]{1,30}$/.test(k));
+  }
+  function pnlCatSet(t) {
+    if (!isPnlBook(t) || !isObj(t.pnl.cats)) return null;
+    var src = t.pnl.cats, out = [];
+    Object.keys(src).forEach(function (k) {
+      var x = src[k];
+      if (!isObj(x) || !pnlCatKeyOk(k)) return;
+      var at = typeof x.at === 'number' && isFinite(x.at) ? x.at : 9999;
+      out.push({ key: k, at: at, name: pnlWord(x.name, PNL_CAT_NAME_MAX), people: x.people === true && k.indexOf('x-') === 0 });
+    });
+    return out.sort(function (a, b) { return a.at - b.at || a.key.localeCompare(b.key); });
+  }
+  function pnlPeopleCats(t) {
+    var set = pnlCatSet(t), out = {};
+    if (!set) return out;
+    var names = null;
+    set.forEach(function (c) {
+      if (!c.people) return;
+      names = names || extraCatNames(t);
+      out[c.key] = c.name || names[c.key] || extraCatLabel(c.key);
+    });
+    return out;
+  }
+  function pnlListOf(t, crewId) {
+    var who = isPnlBook(t) && isObj(t.pnl.who) ? t.pnl.who : null, k = who && crewId ? who[crewId] : null;
+    return typeof k === 'string' && k !== 'crew' && isPeopleCat(t, k) ? k : 'crew';
+  }
+  function personLine(tour, crewId, p) {
+    var k = pnlListOf(tour, crewId);
+    if (k !== 'crew') return k;
+    return p && isMember(p) ? 'members' : 'crew';
+  }
+  function isPeopleCat(t, k) {
+    if (k === 'crew') return true;
+    if (typeof k !== 'string' || k.indexOf('x-') !== 0 || !pnlCatKeyOk(k) || !isPnlBook(t) || !isObj(t.pnl.cats)) return false;
+    var e = t.pnl.cats[k];
+    return isObj(e) && e.people === true;
+  }
+  function pnlCatsUsed(t) {
+    var out = {};
+    if (!isObj(t)) return out;
+    var mark = function (k) { if (k) out[k === 'members' ? 'crew' : k] = true; };
+    [t.charges, t.cashLog].forEach(function (map) {
+      rows(map).forEach(function (x) {
+        var parts = chargeLineParts(t, x);
+        if (parts.length) parts.forEach(function (q) { mark(q.line); }); else mark(x.category);
+      });
+    });
+    var exp = isObj(t.expenses) ? t.expenses : {};
+    Object.keys(exp).forEach(function (k) { if (isObj(exp[k]) && (num(exp[k].projected) !== 0 || num(exp[k].paid) !== 0)) mark(k); });
+    cardDebts(t).forEach(function (card) {
+      var bd = isObj(card.breakdown) ? card.breakdown : {};
+      Object.keys(bd).forEach(function (k) { if (num(bd[k]) !== 0) mark(k); });
+    });
+    if (rows(t.extras).length) mark(DAY_BY_DAY);
+    rows(t.crew).forEach(function (p) {
+      var k = pnlListOf(t, p.id);
+      if (k !== 'crew' || crewPay(t, p) > 0) mark(k);
+    });
+    return out;
+  }
+  function pnlCatsOf(t, list) {
+    var set = pnlCatSet(t);
+    if (!set) return list || [];
+    var at = {}, name = {}, used = null;
+    set.forEach(function (c, i) { at[c.key] = i; if (c.name) name[c.key] = c.name; });
+    var keep = [];
+    (list || []).forEach(function (c, i) {
+      if (at[c.key] == null) {
+        used = used || pnlCatsUsed(t);
+        if (!used[c.key]) return;
+      }
+      keep.push({ c: name[c.key] && c.label !== 'Members & Crew' ? { key: c.key, label: name[c.key] } : c, i: i });
+    });
+    keep.sort(function (a, b) {
+      var x = at[a.c.key], y = at[b.c.key];
+      if (x != null && y != null) return x - y;
+      if (x != null) return -1;
+      if (y != null) return 1;
+      return a.i - b.i;
+    });
+    return keep.map(function (k) { return k.c; });
+  }
+  function pnlLineShown(t, l) {
+    var set = pnlCatSet(t);
+    if (!set || !isObj(l)) return true;
+    var k = l.key === 'members' ? 'crew' : l.key;
+    if (set.some(function (c) { return c.key === k; })) return true;
+    return Math.abs(num(l.paid)) > 0.004 || num(l.projected) > 0.004 || Math.abs(num(l.effective)) > 0.004 || !!pnlCatsUsed(t)[k];
+  }
+  function pnlCatsNow(t) {
+    var base = studioCategories(t, withMemberLabel(t, TYPED_CATEGORIES.concat([{ key: 'commission', label: 'Commission' }])));
+    var people = pnlPeopleCats(t);
+    return pnlCatsOf(t, base.concat(extraCategories(t))).map(function (c) {
+      return { key: c.key, label: c.label, people: c.key === 'crew' || !!people[c.key] };
+    });
+  }
+  function pnlCatPlain(v) {
+    var s = String(v == null ? '' : v).toLowerCase().replace(/[^a-z0-9]+/g, '');
+    return s.length > 3 ? s.replace(/s$/, '') : s;
+  }
+  function pnlCatsBack(t) {
+    if (!isPnlBook(t)) return [];
+    var shown = {}, out = [], seen = {};
+    pnlCatsNow(t).forEach(function (c) { shown[c.key] = true; });
+    var add = function (key, label, name, people) {
+      if (shown[key] || seen[key] || key === 'offdebt') return;
+      seen[key] = true;
+      out.push({ key: key, label: label, name: name || '', people: !!people });
+    };
+    if (pnlType(t) === 'studio') PNL_STUDIO_CATS.forEach(function (x) { add(x[1], x[0], x[1].indexOf('x-') === 0 ? '' : x[0] !== pnlBuiltInLabel(x[1]) ? x[0] : '', x[2]); });
+    TYPED_CATEGORIES.concat([{ key: 'commission', label: 'Commission' }]).forEach(function (c) { add(c.key, c.label); });
+    var names = extraCatNames(t);
+    Object.keys(names).sort(function (a, b) { return names[a].localeCompare(names[b]); }).forEach(function (k) { add(k, names[k]); });
+    return out;
+  }
+  function pnlCatBase(t) {
+    var patch = { pnl: { cats: {} } };
+    if (pnlCatSet(t)) return patch;
+    pnlCatsNow(t).forEach(function (c, i) {
+      var e = { at: i + 1 };
+      if (c.key.indexOf('x-') !== 0 && c.key !== 'crew' && c.label !== pnlBuiltInLabel(c.key)) e.name = pnlWord(c.label, PNL_CAT_NAME_MAX);
+      patch.pnl.cats[c.key] = e;
+    });
+    return patch;
+  }
+  function pnlCatHolds(t, key) {
+    var out = { amount: 0, paid: 0, plan: 0, entries: 0, people: 0, any: false };
+    if (!isPnlBook(t)) return out;
+    var c = calc(t), byPeople = isPeopleCat(t, key);
+    c.lines.forEach(function (l) {
+      if ((l.key === 'members' ? 'crew' : l.key) !== key) return;
+      out.amount += num(l.effective); out.paid += num(l.paid); if (!byPeople) out.plan += Math.max(0, num(l.projected));
+    });
+    [t.charges, t.cashLog].forEach(function (map) {
+      rows(map).forEach(function (x) {
+        var parts = chargeLineParts(t, x);
+        var on = parts.length ? parts.some(function (q) { return (q.line === 'members' ? 'crew' : q.line) === key; }) : x.category === key;
+        if (on) out.entries += 1;
+      });
+    });
+    var exp = normExpenses(t.expenses)[key];
+    if (exp && num(exp.projected) > 0 && key !== 'crew' && !pnlPeopleCats(t)[key]) out.plan = Math.max(out.plan, num(exp.projected));
+    if (exp && num(exp.paid) !== 0 && !out.entries) out.entries += 1;
+    rows(t.crew).forEach(function (p) {
+      var k = pnlListOf(t, p.id);
+      if (k === key && (k !== 'crew' || crewPay(t, p) > 0)) out.people += 1;
+    });
+    if (key === DAY_BY_DAY) out.entries += rows(t.extras).length;
+    cardDebts(t).forEach(function (card) { var bd = isObj(card.breakdown) ? card.breakdown : {}; if (num(bd[key]) !== 0) out.entries += 1; });
+    ['amount', 'paid', 'plan'].forEach(function (k) { out[k] = cents(out[k]); });
+    out.any = Math.abs(out.amount) > 0.004 || Math.abs(out.paid) > 0.004 || out.plan > 0.004 || out.entries > 0 || out.people > 0;
+    return out;
+  }
+  function pnlCatDelete(t, key) {
+    if (!isPnlBook(t) || !pnlCatsNow(t).some(function (c) { return c.key === key; }) || pnlCatHolds(t, key).any) return null;
+    var patch = pnlCatBase(t);
+    patch.pnl.cats[key] = null;
+    return patch;
+  }
+  function pnlCatAdd(t, label, people) {
+    if (!isPnlBook(t)) return { why: 'This isn’t a P&L.' };
+    var nm = pnlWord(label, PNL_CAT_NAME_MAX);
+    if (!nm) return { why: 'Name it first' };
+    var now = pnlCatsNow(t), plain = pnlCatPlain(nm);
+    var same = now.filter(function (c) { return pnlCatPlain(c.label) === plain || (c.key.indexOf('x-') !== 0 && pnlCatPlain(pnlBuiltInLabel(c.key)) === plain); })[0];
+    if (same) return { why: '“' + same.label + '” is already a category here' };
+    var back = pnlCatsBack(t).filter(function (c) { return pnlCatPlain(c.label) === plain || (c.key.indexOf('x-') !== 0 && pnlCatPlain(pnlBuiltInLabel(c.key)) === plain); })[0];
+    var key = back ? back.key : slugCategory(nm);
+    if (!key) return { why: 'Use a letter or a number in its name' };
+    if (now.some(function (c) { return c.key === key; })) return { why: 'A category with nearly that name is already here' };
+    var patch = pnlCatBase(t), set = pnlCatSet(t) || [], top = 0;
+    Object.keys(patch.pnl.cats).forEach(function (k) { var e = patch.pnl.cats[k]; if (isObj(e) && e.at > top) top = e.at; });
+    set.forEach(function (c) { if (c.at > top && c.at < 9999) top = c.at; });
+    var e = { at: top + 1 };
+    if (back && back.name) e.name = back.name;
+    var list = key.indexOf('x-') === 0 && ((back && back.people) || !!people);
+    if (list) e.people = true;
+    patch.pnl.cats[key] = e;
+    var shown = back ? back.label : nm;
+    if (key.indexOf('x-') === 0) { patch.extraCats = {}; patch.extraCats[key] = shown; }
+    return { patch: patch, key: key, label: back && back.name ? back.name : shown, people: !!list };
+  }
+  function pnlMerge(a, b) {
+    if (!isObj(a) || !isObj(b)) return isObj(b) ? JSON.parse(JSON.stringify(b)) : b;
+    var out = {};
+    Object.keys(a).forEach(function (k) { out[k] = a[k]; });
+    Object.keys(b).forEach(function (k) { out[k] = isObj(b[k]) && isObj(a[k]) ? pnlMerge(a[k], b[k]) : isObj(b[k]) ? pnlMerge({}, b[k]) : b[k]; });
+    return out;
+  }
+  var PNL_ADVANCE_FROM_MAX = 60;
+  function pnlAdvance(t, c) {
+    var cc = c || calc(t);
+    var list = (cc.otherRows || []).filter(function (x) { return isObj(x) && x.kind === 'advance'; });
+    var total = cents(list.reduce(function (n, x) { return n + num(x.amount); }, 0)), out = cents(cc.out);
+    return { total: total, out: out, left: cents(total - out), over: round(out) - round(total) > 0 ? cents(out - total) : 0, list: list };
+  }
+  function pnlAdvanceWords(a) {
+    return 'Advance ' + money(a.total) + ' · Spent ' + money(a.out) + ' · ' +
+      (a.over > 0 ? 'Over by ' + money(round(a.out) - round(a.total)) : money(Math.max(0, round(a.total) - round(a.out))) + ' left');
+  }
+  var PNL_UPLOAD_MAX = 120;
+  function pnlUploadCat(t, name) {
+    var plain = pnlCatPlain(name);
+    if (!plain) return null;
+    var hit = function (c) { return pnlCatPlain(c.label) === plain || (c.key.indexOf('x-') !== 0 && pnlCatPlain(pnlBuiltInLabel(c.key)) === plain); };
+    var now = pnlCatsNow(t).filter(hit)[0];
+    if (now) return { key: now.key, label: now.label, isNew: false, people: now.people };
+    var back = pnlCatsBack(t).filter(hit)[0];
+    if (back) return { key: back.key, label: back.name || back.label, isNew: true, people: back.key === 'crew' || back.people };
+    var key = slugCategory(name), label = pnlWord(name, PNL_CAT_NAME_MAX);
+    return key && label ? { key: key, label: label, isNew: true, people: false } : null;
+  }
+  function pnlUploadList(t, name) {
+    var plain = pnlCatPlain(name), lists = pnlPeopleCats(t), hit = 'crew';
+    Object.keys(lists).forEach(function (k) { if (plain && pnlCatPlain(lists[k]) === plain) hit = k; });
+    return hit;
+  }
+  function pnlUploadAfter(t, m) {
+    if (!isObj(m) || !isObj(m.days) || !m.days.on || pnlCardDays(t)) return t;
+    var dp = pnlKindEditPatch(t, m.days.answers, true);
+    return dp && Object.keys(dp).length ? pnlMerge(t, dp) : t;
+  }
+  function pnlUploadDay(t, m, today) {
+    var span = pnlBookSpan(pnlUploadAfter(t, m)), d = parseDay(today) ? today : tourToday();
+    return span && d > span.to ? span.to : span && d < span.from ? span.from : d;
+  }
+  function pnlUploadPay(t, p) {
+    if (!isObj(p)) return { per: 'other', rate: 0, pay: 0, planned: 0, flat: false };
+    if (p.per !== 'day' && p.per !== 'week') { var f = cents(num(p.pay)); return { per: 'other', rate: 0, pay: f, planned: f, flat: false }; }
+    var planned = cents(crewPay(t, { per: p.per, rate: num(p.rate), pay: 0 }));
+    var want = cents(num(p.total) > 0 ? num(p.total) : num(p.days) > 0 ? num(p.rate) * num(p.days) / (p.per === 'week' ? 7 : 1) : 0);
+    if (want > 0 && Math.abs(want - planned) > 0.5) return { per: 'other', rate: 0, pay: want, planned: want, flat: true };
+    return { per: p.per, rate: num(p.rate), pay: 0, planned: planned, flat: false };
+  }
+  function pnlUploadModel(t, out) {
+    var o = isObj(out) ? out : {}, type = pnlType(t), showy = type === 'show' || type === 'tour';
+    var m = { mode: o.kind === 'spent' ? 'spent' : 'plan', cats: [], people: [], income: [], advance: [], days: null, left: [] };
+    if (!type) return m;
+    var amt = function (v) { var n = cents(num(v)); return n > 0 ? n : 0; };
+    var words = function (v) { return pnlWord(v, 80); };
+    var more = [];
+    var arr = function (v, one, many, worth) {
+      var all = (Array.isArray(v) ? v : []).filter(isObj);
+      if (all.length > PNL_UPLOAD_MAX) {
+        var rest = all.slice(PNL_UPLOAD_MAX);
+        more.push({ words: rest.length + ' more ' + (rest.length === 1 ? one : many), more: true, why: 'Not read: too many at once. Upload the rest on its own.',
+          amount: cents(rest.reduce(function (n, x) { return n + amt(worth ? worth(x) : x.amount); }, 0)) });
+      }
+      return all.slice(0, PNL_UPLOAD_MAX);
+    };
+    var exp = normExpenses(t.expenses), seq = 0, next = function (p) { seq += 1; return p + seq; };
+    var byKey = {};
+    arr(o.lines, 'line', 'lines').forEach(function (l) {
+      var a = amt(l.amount), w = words(l.words) || words(l.category);
+      var c = pnlUploadCat(t, l.category);
+      if (!c) { m.left.push({ words: w || 'A line', amount: a, why: 'No category' }); return; }
+      if (!a) { m.left.push({ words: w || c.label, amount: 0, why: 'No amount' }); return; }
+      var row = byKey[c.key];
+      if (!row) {
+        row = byKey[c.key] = { id: next('c'), key: c.key, label: c.label, isNew: c.isNew, people: c.people, amount: 0, lines: [], on: true, had: '' };
+        m.cats.push(row);
+      }
+      row.lines.push({ amount: a, words: w || c.label });
+      row.amount = cents(row.amount + a);
+    });
+    var pool = {};
+    rows(t.charges).forEach(function (ch) {
+      if (ch.upload !== true || typeof ch.category !== 'string') return;
+      (pool[ch.category] = pool[ch.category] || []).push({ amount: cents(num(ch.amount)), plain: pnlCatPlain(ch.merchant), used: false });
+    });
+    m.cats.forEach(function (row) {
+      var plan = exp[row.key] && exp[row.key].projected;
+      row.planHad = plan != null && num(plan) > 0 && !row.people ? cents(plan) : 0;
+      row.figured = row.key === 'commission';
+      var mine = pool[row.key] || [];
+      row.lines.forEach(function (l) {
+        var plain = pnlCatPlain(pnlWord(l.words, 60) || row.label);
+        var hit = mine.filter(function (s) { return !s.used && s.amount === l.amount && s.plain === plain; })[0];
+        l.had = !!hit; l.maybe = false;
+        if (hit) hit.used = true;
+      });
+      row.lines.forEach(function (l) {
+        if (l.had) return;
+        var hit = mine.filter(function (s) { return !s.used && s.amount === l.amount; })[0];
+        if (hit) { hit.used = true; l.maybe = true; }
+      });
+      row.spentHad = row.lines.every(function (l) { return l.had; });
+      var maybe = row.lines.filter(function (l) { return l.maybe; });
+      row.maybe = maybe.length ? { id: next('m'), on: false, n: maybe.length, amount: cents(maybe.reduce(function (n, l) { return n + l.amount; }, 0)) } : null;
+    });
+    var dd = isObj(o.days) ? o.days : null;
+    if (dd && !pnlCardDays(t)) {
+      var shows = arr(dd.shows, 'show', 'shows', function () { return 0; }).filter(function (s) { return parseDay(s.date); }).map(function (s) { return { d: s.date, c: pnlWord(s.city, 50), v: pnlWord(s.venue, 50) }; });
+      var picked = (Array.isArray(dd.dates) ? dd.dates : []).filter(function (x) { return typeof x === 'string' && !!parseDay(x); });
+      if (type === 'studio' && !picked.length && parseDay(dd.from)) {
+        for (var day = dd.from, k = 0; day <= (parseDay(dd.to) && dd.to >= dd.from ? dd.to : dd.from) && k < PNL_DATES_MAX; day = addDays(day, 1), k += 1) picked.push(day);
+      }
+      var first = shows[0] || {};
+      var ans = { type: type, name: pnlBookName(t.name) || 'P&L', dates: picked, list: type === 'tour' ? shows : [],
+        from: parseDay(dd.from) ? dd.from : type === 'show' && first.d ? first.d : '', to: parseDay(dd.to) ? dd.to : '',
+        city: pnlWord(dd.city, 50) || first.c || (pnlShowPlace(t) || {}).c || '', venue: pnlWord(dd.venue, 50) || first.v || (pnlShowPlace(t) || {}).v || '' };
+      var parts = pnlKindParts(ans);
+      if (parts && (parts.from || parts.dates.length)) {
+        m.days = { id: next('d'), answers: ans, on: true, had: '',
+          words: type === 'studio' ? sumPlural(parts.dates.length, 'day') + ' · ' + studioSpanWords(parts.from, parts.to)
+            : [studioSpanWords(parts.from, parts.to), type === 'tour' && parts.list.length ? sumPlural(parts.list.length, 'show') : '',
+              type === 'show' ? [ans.venue, ans.city].filter(Boolean).join(', ') : ''].filter(Boolean).join(' · ') };
+      } else if (parseDay(dd.from) || picked.length || shows.length) m.left.push({ words: 'Its days', amount: 0, why: pnlKindCheck(ans) || 'They don’t fit a ' + pnlTypeLabel(type) + ' P&L' });
+    }
+    var lists = pnlPeopleCats(t);
+    arr(o.people, 'person', 'people', function (p) { return p.total; }).forEach(function (p) {
+      var name = pnlWord(p.name, 60);
+      if (!name) { m.left.push({ words: words(p.role) || 'A person', amount: amt(p.total) || amt(p.rate), why: 'No name' }); return; }
+      var list = pnlUploadList(t, p.list), per = p.per === 'day' || p.per === 'week' ? p.per : 'other';
+      var rate = per === 'other' ? 0 : amt(p.rate), total = amt(p.total), days = Math.min(PNL_DATES_MAX, Math.max(0, Math.round(num(p.days))));
+      if (per !== 'other' && !rate) { per = 'other'; }
+      var same = rows(t.crew).filter(function (q) { return whoKey(q.name) === whoKey(name); })[0];
+      m.people.push({ id: next('p'), name: name, role: pnlWord(p.role, 60), list: list, listLabel: list === 'crew' ? 'Crew' : lists[list],
+        per: per, rate: rate, pay: per === 'other' ? total : 0, total: per === 'other' ? 0 : total, days: per === 'other' ? 0 : days, on: !same,
+        had: same ? 'Already on ' + (pnlListOf(t, same.id) === 'crew' ? 'Crew' : lists[pnlListOf(t, same.id)]) : '' });
+    });
+    var had = rows(t.otherIncome);
+    var sameDay = function (a, b) { return !parseDay(a) || !parseDay(b) || a === b; };
+    var sameIncome = function (kind, a, d) {
+      return had.some(function (x) { return x.kind === kind && cents(x.amount) === a && sameDay(d, x.date); });
+    };
+    var advs = [];
+    var advRow = function (a, from, d) {
+      var dup = had.some(function (y) { return y.kind === 'advance' && cents(y.amount) === a && sameDay(d, y.date) && (!from || !y.from || pnlCatPlain(y.from) === pnlCatPlain(from)); });
+      var twice = !dup && advs.some(function (y) { return y.amount === a && sameDay(d, y.date); });
+      var row = { id: next('a'), kind: 'advance', label: 'Advance' + (from ? ' from ' + from : ''), from: from, amount: a, date: d, on: !dup && !twice,
+        had: dup ? (type === 'studio' ? 'Already there' : 'Already logged') : '', note: twice ? 'Same as the advance above' : '' };
+      advs.push(row);
+      (type === 'studio' ? m.advance : m.income).push(row);
+    };
+    var readAdvances = function () {
+      arr(o.advance, 'advance', 'advances').forEach(function (x) {
+        var a = amt(x.amount), from = pnlWord(x.from, PNL_ADVANCE_FROM_MAX), d = parseDay(x.date) ? x.date : '';
+        if (!a) { m.left.push({ words: 'Advance' + (from ? ' from ' + from : ''), amount: 0, why: 'No amount' }); return; }
+        advRow(a, from, d);
+      });
+    };
+    if (type === 'studio') readAdvances();
+    var kinds = OTHER_INCOME_KINDS.map(function (k) { return k.key; });
+    arr(o.income, 'income line', 'income lines').forEach(function (x) {
+      var a = amt(x.amount), kind = kinds.indexOf(x.kind) >= 0 ? x.kind : 'other', w = words(x.words);
+      if (!a) { m.left.push({ words: w || otherKindLabel(kind), amount: 0, why: 'No amount' }); return; }
+      if (kind === 'guarantee' && !showy) { m.left.push({ words: w || 'Guarantee', amount: a, why: 'A ' + pnlTypeLabel(type) + ' P&L has no Guarantee' }); return; }
+      var d = parseDay(x.date) ? x.date : '';
+      if (kind === 'advance') { advRow(a, '', d); return; }
+      var dup = sameIncome(kind, a, d);
+      m.income.push({ id: next('i'), kind: kind, label: kind === 'other' && otherNote(w) ? otherNote(w) : otherKindLabel(kind), words: kind === 'other' ? otherNote(w) : '',
+        amount: a, date: d, on: !dup, had: dup ? 'Already logged' : '' });
+    });
+    if (type !== 'studio') readAdvances();
+    m.left = m.left.concat(more);
+    return m;
+  }
+  function pnlUploadPatch(t, m, o) {
+    o = isObj(o) ? o : {};
+    if (!isPnlBook(t) || !isObj(m)) return null;
+    var mode = o.mode === 'spent' ? 'spent' : 'plan', now = typeof o.now === 'number' ? o.now : Date.now(), up = String(o.id || ('upload-' + now));
+    var patch = {}, work = t, n = 0, plan = 0, spent = 0, inc = 0, seq = 0, entries = 0;
+    var put = function (p) { patch = pnlMerge(patch, p); work = pnlMerge(work, p); };
+    var key = function (pre) { seq += 1; return pre + up.replace(/^upload-/, '') + '-' + seq; };
+    var catOf = function (row) {
+      if (!row.isNew || pnlCatsNow(work).some(function (c) { return c.key === row.key; })) return row.key;
+      var add = pnlCatAdd(work, row.label, row.people);
+      if (!add.patch) return null;
+      put(add.patch);
+      return add.key;
+    };
+    if (m.days && m.days.on && !pnlCardDays(t)) {
+      var dp = pnlKindEditPatch(t, m.days.answers, !!o.keepLog);
+      if (dp && Object.keys(dp).length) { put(dp); n += 1; }
+    }
+    var day = parseDay(o.day) ? o.day : pnlUploadDay(work, null, o.today);
+    (m.cats || []).forEach(function (row) {
+      if (mode === 'plan') {
+        if (!row.on || row.people || row.planHad || row.figured) return;
+        var k = catOf(row);
+        if (!k) return;
+        var e = {}; e[k] = { projected: row.amount };
+        put({ expenses: e });
+        n += 1; plan = cents(plan + row.amount);
+        return;
+      }
+      var lines = (row.lines || []).filter(function (l) { return !l.had && (l.maybe ? !!(row.maybe && row.maybe.on) : !!row.on); });
+      if (!lines.length) return;
+      var k2 = catOf(row);
+      if (!k2) return;
+      var ch = {};
+      lines.forEach(function (l, i) {
+        ch[key('u')] = { date: day, merchant: pnlWord(l.words, 60) || row.label, amount: l.amount, category: k2,
+          accounted: false, manual: true, paid: true, upload: true, importId: up, createdAt: now + i };
+        n += 1; entries += 1; spent = cents(spent + l.amount);
+      });
+      put({ charges: ch });
+    });
+    if (mode === 'spent' && spent > 0) {
+      var im = {}; im[up] = { createdAt: now, count: entries, total: spent, source: 'upload' };
+      put({ imports: im });
+    }
+    var onCrew = false;
+    (m.people || []).forEach(function (p) {
+      if (!p.on) return;
+      var id = key('w'), pay = pnlUploadPay(work, p), row = { name: p.name, title: p.role || '', member: false, createdAt: now };
+      if (pay.per === 'day' || pay.per === 'week') { row.per = pay.per; row.rate = pay.rate; row.pay = 0; }
+      else { row.per = 'other'; row.pay = pay.pay; }
+      var c = {}; c[id] = row;
+      put({ crew: c });
+      if (p.list && p.list !== 'crew' && pnlPeopleCats(work)[p.list]) { var w = {}; w[id] = p.list; put({ pnl: { who: w } }); }
+      else onCrew = true;
+      n += 1;
+    });
+    var set = onCrew ? pnlCatSet(work) : null;
+    if (set && !set.some(function (c) { return c.key === 'crew'; })) {
+      var top = 0;
+      set.forEach(function (c) { if (c.at > top && c.at < 9999) top = c.at; });
+      put({ pnl: { cats: { crew: { at: top + 1 } } } });
+    }
+    (m.income || []).concat(m.advance || []).forEach(function (x) {
+      if (!x.on) return;
+      var e = { amount: x.amount, kind: x.kind, typed: true, upload: true, at: now, date: parseDay(x.date) ? x.date : day };
+      if (x.kind === 'other' && otherNote(x.words)) e.label = otherNote(x.words);
+      if (x.kind === 'advance' && x.from) e.from = pnlWord(x.from, PNL_ADVANCE_FROM_MAX);
+      var oi = {}; oi[key(x.kind === 'advance' ? 'adv-' : 'typed-')] = e;
+      put({ otherIncome: oi });
+      n += 1; inc = cents(inc + x.amount);
+    });
+    return n ? { patch: patch, n: n, plan: plan, spent: spent, income: inc, day: day } : null;
+  }
+  function pnlKindEditPatch(was, o, keepLog) {
+    if (!isPnlBook(was)) return null;
+    var p = pnlKindParts(Object.assign({}, isObj(o) ? o : {}, { type: pnlType(was) }));
+    if (!p) return null;
+    var out = {}, inner = {}, same = function (x, y) { return JSON.stringify(x) === JSON.stringify(y); };
+    if (p.name !== pnlBookName(was.name)) out.name = p.name;
+    var had = pnlEnds(was);
+    if (p.from !== had.from) out.pnlFrom = p.from || null;
+    if (p.to !== had.to) out.pnlTo = p.to || null;
+    if (p.type === 'studio' && !same(p.dates, pnlBookDates(was))) inner.dates = p.dates;
+    if (p.type === 'tour' && !same(p.list, pnlBookShows(was))) inner.list = p.list;
+    if (p.type === 'show' && !same(p.place || null, pnlShowPlace(was))) inner.place = p.place || null;
+    if (Object.keys(inner).length) out.pnl = inner;
+    if (!keepLog && pnlCards(was).length && ('pnlFrom' in out || 'pnlTo' in out || 'dates' in inner)) out.cardLog = pnlLogFor(was, pnlPartsDays(p));
+    return out;
+  }
+  function pnlPartsDays(p) {
+    if (!isObj(p)) return null;
+    if (p.type === 'studio') return p.dates.length ? { from: p.dates[0], to: p.dates[p.dates.length - 1], days: p.dates } : null;
+    return p.from ? { from: p.from, to: p.type === 'show' ? p.from : (p.to && p.to >= p.from ? p.to : p.from), days: null } : null;
+  }
+  function pnlLogAdds(was, o) {
+    if (!isPnlBook(was) || !pnlCards(was).length) return false;
+    var p = pnlKindParts(Object.assign({}, isObj(o) ? o : {}, { type: pnlType(was) }));
+    var now = p ? pnlPartsDays(p) : null;
+    if (!now) return false;
+    var had = pnlCardDays(was), log = isObj(was.cardLog) ? was.cardLog : {};
+    if (now.days) {
+      var linked = {};
+      (Array.isArray(log.days) ? log.days : []).forEach(function (x) { if (typeof x === 'string' && parseDay(x)) linked[x] = true; });
+      return now.days.some(function (x) { return !linked[x] && !(had && had.days && had.days.indexOf(x) >= 0); });
+    }
+    var sp = isObj(log.span) ? log.span : {}, sf = parseDay(sp.from) ? sp.from : '', sl = sf && parseDay(sp.to) && sp.to >= sf ? sp.to : sf;
+    var cover = [had && !had.days ? [had.from, had.to] : null, sf ? [sf, sl] : null].filter(Boolean).sort(function (a, b) { return a[0].localeCompare(b[0]); });
+    var at = now.from;
+    cover.forEach(function (c) { if (c[0] <= at && c[1] >= at) at = addDays(c[1], 1); });
+    return at <= now.to;
+  }
+  function pnlKindClash(was, now, patch) {
+    if (!isPnlBook(was) || !isPnlBook(now) || now.deletedAt) return true;
+    patch = isObj(patch) ? patch : {};
+    var day = function (v) { return parseDay(v) ? v : null; }, same = function (x, y) { return JSON.stringify(x) === JSON.stringify(y); };
+    if ('name' in patch && pnlBookName(was.name) !== pnlBookName(now.name)) return true;
+    if ('pnlFrom' in patch && day(was.pnlFrom) !== day(now.pnlFrom)) return true;
+    if ('pnlTo' in patch && day(was.pnlTo) !== day(now.pnlTo)) return true;
+    var inner = isObj(patch.pnl) ? patch.pnl : {};
+    if ('dates' in inner && !same(pnlBookDates(was), pnlBookDates(now))) return true;
+    if ('list' in inner && !same(pnlBookShows(was), pnlBookShows(now))) return true;
+    if ('place' in inner && !same(pnlShowPlace(was), pnlShowPlace(now))) return true;
+    return false;
+  }
+  function pnlKindEdited(was, o) {
+    if (!isPnlBook(was)) return false;
+    o = isObj(o) ? o : {};
+    var type = pnlType(was), same = function (x, y) { return JSON.stringify(x) === JSON.stringify(y); };
+    var day = function (v) { return typeof v === 'string' && parseDay(v) ? v : ''; };
+    if (pnlBookName(o.name) !== pnlBookName(was.name)) return true;
+    if (type === 'studio') {
+      var seen = {}, picked = (Array.isArray(o.dates) ? o.dates : []).filter(function (d) {
+        if (!day(d) || seen[d]) return false;
+        seen[d] = true;
+        return true;
+      }).sort();
+      return !same(picked, pnlBookDates(was));
+    }
+    if (day(o.from) !== day(was.pnlFrom)) return true;
+    if (type === 'show') return !same(pnlPlaceClean({ c: o.city, v: o.venue }), pnlShowPlace(was));
+    if (day(o.to) !== day(was.pnlTo)) return true;
+    if (type !== 'tour') return false;
+    var a = isObj(o.adding) ? o.adding : null;
+    return !same(pnlListClean(o.list), pnlBookShows(was)) || !!(a && (String(a.c || '').trim() || String(a.v || '').trim()));
+  }
+  var PNL_CARDS_MAX = 20;
+  function pnlCards(t) {
+    if (!isPnlBook(t) || !isObj(t.cardLog) || !Array.isArray(t.cardLog.cards)) return [];
+    var seen = {};
+    return t.cardLog.cards.filter(function (c) {
+      var id = isObj(c) ? String(c.id == null ? '' : c.id).trim() : '';
+      if (!id || seen[id]) return false;
+      seen[id] = true;
+      return true;
+    }).map(function (c) { return { id: String(c.id).trim(), name: String(c.name == null ? '' : c.name).replace(/\s+/g, ' ').trim().slice(0, 80) }; })
+      .slice(0, PNL_CARDS_MAX);
+  }
+  function pnlCardDays(t) {
+    var type = pnlType(t);
+    if (!type) return null;
+    if (type === 'studio') {
+      var d = pnlBookDates(t);
+      return d.length ? { from: d[0], to: d[d.length - 1], days: d, n: d.length } : null;
+    }
+    var sp = pnlBookSpan(t);
+    if (!sp) return null;
+    if (type === 'show') return { from: sp.from, to: sp.from, days: null, n: 1 };
+    return { from: sp.from, to: sp.to, days: null, n: daysBetween(sp.from, sp.to) + 1 };
+  }
+  function pnlLogFor(t, d) {
+    var own = d === undefined ? pnlCardDays(t) : d;
+    if (pnlType(t) === 'studio') return { days: own && own.days ? own.days.slice() : [] };
+    return { span: own ? { from: own.from, to: own.to } : null };
+  }
+  function pnlLogDays(t) {
+    var own = pnlCardDays(t);
+    if (!own) return null;
+    var log = isObj(t.cardLog) ? t.cardLog : {};
+    if (own.days) {
+      var linked = {};
+      (Array.isArray(log.days) ? log.days : []).forEach(function (x) { if (typeof x === 'string' && parseDay(x)) linked[x] = true; });
+      var d = own.days.filter(function (x) { return linked[x]; });
+      return d.length ? { from: d[0], to: d[d.length - 1], days: d, n: d.length } : null;
+    }
+    var sp = isObj(log.span) ? log.span : {}, sf = parseDay(sp.from) ? sp.from : '', sl = sf && parseDay(sp.to) && sp.to >= sf ? sp.to : sf;
+    if (!sf) return null;
+    var from = own.from > sf ? own.from : sf, to = own.to < sl ? own.to : sl;
+    return to >= from ? { from: from, to: to, days: null, n: daysBetween(from, to) + 1 } : null;
+  }
+  function pnlDaysOverlap(a, b) {
+    if (!isObj(a) || !isObj(b) || !parseDay(a.from) || !parseDay(b.from)) return null;
+    var inside = function (x, o) { return o.days ? o.days.indexOf(x) >= 0 : x >= o.from && x <= o.to; };
+    if (a.days || b.days) {
+      var list = (a.days || b.days).filter(function (x) { return inside(x, a) && inside(x, b); });
+      return list.length ? { from: list[0], to: list[list.length - 1], days: list, n: list.length } : null;
+    }
+    var from = a.from > b.from ? a.from : b.from, to = a.to < b.to ? a.to : b.to;
+    return to >= from ? { from: from, to: to, days: null, n: daysBetween(from, to) + 1 } : null;
+  }
+  function pnlKindWhen(t) {
+    var d = pnlBookDates(t), when = pnlBookWhen(t);
+    return d.length > 1 && d.length < daysBetween(d[0], d[d.length - 1]) + 1 ? sumPlural(d.length, 'day') + ' · ' + when : when;
+  }
+  function pnlOldTyped(t) {
+    if (!isPnlBook(t)) return null;
+    var d = pnlClean(t.pnl), label = {};
+    PNL_INCOME.concat(PNL_OUT, PNL_EXTRA, PNL_MORE).forEach(function (l) { if (!pnlHas(label, l[0])) label[l[0]] = l[1]; });
+    var inc = PNL_INCOME.map(function (l) { var v = l[0] === 'guarantee' || l[0] === 'merch' ? pnlBox(d, l[0]) : d.income[l[0]]; return v == null ? null : { label: l[1], amount: num(v) }; }).filter(Boolean);
+    var out = Object.keys(d.lines).sort(function (a, b) { return (pnlHas(label, a) ? 0 : 1) - (pnlHas(label, b) ? 0 : 1) || a.localeCompare(b); })
+      .map(function (k) { return { label: pnlHas(label, k) ? label[k] : extraCatLabel(k), amount: num(d.lines[k]) }; })
+      .concat(d.other.map(function (o) { return { label: o.label || 'Other', amount: num(o.amount) }; }));
+    if (!inc.length && !out.length) return null;
+    return { income: inc, out: out, total: pnlTotals(d) };
+  }
+  function pnlFromFlyer(type, had, rows) {
+    had = isObj(had) ? had : {};
+    var got = (Array.isArray(rows) ? rows : []).filter(function (r) { return isObj(r) && typeof r.date === 'string' && !!parseDay(r.date); })
+      .map(function (r) { return { d: r.date, c: pnlWord(r.city, 50), v: pnlWord(r.venue, 50) }; });
+    var out = { from: had.from || '', to: had.to || '', list: pnlListClean(had.list), city: had.city || '', venue: had.venue || '', added: 0 };
+    if (!got.length) return out;
+    if (type === 'show') {
+      var one = got[0];
+      return { from: one.d, to: one.d, list: [], city: one.c, venue: one.v, added: 1 };
+    }
+    var key = function (x) { return x.d + '|' + String(x.c || '').toLowerCase(); }, seen = {};
+    out.list.forEach(function (x) { seen[key(x)] = true; });
+    got.forEach(function (x) { if (seen[key(x)]) return; seen[key(x)] = true; out.list.push(x); out.added += 1; });
+    out.list = pnlListClean(out.list);
+    if (out.list.length) {
+      var a = out.list[0].d, b = out.list[out.list.length - 1].d;
+      out.from = parseDay(had.from) && had.from < a ? had.from : a;
+      out.to = parseDay(had.to) && had.to > b ? had.to : b;
+    }
+    return out;
+  }
   function catsUsed(tour) {
     var out = {};
     if (!isObj(tour)) return out;
@@ -2430,7 +3194,8 @@
     return out;
   }
   function studioCategories(tour, list) {
-    if (!isStudioDoc(tour)) return list;
+    if (!isStudioDoc(tour) && pnlType(tour) !== 'studio') return list;
+    if (pnlCatSet(tour)) return list;
     var used = catsUsed(tour);
     return (list || []).filter(function (c) { return STUDIO_TOUR_ONLY.indexOf(c.key) < 0 || used[c.key]; })
       .map(function (c) { return c.key === 'studio' ? { key: 'studio', label: 'Studio rental' } : c; });
@@ -2522,6 +3287,7 @@
   function cardWindow(tour) {
     var w = tour && tour.cardLog;
     if (!w || !w.from || !w.to) return null;
+    if (isPnlDoc(tour)) return null;
     var span = isStudioDoc(tour) ? studioSpan(tour) : null;
     var start = span ? span.from : tourStart(tour), end = span ? span.to : tourEnd(tour);
     var from = w.from === 'tour' ? start
@@ -2593,22 +3359,26 @@
     });
     var chargedTo = {};
     var crewLoose = 0;
+    var people = pnlPeopleCats(tour), listProj = {};
+    Object.keys(people).forEach(function (k) { listProj[k] = 0; });
+    rows(tour && tour.crew).forEach(function (p) { var k = pnlListOf(tour, p.id); if (k !== 'crew') listProj[k] += crewPay(tour, p); });
     var payTo = function (x) {
       var sh = crewShares(tour, x);
-      sh.shares.forEach(function (p) { var l = isMember(p.person) ? 'members' : 'crew'; chargedTo[l] = (chargedTo[l] || 0) + p.amount; });
-      crewLoose += sh.loose;
+      sh.shares.forEach(function (p) { var l = personLine(tour, p.crewId, p.person); chargedTo[l] = (chargedTo[l] || 0) + p.amount; });
+      if (x.category === 'crew') crewLoose += sh.loose;
+      else chargedTo[x.category] = (chargedTo[x.category] || 0) + sh.loose;
     };
     charges.forEach(function (ch) {
       var k = chargeLine(tour, ch);
       if (!k) return;
-      if (ch.category === 'crew') { payTo(ch); return; }
+      if (ch.category === 'crew' || people[ch.category]) { payTo(ch); return; }
       chargedTo[k] = (chargedTo[k] || 0) + num(ch.amount);
     });
     rows(tour && tour.cashLog).forEach(function (x) {
       var k = chargeLine(tour, x);
       if (!k || CASH_MOVES[k]) return;
       if (upTo && !(x.date && x.date <= upTo)) return;
-      if (x.category === 'crew') { payTo(x); return; }
+      if (x.category === 'crew' || people[x.category]) { payTo(x); return; }
       chargedTo[k] = (chargedTo[k] || 0) + num(x.amount);
     });
     var cardDetail = cardPaidDetail(tour, upTo);
@@ -2625,7 +3395,7 @@
     typedCategoriesFor(tour).forEach(function (c) {
       var rec = expenses[c.key] || { projected: null, paid: 0 };
       if (c.key === 'crew') {
-        var hasMembers = split.hasMembers || (chargedTo.members || 0) > 0;
+        var hasMembers = (pnlOneCrew(tour) ? split.members > 0 : split.hasMembers) || (chargedTo.members || 0) > 0;
         var loose = num(rec.paid) + crewLoose + (cardTo.crew || 0);
         var cProj = split.crew || null, cNamed = chargedTo.crew || 0, cPaid = cNamed + loose;
         var cDone = lineDone('crew') && cProj != null, bDone = lineDone('members') && !!split.members;
@@ -2654,6 +3424,16 @@
           left: cProj == null ? null : cDone ? 0 : Math.max(0, cProj - cPaid),
           over: cProj == null ? 0 : Math.max(0, cEff - cProj),
           loose: round(loose * 100) / 100
+        });
+        return;
+      }
+      if (people[c.key]) {
+        var lProj = listProj[c.key] || null, lPaid = num(rec.paid) + (chargedTo[c.key] || 0) + (cardTo[c.key] || 0);
+        var lDone = lProj != null && lineDone(c.key), lEff = lProj == null || lDone ? lPaid : Math.max(lProj, lPaid);
+        fixed += lEff;
+        lines.push({
+          key: c.key, label: c.label, projected: lProj, paid: lPaid, effective: lEff, cards: cardDetail[c.key] || [], people: true,
+          left: lProj == null ? null : lDone ? 0 : Math.max(0, lProj - lPaid), over: lProj == null ? 0 : Math.max(0, lPaid - lProj), done: lDone
         });
         return;
       }
@@ -2815,7 +3595,8 @@
       if (x.createdAt) events.push({ at: x.createdAt, kind: 'extra', id: x.id, label: x.label || 'Cost' });
     });
     rows(tour && tour.imports).forEach(function (im) {
-      if (im.createdAt) events.push({ at: im.createdAt, kind: 'import', id: im.id, label: 'card charges' });
+      var up = im.source === 'upload';
+      if (im.createdAt) events.push({ at: im.createdAt, kind: up ? 'upload' : 'import', id: im.id, label: up ? 'the budget upload' : 'card charges' });
     });
     if (!events.length) return null;
     events.sort(function (a, b) { return a.at - b.at; });
@@ -2833,7 +3614,7 @@
       t.shows[ev.showId] = Object.assign({}, t.shows[ev.showId], { income: emptyIncome(), loggedAt: null });
     } else if (ev.kind === 'extra' && t.extras) {
       delete t.extras[ev.id];
-    } else if (ev.kind === 'import' && t.charges) {
+    } else if ((ev.kind === 'import' || ev.kind === 'upload') && t.charges) {
       Object.keys(t.charges).forEach(function (cid) {
         if (t.charges[cid] && t.charges[cid].importId === ev.id) delete t.charges[cid];
       });
@@ -4240,13 +5021,16 @@
       showRows.push(row);
     });
     c.otherRows.forEach(function (x) {
-      var row = [x.date || '', 'Other income', otherEntryLabel(x), ''];
+      var pt = pnlTypedOf(tour, x);
+      var row = pt ? [x.date || '', pt.city || 'Typed by hand', pt.venue ? pt.venue + ' \u00b7 ' + pt.what : pt.what, '']
+        : [x.date || '', 'Other income', otherEntryLabel(x), ''];
       while (row.length < head.length - 2) row.push('');
       row.push(num(x.amount), x.unsorted ? 'a guarantee not placed on a show yet' : '');
       showRows.push(row);
     });
     var expRows = [['Category', 'Projected', 'Actual paid', 'Variance', 'Counted', 'Note']];
     c.lines.forEach(function (l) {
+      if (!pnlLineShown(tour, l)) return;
       var note = [];
       if (l.done) note.push('Done paying: counts what was paid');
       if (num(l.loose) > 0.004) note.push(money(l.loose) + ' with no name on it');
@@ -4267,15 +5051,15 @@
     expRows.push(['TOTAL OUT', '', '', '', r2(c.out), '']);
     expRows.push(['TOTAL INCOME', '', '', '', r2(c.income), '']);
     expRows.push(['NET', '', '', '', r2(r2(c.income) - r2(c.out)), '']);
-    var catLabel = {};
-    CHARGE_CATEGORIES.forEach(function (x) { catLabel[x.key] = x.label; });
-    extraCategories(tour).forEach(function (x) { catLabel[x.key] = x.label; });
+    var catLabel = bookCatLabels(tour);
     var nameOf = function (id) { var p = tour && isObj(tour.crew) && isObj(tour.crew[id]) ? tour.crew[id] : null; return p ? String(p.name || 'No name') : 'someone no longer listed'; };
     var chargeRows = [['Date', 'Merchant', 'Amount', 'Category', 'For', 'Counted']];
     rows(tour && tour.charges).sort(byDate).forEach(function (ch) {
-      var lines = chargeLineParts(tour, ch).map(function (q) { return q.line; });
-      var label = ch.category === 'crew' && lines.length > 1 ? 'Members & Crew'
-        : chargeLine(tour, ch) === 'members' ? 'Members' : catLabel[ch.category] || ch.category || '';
+      var lines = chargeLineParts(tour, ch).map(function (q) { return q.line; }), ln = chargeLine(tour, ch);
+      var lineName = function (l) { return l === 'members' ? 'Members' : catLabel[l] || l; };
+      var label = isPeopleCat(tour, ch.category) && lines.length > 1
+        ? (lines.every(function (l) { return l === 'members' || l === 'crew'; }) ? 'Members & Crew' : lines.map(lineName).join(' & '))
+        : ln === 'members' ? 'Members' : catLabel[ln] || catLabel[ch.category] || ch.category || '';
       var sp = ch.category === 'crew' ? crewSplitOf(ch) : null;
       var who = sp ? Object.keys(sp).map(function (k) { return nameOf(k) + ' ' + r2(sp[k]); }).join('; ')
         : ch.category === 'crew' && ch.crewId ? nameOf(ch.crewId) : '';
@@ -4326,7 +5110,8 @@
       payRows.push([p.name, p.group, p.title, p.plan, p.projected || '', p.paid, p.left == null ? '' : p.left]);
     });
     if (pp.loose != null) payRows.push(['Pay with no name on it', 'Crew', '', '', '', pp.loose, '']);
-    c.lines.filter(function (l) { return l.key === 'members' || l.key === 'crew'; }).forEach(function (l) {
+    pp.listLoose.forEach(function (x) { payRows.push(['Pay with no name on it', x.label, '', '', '', x.amount, '']); });
+    c.lines.filter(function (l) { return l.key === 'members' || l.key === 'crew' || l.people === true; }).forEach(function (l) {
       payRows.push(['TOTAL ' + l.label.toUpperCase(), '', '', l.done ? 'Done paying: counts what was paid' : 'Counts ' + money(l.effective),
         l.projected == null ? '' : r2(l.projected), r2(l.paid), l.projected == null ? '' : Math.max(0, r2(l.left))]);
     });
@@ -4398,11 +5183,27 @@
     var nm = otherEntryLabel(x);
     return 'Other income' + (x && x.kind === 'other' && nm === otherKindLabel('other') ? '' : ' · ' + nm);
   }
+  function pnlTypedOf(tour, x) {
+    if (!isPnlBook(tour) || !isObj(x) || x.typed !== true) return null;
+    var night = parseDay(x.on) ? pnlBookShows(tour).filter(function (s) { return s.d === x.on; })[0] : null;
+    var from = x.kind === 'advance' ? pnlWord(x.from, PNL_ADVANCE_FROM_MAX) : '';
+    return { what: otherEntryLabel(x) + (from ? ' from ' + from : ''), night: night ? night.d : '', city: night ? night.c || '' : '', venue: night ? night.v || '' : '' };
+  }
+  function bookIncomeLabel(tour, x) {
+    var p = pnlTypedOf(tour, x);
+    if (!p) return otherIncomeLabel(x);
+    var where = [p.city, p.venue].filter(Boolean).join(' · ');
+    return p.what + (where ? ' · ' + where : '');
+  }
   function payPeople(tour) {
     var paid = crewPaidBy(tour);
     var people = rows(tour && tour.crew).filter(function (p) { return String(p.name || '').trim(); });
-    var group = function (p) { return isHelper(p) ? 'Not on the tour' : isMember(p) ? 'Member' : 'Crew'; };
-    var order = { Member: 0, Crew: 1, 'Not on the tour': 2 };
+    var lists = pnlPeopleCats(tour), order = { Member: 0, Crew: 1, 'Not on the tour': 99 };
+    Object.keys(lists).forEach(function (k, i) { if (order[lists[k]] == null) order[lists[k]] = 2 + i; });
+    var group = function (p) {
+      var k = pnlListOf(tour, p.id);
+      return k !== 'crew' ? lists[k] : isHelper(p) ? 'Not on the tour' : isMember(p) ? 'Member' : 'Crew';
+    };
     people.sort(function (a, b) { return order[group(a)] - order[group(b)] || String(a.name).localeCompare(String(b.name)); });
     var list = people.map(function (p) {
       var proj = isHelper(p) ? 0 : cents(crewPay(tour, p)), got = cents(paid.by[p.id] || 0);
@@ -4411,7 +5212,14 @@
     });
     var typedPaid = cents(normExpenses(tour && tour.expenses).crew.paid);
     var looseAll = cents(paid.loose + typedPaid);
-    return { people: list, loose: Math.abs(paid.loose) > 0.004 || Math.abs(typedPaid) > 0.004 ? looseAll : null };
+    var listLoose = Object.keys(lists).map(function (k) {
+      var n = num(normExpenses(tour && tour.expenses)[k] && normExpenses(tour && tour.expenses)[k].paid);
+      [tour && tour.charges, tour && tour.cashLog].forEach(function (map, i) {
+        rows(map).forEach(function (x) { if (x.category === k && !(i === 0 && x.accounted)) n += crewShares(tour, x).loose; });
+      });
+      return { key: k, label: lists[k], amount: cents(n) };
+    }).filter(function (x) { return Math.abs(x.amount) > 0.004; });
+    return { people: list, loose: Math.abs(paid.loose) > 0.004 || Math.abs(typedPaid) > 0.004 ? looseAll : null, listLoose: listLoose };
   }
   var TAX_NOTE = 'Categories are the tour’s own, not Schedule C lines — mapping is yours. ' +
     'Day-by-day food entries are flagged as meals in the spreadsheet (50% limit generally applies). ' +
@@ -4426,7 +5234,7 @@
     var NAMES = { guarantee: 'Guarantees', buyouts: 'Buyouts (Members’ part)' };
     var cameIn = [];
     INCOME_FIELDS.forEach(function (f) { var v = by(f.key); if (Math.abs(v) > 0.004) cameIn.push(sumLine(NAMES[f.key] || f.label, v)); });
-    sumGroup(c.otherRows, otherIncomeLabel).forEach(function (g) { cameIn.push(sumLine(g.label, g.amount)); });
+    sumGroup(c.otherRows, function (x) { return bookIncomeLabel(t, x); }).forEach(function (g) { cameIn.push(sumLine(g.label, g.amount)); });
     var cityOf = function (s) { return String(s.city || 'Show').split(',')[0] + ' ' + sumDay(s.date, true); };
     var waiting = [], owedBy = [], tipNights = [], offTop = 0, crewBuyouts = 0;
     shows.forEach(function (s, i) {
@@ -4461,6 +5269,7 @@
       return sumLine(p.name, p.paid, bits.join(' · '));
     });
     if (pp.loose != null) payLines.push(sumLine('Pay with no name on it', pp.loose));
+    pp.listLoose.forEach(function (x) { payLines.push(sumLine('Pay with no name on it', x.amount, x.label)); });
     var comm = normCommission(t.commission), commLines = [];
     var commAll = commissionLines(comm).map(function (line) {
       var r = comm[line.key];
@@ -4494,7 +5303,7 @@
         .concat(used.map(function (f) { return k.by[f.key] || ''; }), [k.total]);
     });
     c.otherRows.forEach(function (x) {
-      gigRows.push([x.date || '', otherIncomeLabel(x)].concat(used.map(function () { return ''; }), [num(x.amount)]));
+      gigRows.push([x.date || '', bookIncomeLabel(t, x)].concat(used.map(function () { return ''; }), [num(x.amount)]));
     });
     gigRows.push(['', 'Total'].concat(used.map(function (f) { return cents(by(f.key)); }), [cents(c.income)]));
     var details = [
@@ -4601,10 +5410,12 @@
       details: details, sheets: sheets
     };
   }
-  function offCatLabels(book) {
+  function offCatLabels(book) { return bookCatLabels(book); }
+  function bookCatLabels(book) {
     var out = {};
     CHARGE_CATEGORIES.forEach(function (x) { out[x.key] = x.label; });
     extraCategories(book).forEach(function (x) { out[x.key] = x.label; });
+    (pnlCatSet(book) || []).forEach(function (c) { if (c.name) out[c.key] = c.name; });
     return out;
   }
   function offTourSpans(own, past) {
@@ -5604,12 +6415,13 @@
     var today = parseDay(inp.today) ? inp.today : ymd(new Date());
     var inY = function (d) { return !!Y && !!d && !!parseDay(d) && d.slice(0, 4) === Y; };
     var C = cpaCents;
-    var bookStart = function (doc) { return tourStart(doc) || studioDays(doc)[0] || ''; };
+    var bookStart = function (doc) { return tourStart(doc) || studioDays(doc)[0] || (isPnlBook(doc) ? pnlEnds(doc).from : '') || ''; };
     var tours = (Array.isArray(inp.tours) ? inp.tours : []).filter(function (b) {
-      return isObj(b) && isObj(b.doc) && !b.doc.deletedAt && b.doc.kind !== 'offtour' && !isPnlDoc(b.doc);
+      return isObj(b) && isObj(b.doc) && !b.doc.deletedAt && b.doc.kind !== 'offtour' && (!isPnlDoc(b.doc) || isPnlBook(b.doc));
     }).map(function (b) {
       return { id: String(b.id == null ? '' : b.id), doc: b.doc, kind: 'tour',
-        name: isStudioDoc(b.doc) ? studioBookName(b.doc) : String(b.doc.name || '').replace(/\s+/g, ' ').trim() || 'Untitled tour',
+        name: isStudioDoc(b.doc) ? studioBookName(b.doc) : isPnlBook(b.doc) ? (pnlBookName(b.doc.name) || 'Untitled') + ' (P&L)'
+          : String(b.doc.name || '').replace(/\s+/g, ' ').trim() || 'Untitled tour',
         first: bookStart(b.doc) };
     }).sort(function (a, b) { return (a.first || '9999').localeCompare(b.first || '9999') || a.id.localeCompare(b.id); });
     var off = isObj(inp.off) && isObj(inp.off.doc) && !inp.off.doc.deletedAt
@@ -5755,26 +6567,27 @@
             cpaPut({ at: 'open', what: 'a line with no category yet', date: d, cents: amt, book: lab.book, todo: 'Pick its category in Greenroom', src: base.src });
             return;
           }
-          if (cat === 'crew') {
+          if (cat === 'crew' || pnlPeopleCats(book.doc)[cat]) {
             var sh = crewShares(book.doc, x), sum = 0, list = [];
             sh.shares.forEach(function (s) { var c = C(s.amount); list.push({ id: s.crewId, p: s.person, c: c }); sum += c; });
             if (sum > amt && list.length) { list[list.length - 1].c -= sum - amt; sum = amt; }
             var how = coll === 'cashLog' ? 'cash' : cpaMarkValue('how', m.how) || '';
             var hint = coll === 'cashLog' ? '' : cpaPayHowGuess(x, book.doc);
             list.forEach(function (q) {
-              var p = q.p, name = String(p.name || '').replace(/\s+/g, ' ').trim() || 'No name yet', mem = isMember(p);
+              var p = q.p, name = String(p.name || '').replace(/\s+/g, ' ').trim() || 'No name yet', lk = pnlListOf(book.doc, q.id);
+              var mem = lk === 'crew' && isMember(p);
               cpaPut(as({ at: 'row', kind: 'expense', cents: -q.c, line: mem ? '10' : '21-labor', src: base.src + ':' + q.id, lineSrc: base.src,
-                what: 'Pay to ' + name, category: mem ? 'Members' : 'Crew', person: name, personKey: cpaPersonKey(p), nameKey: crewKey(name),
+                what: 'Pay to ' + name, category: lk !== 'crew' ? cpaCatName(book, lk) : mem ? 'Members' : 'Crew', person: name, personKey: cpaPersonKey(p), nameKey: crewKey(name),
                 title: String(p.title || '').trim(), group: isHelper(p) ? 'Not on the tour' : mem ? 'Partner' : 'Crew',
                 how: how, howSaved: !!how, hint: hint }));
             });
-            var loose = amt - sum;
+            var loose = amt - sum, onList = cat !== 'crew';
             if (loose !== 0 || !list.length) {
               cpaPut(as({ at: 'row', kind: 'expense', cents: -loose, line: '21-labor', src: base.src + ':loose', lineSrc: base.src,
-                what: 'Pay with no name on it', category: 'Crew', person: 'No name yet', personKey: 'noname', group: 'Crew',
+                what: 'Pay with no name on it', category: onList ? nm : 'Crew', person: 'No name yet', personKey: 'noname', group: 'Crew',
                 how: how, howSaved: !!how, hint: hint }));
-              if (loose > 0) cpaPut({ at: 'open', what: 'crew pay with no name on it', date: d, cents: loose, book: lab.book,
-                todo: 'Say who it paid in Greenroom (swipe it, Who)', src: base.src });
+              if (loose > 0) cpaPut({ at: 'open', what: (onList ? nm + ' pay' : 'crew pay') + ' with no name on it', date: d, cents: loose, book: lab.book,
+                todo: onList ? 'Tell your CPA who it paid' : 'Say who it paid in Greenroom (swipe it, Who)', src: base.src });
             }
             return;
           }
@@ -5797,17 +6610,18 @@
           during: lab.during || null, src: book.id + ':extras:' + k, bookId: book.id, coll: 'extras' }, cpaShowOf(book, d)));
       });
     });
-    books.forEach(function (book) {
-      var exp = isObj(book.doc.expenses) ? book.doc.expenses : {};
-      var first = '';
+    var firstDayOf = function (book) {
       if (book.kind === 'tour') {
         var a = bookStart(book.doc), r = parseDay(book.doc.rehearsalStart) ? book.doc.rehearsalStart : '';
-        first = a && r ? (r < a ? r : a) : a || r || cpaDay(book.doc.createdAt);
-      } else {
-        var y0 = bookYears(book.doc)[0] || '';
-        var from = book.doc.offFrom == null ? cpaDay(book.doc.createdAt) : book.doc.offFrom;
-        first = parseDay(from) && String(from).slice(0, 4) === y0 ? from : y0 ? y0 + '-01-01' : '';
+        return a && r ? (r < a ? r : a) : a || r || cpaDay(book.doc.createdAt);
       }
+      var y0 = bookYears(book.doc)[0] || '';
+      var from = book.doc.offFrom == null ? cpaDay(book.doc.createdAt) : book.doc.offFrom;
+      return parseDay(from) && String(from).slice(0, 4) === y0 ? from : y0 ? y0 + '-01-01' : '';
+    };
+    books.forEach(function (book) {
+      var exp = isObj(book.doc.expenses) ? book.doc.expenses : {};
+      var first = firstDayOf(book);
       if (!inY(first)) return;
       Object.keys(exp).sort().forEach(function (k) {
         var paid = C(isObj(exp[k]) ? exp[k].paid : 0);
@@ -5827,9 +6641,10 @@
           return;
         }
         tally(first, { A: paid });
+        var payLine = k === 'crew' || !!pnlPeopleCats(book.doc)[k];
         cpaPut(Object.assign({}, base, { at: 'row', kind: k === 'merch' ? 'merch cost' : 'expense', cents: -paid, note: 'a total typed in with no date',
-          line: k === 'crew' ? '21-labor' : cpaTaxLine(k, nm).key, person: k === 'crew' ? 'No name yet' : '', personKey: k === 'crew' ? 'noname' : '',
-          group: k === 'crew' ? 'Crew' : '' }));
+          line: payLine ? '21-labor' : cpaTaxLine(k, nm).key, person: payLine ? 'No name yet' : '', personKey: payLine ? 'noname' : '',
+          group: payLine ? 'Crew' : '' }));
         cpaPut({ at: 'open', what: 'a total typed in with no date (' + nm + ')', date: first, cents: paid, book: base.book,
           todo: 'Tell your CPA when it was paid', src: base.src });
       });
@@ -6074,25 +6889,48 @@
         if (inY(sd) || one.guarantee || one.vip || one.buyouts || one.merchGross || one.tips || one.tax || one.expected || one.merchDue) showList.push(one);
       });
     });
+    var pnlNights = {};
+    var pnlNightOf = function (book, sh) {
+      var nk = book.id + '|' + sh.d;
+      return pnlNights[nk] || (pnlNights[nk] = { date: sh.d, city: sh.c || '', state: cpaStateOf({ city: sh.c || '' }), venue: sh.v || '', book: book.name, bookId: book.id,
+        showId: 'pnl:' + sh.d, guarantee: 0, vip: 0, buyouts: 0, merchGross: 0, cut: 0, fees: 0, salesTax: 0, merchBand: 0, merchDue: 0, tips: 0, tax: 0,
+        expected: 0, paid: '', received: '', atNet: false });
+    };
+    books.forEach(function (book) {
+      pnlBookShows(book.doc).forEach(function (sh) { if (inY(sh.d) && sh.d <= today) pnlNightOf(book, sh); });
+    });
     books.forEach(function (book) {
       var map = isObj(book.doc.otherIncome) ? book.doc.otherIncome : {};
       Object.keys(map).sort().forEach(function (k) {
         var x = map[k];
         if (!isObj(x)) return;
         var d = cpaDay(x.date);
+        var noDay = !d && x.typed === true;
+        if (noDay) d = firstDayOf(book);
         if (!inY(d)) return;
         var amt = C(x.amount), lab = cpaLabelFor(book, 'otherIncome', x), kind = String(x.kind || '');
-        var word = otherEntryLabel(x);
+        var word = otherEntryLabel(x), typedOn = pnlTypedOf(book.doc, x);
+        var night = typedOn && typedOn.night && (kind === 'guarantee' || kind === 'merch') ? { showDate: typedOn.night, city: typedOn.city, state: cpaStateOf({ city: typedOn.city }) } : null;
         var dep = isObj(inp.deposits) && isObj(inp.deposits[k]) ? String(inp.deposits[k].payer || '').replace(/\s+/g, ' ').trim() : '';
         tally(d, { I: amt });
-        cpaPut({ at: 'row', kind: 'income', date: d, cents: amt, who: dep || word, what: otherIncomeLabel(x), bankId: k, account: 'Bank deposit',
-          catKey: 'income:' + (kind || 'other'), category: otherKindLabel(kind), book: lab.book, note: lab.note || '', during: lab.during || null,
+        cpaPut({ at: 'row', kind: 'income', date: d, cents: amt, who: dep || word, what: x.typed === true ? bookIncomeLabel(book.doc, x) : otherIncomeLabel(x), bankId: x.typed === true ? '' : k, account: x.typed === true ? 'Typed by hand' : 'Bank deposit',
+          catKey: 'income:' + (kind || 'other'), category: otherKindLabel(kind), book: lab.book, note: noDay ? 'typed in with no date' : lab.note || '', during: lab.during || null,
+          showDate: night ? night.showDate : '', city: night ? night.city : '', state: night ? night.state : '',
           line: kind === 'guarantee' || kind === 'merch' ? '1a' : kind === 'royalties' ? 'royalty' : kind === 'advance' ? 'advance' : '7',
-          payer: dep || 'Bank deposits: ' + word, src: book.id + ':otherIncome:' + k, bookId: book.id, coll: 'otherIncome' });
+          payer: dep || (x.typed === true ? 'Typed by hand: ' : 'Bank deposits: ') + word, src: book.id + ':otherIncome:' + k, bookId: book.id, coll: 'otherIncome' });
+        if (noDay) cpaPut({ at: 'open', what: 'income typed in with no date (' + (x.typed === true ? bookIncomeLabel(book.doc, x) : word) + ')', date: d, cents: amt,
+          book: lab.book, todo: 'Tell your CPA when it came in', src: book.id + ':otherIncome:' + k });
+        if (night) {
+          var one = pnlNightOf(book, { d: night.showDate, c: night.city, v: typedOn.venue });
+          one.received = 'typed by hand';
+          if (kind === 'guarantee') one.guarantee += amt; else { one.merchGross += amt; one.merchBand += amt; }
+          if (!one.paid || d > one.paid) one.paid = d;
+        }
         if (x.unsorted && kind === 'guarantee') cpaPut({ at: 'open', what: 'a guarantee to sort: counted as income, not on a show yet', date: d, cents: amt,
           book: lab.book, todo: 'Put it on its show in Greenroom', src: book.id + ':otherIncome:' + k });
       });
     });
+    Object.keys(pnlNights).sort().forEach(function (k) { showList.push(pnlNights[k]); });
     books.forEach(function (book) {
       var map = isObj(book.doc.merchToSort) ? book.doc.merchToSort : {};
       Object.keys(map).sort().forEach(function (k) {
@@ -6224,18 +7062,28 @@
       'Edit the show: fix the City or the State', stateOff.map(function (s) {
         return sumDay(s.date, true) + ', ' + (s.venue || s.city) + ': saved ' + s.state + ', the city says ' + cpaCityState(s.city);
       }));
-    var noPlace = {}, noPlaceApart = 0;
+    var pnlBookIds = {};
+    tours.forEach(function (b) { if (isPnlBook(b.doc)) pnlBookIds[b.id] = true; });
+    var noPlace = {}, noPlaceApart = 0, noPlaceTyped = {}, noPlaceOnPnl = {};
     out.forEach(function (r) {
       if (r.kind !== 'income' || r.state) return;
       noPlace[r.lineSrc] = (noPlace[r.lineSrc] || 0) + r.cents;
+      if (r.coll === 'otherIncome' && r.account === 'Typed by hand') noPlaceTyped[r.lineSrc] = true;
+      else if (r.coll === 'otherIncome' && pnlBookIds[r.bookId]) noPlaceOnPnl[r.lineSrc] = true;
       if (!cpaPage1(r.line)) noPlaceApart += r.cents;
     });
-    var noPlaceDeps = Object.keys(noPlace).filter(function (k) { return /:otherIncome:/.test(k); }).length, noPlaceRest = Object.keys(noPlace).length - noPlaceDeps;
+    var noPlaceTypedN = Object.keys(noPlaceTyped).length, noPlacePnlN = Object.keys(noPlaceOnPnl).length;
+    var noPlaceDeps = Object.keys(noPlace).filter(function (k) { return /:otherIncome:/.test(k) && !noPlaceTyped[k] && !noPlaceOnPnl[k]; }).length;
+    var noPlaceRest = Object.keys(noPlace).length - noPlaceDeps - noPlaceTypedN - noPlacePnlN;
     check('Income tied to no show or state: ' + m$(sumOf(noPlace)) + ' (' + [noPlaceDeps ? sumPlural(noPlaceDeps, 'bank deposit') + ' logged on a book' : '',
+      noPlacePnlN ? sumPlural(noPlacePnlN, 'bank deposit') + ' logged on a P&L' : '',
+      noPlaceTypedN ? (noPlaceTypedN === 1 ? '1 entry' : noPlaceTypedN + ' entries') + ' typed by hand on a P&L' : '',
       noPlaceRest ? sumPlural(noPlaceRest, 'line') + ' from a night with no state' : '',
       noPlaceApart ? m$(noPlaceApart) + ' of it listed apart' : ''].filter(Boolean).join(', ') +
       '). The state returns are built from Shows by state, so this money is in none of them',
-      Object.keys(noPlace).length, sumOf(noPlace), 'Put each deposit on its show in Greenroom, or tell your CPA where the money was earned');
+      Object.keys(noPlace).length, sumOf(noPlace), noPlaceDeps || noPlaceRest
+        ? 'Put each deposit on its show in Greenroom, or tell your CPA where the money was earned' + (noPlacePnlN || noPlaceTypedN ? ' (money on a P&L has no show to be put on: tell your CPA)' : '')
+        : 'Tell your CPA where the money was earned (on a P&L, a guarantee or merch typed from one of its shows is placed on that show)');
     var receipts = lines(out.filter(cpaNeedsReceipt));
     check('Lines that need a receipt kept (lodging, or $75 or more): Greenroom keeps no receipts', Object.keys(receipts).length, sumOf(receipts),
       'Keep the receipts where your CPA can see them');
@@ -6344,10 +7192,10 @@
           : x.nights.join('; ') + ': a deposit landed for ' + these + ' (' + m$(x.cents) + ' on ' + sumDay(x.date, true) + '), and a Received box isn’t ticked: tick the one it paid';
       }));
     var pnlsIn = (Array.isArray(inp.pnls) ? inp.pnls : []).filter(function (b) {
-      return isObj(b) && isPnlDoc(b.doc) && !b.doc.deletedAt && !!Y && pnlBookYear(b.doc) === Y;
+      return isObj(b) && isPnlDoc(b.doc) && (!isPnlBook(b.doc) || !!pnlOldTyped(b.doc)) && !b.doc.deletedAt && !!Y && pnlBookYear(b.doc) === Y;
     }).map(function (b) {
       var t = pnlTotals(pnlClean(b.doc.pnl)), nm = String(b.doc.name || '').replace(/\s+/g, ' ').trim() || 'Untitled P&L', when = pnlBookWhen(b.doc);
-      return nm + (when ? ' (' + when + ')' : '') + ': came in ' + moneyCents(t.income) + ', went out ' + moneyCents(t.out) + ', net ' + moneyCents(t.net);
+      return nm + (when ? ' (' + when + ')' : '') + (isPnlBook(b.doc) ? ', typed on an older version of Greenroom' : '') + ': came in ' + moneyCents(t.income) + ', went out ' + moneyCents(t.out) + ', net ' + moneyCents(t.net);
     }).sort();
     check('P&Ls typed by hand in Greenroom for ' + Y + ': totals with no dates, so not in this pack', pnlsIn.length, 0,
       'Give your CPA each one’s PDF from Greenroom (its page, PDF)', pnlsIn);
@@ -6615,7 +7463,8 @@
     var stateAt = function (k) { return states[k || 'No state'] || (states[k || 'No state'] = { gross: 0, tax: 0, shows: {} }); };
     (p.shows || []).forEach(function (s) { if (String(s.date).slice(0, 4) === p.year) stateAt(s.state).shows[s.book + '|' + s.date + '|' + s.city] = true; });
     p.rows.forEach(function (r) {
-      if (r.coll !== 'shows' || (r.kind !== 'income' && r.kind !== 'tax held back')) return;
+      var pnlNight = r.coll === 'otherIncome' && r.account === 'Typed by hand' && !!r.state && r.kind === 'income';
+      if (!pnlNight && (r.coll !== 'shows' || (r.kind !== 'income' && r.kind !== 'tax held back'))) return;
       var s = stateAt(r.state);
       if (r.kind === 'income') s.gross += r.cents; else s.tax -= r.cents;
       s.shows[r.book + '|' + r.showDate + '|' + r.city] = true;
@@ -6698,6 +7547,7 @@
     [/^a line with no category yet/, 'Lines with no category yet (counted)'],
     [/^crew pay with no name/, 'Crew pay with no name on it (counted)'],
     [/^a total typed in with no date/, 'Totals typed in with no date (counted)'],
+    [/^income typed in with no date/, 'Income typed in with no date (counted)'],
     [/^a card balance carried into/, 'Card balances carried in, not matched to charges'],
     [/^owed, carried in/, 'Owed going in (not money that moved)'],
     [/^owed to /, 'Asks to be paid back, not paid back yet'],
@@ -7793,6 +8643,11 @@
     var nights = (Array.isArray(r.nights) ? r.nights : []).map(pnlNight).filter(Boolean).slice(0, PNL.nightsMax);
     if (nights.length) out.nights = nights;
     out.from = r.from === 'read' ? 'read' : 'typed';
+    if (pnlTypeLabel(r.type)) out.type = r.type;
+    var picked = pnlDatesClean(r.dates), played = pnlListClean(r.list), place = out.type === 'show' ? pnlPlaceClean(r.place) : null;
+    if (picked.length) out.dates = picked;
+    if (played.length) out.list = played;
+    if (place) out.place = place;
     return out;
   }
   var PNL_NIGHT_FIELD = { guarantee: 'g', merch: 'm' };
@@ -9002,7 +9857,19 @@
     studioSpanWords: studioSpanWords, studioTimeWords: studioTimeWords, clockMins: clockMins, studioHomeLines: studioHomeLines,
     catsUsed: catsUsed, studioCategories: studioCategories,
     PNL_BOOK_NAME_MAX: PNL_BOOK_NAME_MAX, isPnlDoc: isPnlDoc, pnlBookCheck: pnlBookCheck, pnlBookDoc: pnlBookDoc, pnlBookPatch: pnlBookPatch, pnlBookClash: pnlBookClash,
+    PNL_TYPES: PNL_TYPES, PNL_DATES_MAX: PNL_DATES_MAX, PNL_LIST_MAX: PNL_LIST_MAX, PNL_CARDS_MAX: PNL_CARDS_MAX, pnlType: pnlType, isPnlBook: isPnlBook,
+    pnlTypeLabel: pnlTypeLabel, pnlDatesClean: pnlDatesClean, pnlListClean: pnlListClean, pnlBookShows: pnlBookShows, pnlBookDates: pnlBookDates,
+    pnlBookSpan: pnlBookSpan, pnlKindCheck: pnlKindCheck, pnlKindParts: pnlKindParts, pnlKindDoc: pnlKindDoc, pnlKindEditPatch: pnlKindEditPatch, pnlKindClash: pnlKindClash, pnlKindEdited: pnlKindEdited, pnlLogAdds: pnlLogAdds, pnlPartsDays: pnlPartsDays, pnlEnds: pnlEnds,
+    pnlKindWhen: pnlKindWhen, pnlFromFlyer: pnlFromFlyer, pnlCards: pnlCards, pnlCardDays: pnlCardDays, pnlLogFor: pnlLogFor, pnlLogDays: pnlLogDays, pnlDaysOverlap: pnlDaysOverlap, pnlPlaceClean: pnlPlaceClean, pnlShowPlace: pnlShowPlace,
+    pnlOldTyped: pnlOldTyped, pnlTypedOf: pnlTypedOf, bookIncomeLabel: bookIncomeLabel, payRunOf: payRunOf,
     pnlBookYear: pnlBookYear, pnlBookWhen: pnlBookWhen, pnlBookSummary: pnlBookSummary,
+    PNL_STUDIO_CATS: PNL_STUDIO_CATS, PNL_CAT_NAME_MAX: PNL_CAT_NAME_MAX, pnlBuiltInLabel: pnlBuiltInLabel, pnlCatKeyOk: pnlCatKeyOk, pnlCatSet: pnlCatSet,
+    pnlPeopleCats: pnlPeopleCats, pnlListOf: pnlListOf, personLine: personLine, isPeopleCat: isPeopleCat, pnlCatsUsed: pnlCatsUsed, pnlCatsOf: pnlCatsOf,
+    pnlLineShown: pnlLineShown, pnlCatsNow: pnlCatsNow, pnlCatPlain: pnlCatPlain, pnlCatsBack: pnlCatsBack, pnlCatBase: pnlCatBase, pnlCatHolds: pnlCatHolds,
+    pnlCatDelete: pnlCatDelete, pnlCatAdd: pnlCatAdd, pnlMerge: pnlMerge, bookCatLabels: bookCatLabels,
+    PNL_ADVANCE_FROM_MAX: PNL_ADVANCE_FROM_MAX, pnlAdvance: pnlAdvance, pnlAdvanceWords: pnlAdvanceWords,
+    PNL_UPLOAD_MAX: PNL_UPLOAD_MAX, pnlUploadCat: pnlUploadCat, pnlUploadList: pnlUploadList, pnlUploadModel: pnlUploadModel, pnlUploadPatch: pnlUploadPatch,
+    pnlUploadAfter: pnlUploadAfter, pnlUploadDay: pnlUploadDay, pnlUploadPay: pnlUploadPay, crewTwoLines: crewTwoLines, pnlOneCrew: pnlOneCrew,
     SHOW_DAYS_REACH: SHOW_DAYS_REACH, isShowDoc: isShowDoc, showDocName: showDocName, showDocDays: showDocDays, showDoc: showDoc, showDocLogged: showDocLogged, showDaysPatch: showDaysPatch,
     monthGrid: monthGrid, monthStep: monthStep, dayMarks: dayMarks,
     monthShape: monthShape, monthStack: monthStack, monthAt: monthAt, monthsInView: monthsInView, monthBoxFit: monthBoxFit, monthDayTop: monthDayTop, monthTitle: monthTitle, monthShort: monthShort,

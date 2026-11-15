@@ -5,10 +5,14 @@
 # devinoliverofficial.github.io/greenroom/) and the iPhone shell (ios-app/). The website's source is kept private;
 # each release is published here already built, with its comments taken out.
 #
-# RUN BY HAND ONLY (Actions tab > "iOS TestFlight build" > Run workflow). This repository is
-# public, so this file deliberately has no pull_request, push or schedule trigger: nothing
-# outside a person with write access can start it, and the Apple keys stay in GitHub's
-# locked "Secrets" box (never in a file, never printed).
+# Started by hand (Actions tab > "iOS TestFlight build" > Run workflow), or by a push to main (see on: below). This
+# repository is public, so this file deliberately has no pull_request or schedule trigger: nothing outside a person with
+# write access can start it, and the Apple keys stay in GitHub's locked "Secrets" box (never in a file, never printed).
+# (Security check, Nov 15 2026) The npm packages install with their install scripts switched off (--ignore-scripts). Before
+# any package comes in, a step notes what the signing step depends on (the PATH, the settings that change how a program runs,
+# git's and ssh's own settings, the fastlane program and the signing recipe ios-app/fastlane); just before the Apple keys are
+# handed over, another measures it all again and stops the run if anything changed. A check in the same job cannot stop code
+# that ran as root (sudo); the full fix, signing in a second job that never runs package code, is left for later.
 name: iOS TestFlight build
 
 on:
@@ -51,7 +55,7 @@ jobs:
     runs-on: macos-26
     timeout-minutes: 60
     env:
-      MARKETING_VERSION: "1.4.0"
+      MARKETING_VERSION: "1.5.0"
       # The lock-screen day bar's server pushes (Devin, Oct 22: "turn on the bar pushes"): 1 = the app carries Apple's
       # push permission and the signing step switches Push Notifications on for the app's bundle ID (ios-app/README.md,
       # "The day bar's pushes"). It comes from the GitHub variable DAYBAR_PUSH (set to 1 on Oct 22); unset is 0.
@@ -117,18 +121,98 @@ jobs:
       - name: Copy the website into the app
         run: bash ios-app/prepare.sh web
 
+      # (Security check, Nov 15 2026, second round) What the signing step depends on, measured before any package code can
+      # run (the packages come in at the next step, and `npx cap` runs their code after that): the PATH, the settings that
+      # change how a later program runs (as this shell sees them, and as the runner holds them for the later steps), git's
+      # and ssh's own settings and the fastlane program, and the signing recipe. "Make sure nothing earlier changed how the
+      # signing step runs" measures them again, the same way, just before the Apple keys are handed over. They are kept as
+      # this step's outputs, which no later step can write over (a file could be). Both steps run the Mac's own /bin/bash in
+      # privileged mode (-p): it reads no BASH_ENV or ENV and takes no function from the environment, and its path is fixed,
+      # so nothing added to the PATH or the environment runs in them.
+      - name: Note what the signing step depends on, before any package comes in
+        id: before_packages
+        shell: /bin/bash --noprofile --norc -p -e -o pipefail {0}
+        env:
+          WORKFLOW_ENV: ${{ toJSON(env) }}
+        run: |
+          set -euo pipefail
+          # (The four measures, word for word the same in both steps. Each prints one sha256. Programs go by their full paths,
+          # and the ones that sort and hash run with an empty environment, so nothing set in it changes what they do.)
+          vars_sum() {
+            # The settings that change how a later program runs, each as name=value, in a fixed order.
+            local e
+            /usr/bin/env -0 | while IFS= read -r -d '' e; do
+              case "${e%%=*}" in
+                # (bash's own start-up files, and where git, ssh and fastlane look for their own settings)
+                BASH_ENV|ENV|HOME|XDG_CONFIG_HOME) printf '%s\0' "$e" ;;
+                # (what Ruby, and so fastlane, loads first)
+                RUBYOPT|RUBYLIB|RUBYGEMS_GEMDEPS|GEM_HOME|GEM_PATH|BUNDLE_GEMFILE) printf '%s\0' "$e" ;;
+                # (what git and ssh run, and the settings git is handed)
+                GIT_SSH|GIT_SSH_COMMAND|GIT_ASKPASS|GIT_CONFIG_GLOBAL|GIT_CONFIG_SYSTEM|GIT_CONFIG_COUNT) printf '%s\0' "$e" ;;
+                SSH_ASKPASS|SSH_ASKPASS_REQUIRE) printf '%s\0' "$e" ;;
+                # (the network's way out, and the certificates trusted on it)
+                HTTP_PROXY|HTTPS_PROXY|ALL_PROXY|NO_PROXY|http_proxy|https_proxy|all_proxy|no_proxy) printf '%s\0' "$e" ;;
+                SSL_CERT_FILE|SSL_CERT_DIR|CURL_CA_BUNDLE|REQUESTS_CA_BUNDLE|NODE_EXTRA_CA_CERTS) printf '%s\0' "$e" ;;
+                OPENSSL_CONF|OPENSSL_MODULES|OPENSSL_ENGINES) printf '%s\0' "$e" ;;
+                # (what other programs load first, and which Xcode and which tools build the app)
+                NODE_OPTIONS|DYLD_INSERT_LIBRARIES|DYLD_LIBRARY_PATH|DYLD_FRAMEWORK_PATH) printf '%s\0' "$e" ;;
+                LD_PRELOAD|LD_LIBRARY_PATH|PYTHONPATH|PYTHONHOME|PERL5LIB|PERL5OPT) printf '%s\0' "$e" ;;
+                DEVELOPER_DIR|TOOLCHAINS|XCODE_XCCONFIG_FILE) printf '%s\0' "$e" ;;
+                # (and every fastlane, match, spaceship, git, dyld and bundler one, and any bash function handed down)
+                FASTLANE_*|MATCH_*|SPACESHIP_*|GIT_*|DYLD_*|BUNDLE_*|BASH_FUNC_*) printf '%s\0' "$e" ;;
+              esac
+            done | /usr/bin/env -i LC_ALL=C /usr/bin/sort -z | /usr/bin/env -i /usr/bin/shasum -a 256
+          }
+          tools_sum() {
+            # git's and ssh's own settings for this user, every setting git reads from here (each with the file it came
+            # from: ~/.config/git/config too), and the fastlane program the signing step starts: where each is, what it says.
+            local f
+            {
+              for f in "$HOME/.gitconfig" "$HOME/.ssh/config"; do
+                if [ ! -f "$f" ]; then printf 'none %s\n' "$f"; continue; fi
+                printf 'file %s\n' "$f"; /bin/cat "$f" || printf 'unreadable\n'
+              done
+              printf 'git config --global --list\n'; git config --global --list 2>&1 || printf 'answered %s\n' "$?"
+              printf 'git config --list --show-origin\n'; git config --list --show-origin 2>&1 || printf 'answered %s\n' "$?"
+              f="$(command -v fastlane || true)"; printf 'fastlane %s\n' "$f"
+              if [ -n "$f" ] && [ -f "$f" ]; then /bin/cat "$f" || printf 'unreadable\n'; fi
+            } | /usr/bin/env -i /usr/bin/shasum -a 256
+          }
+          env_sum() {
+            # The job's own settings and every one a step added through $GITHUB_ENV, as the runner holds them (WORKFLOW_ENV,
+            # from env: above), whatever this shell is shown: macOS hides DYLD_ ones from its own programs, /bin/bash among them.
+            # (LOCK_NEW aside: the install sets it when no lock file is committed.)
+            printf '%s\n' "${WORKFLOW_ENV:-}" | /usr/bin/env -i /usr/bin/grep -v '^  "LOCK_NEW": ' |
+              /usr/bin/env -i /usr/bin/sed 's/,$//' | /usr/bin/env -i /usr/bin/shasum -a 256
+          }
+          recipe_sum() {
+            # Every file, link and folder in the signing recipe (ios-app/fastlane) and in .github, and any env file fastlane
+            # would read from ios-app itself (it looks there too when its own folder has none): each one's name, kind, contents.
+            local f
+            { /usr/bin/find ios-app/fastlane .github -print0; /usr/bin/find ios-app -maxdepth 1 -name '*.env*' -print0; } |
+              /usr/bin/env -i LC_ALL=C /usr/bin/sort -z | while IFS= read -r -d '' f; do
+                if [ -L "$f" ]; then printf 'link %s %s\0' "$f" "$(/usr/bin/readlink "$f")"
+                elif [ -f "$f" ]; then printf 'file %s %s\0' "$f" "$(/usr/bin/env -i /usr/bin/shasum -a 256 < "$f")"
+                else printf 'other %s\0' "$f"; fi
+              done | /usr/bin/env -i /usr/bin/shasum -a 256
+          }
+          vars="$(vars_sum)"; tools="$(tools_sum)"; recipe="$(recipe_sum)"; wenv="$(env_sum)"
+          printf 'path=%s\nvars=%s\ntools=%s\nrecipe=%s\nenv=%s\n' "$PATH" "$vars" "$tools" "$recipe" "$wenv" >> "$GITHUB_OUTPUT"
+          echo "Noted what the signing step depends on (the check before the Apple keys compares it all again)."
+
       - name: Install Capacitor
         working-directory: ios-app
         run: |
           set -euo pipefail
           node --version
+          # (--ignore-scripts: no package's own install script runs on this machine. Capacitor's packages have none.)
           if [ -f package-lock.json ]; then
-            npm ci
+            npm ci --ignore-scripts
           else
             # No lock file is committed yet (it needs Node to make). Install the exact pinned
             # versions, and keep the lock file the install makes (see the next step).
             echo "LOCK_NEW=1" >> "$GITHUB_ENV"
-            npm install
+            npm install --ignore-scripts
           fi
 
       - name: Make the Xcode project
@@ -208,6 +292,103 @@ jobs:
           echo "The app builds. (Nothing was signed or uploaded: that is testflight mode.)"
 
       # ---- mode "testflight": sign it and send it to TestFlight ---------------------------
+      # (Security check, Nov 15 2026, second round) What "Note what the signing step depends on" measured before any package
+      # came in, measured again the same way: the PATH first (compared in bash itself, since every program below is looked up
+      # on it), then the settings (as this shell sees them, and as the runner holds them), git's and ssh's own and the fastlane
+      # program, the signing recipe by its contents, and git's word that nothing in it or in .github is new or changed, not
+      # even a file git ignores. Anything different stops the run before any Apple key is handed over. The baselines come in
+      # through env: below, from that step's outputs.
+      # What a check in this same job cannot stop: code that ran as root (this runner's user may use sudo with no password), a
+      # program package code left running, or a change inside a program the signing step runs from a folder this user may
+      # write (fastlane's own gems, for one); and the signing step builds the app from the project the packages made. The full
+      # fix is to sign in a second job that never runs package code (left for later).
+      - name: Make sure nothing earlier changed how the signing step runs
+        if: github.event_name == 'push' || inputs.mode == 'testflight'
+        shell: /bin/bash --noprofile --norc -p -e -o pipefail {0}
+        env:
+          BEFORE_PATH: ${{ steps.before_packages.outputs.path }}
+          BEFORE_VARS: ${{ steps.before_packages.outputs.vars }}
+          BEFORE_TOOLS: ${{ steps.before_packages.outputs.tools }}
+          BEFORE_RECIPE: ${{ steps.before_packages.outputs.recipe }}
+          BEFORE_ENV: ${{ steps.before_packages.outputs.env }}
+          WORKFLOW_ENV: ${{ toJSON(env) }}
+        run: |
+          set -euo pipefail
+          bad=0
+          # (The PATH first, compared in bash itself: every program named below is looked up on it.)
+          if [ -z "$BEFORE_PATH" ] || [ "$PATH" != "$BEFORE_PATH" ]; then
+            echo "The PATH changed after the packages came in."
+            echo "Stopped before any Apple key was handed over."; exit 1
+          fi
+          # (The four measures, word for word the same in both steps. Each prints one sha256. Programs go by their full paths,
+          # and the ones that sort and hash run with an empty environment, so nothing set in it changes what they do.)
+          vars_sum() {
+            # The settings that change how a later program runs, each as name=value, in a fixed order.
+            local e
+            /usr/bin/env -0 | while IFS= read -r -d '' e; do
+              case "${e%%=*}" in
+                # (bash's own start-up files, and where git, ssh and fastlane look for their own settings)
+                BASH_ENV|ENV|HOME|XDG_CONFIG_HOME) printf '%s\0' "$e" ;;
+                # (what Ruby, and so fastlane, loads first)
+                RUBYOPT|RUBYLIB|RUBYGEMS_GEMDEPS|GEM_HOME|GEM_PATH|BUNDLE_GEMFILE) printf '%s\0' "$e" ;;
+                # (what git and ssh run, and the settings git is handed)
+                GIT_SSH|GIT_SSH_COMMAND|GIT_ASKPASS|GIT_CONFIG_GLOBAL|GIT_CONFIG_SYSTEM|GIT_CONFIG_COUNT) printf '%s\0' "$e" ;;
+                SSH_ASKPASS|SSH_ASKPASS_REQUIRE) printf '%s\0' "$e" ;;
+                # (the network's way out, and the certificates trusted on it)
+                HTTP_PROXY|HTTPS_PROXY|ALL_PROXY|NO_PROXY|http_proxy|https_proxy|all_proxy|no_proxy) printf '%s\0' "$e" ;;
+                SSL_CERT_FILE|SSL_CERT_DIR|CURL_CA_BUNDLE|REQUESTS_CA_BUNDLE|NODE_EXTRA_CA_CERTS) printf '%s\0' "$e" ;;
+                OPENSSL_CONF|OPENSSL_MODULES|OPENSSL_ENGINES) printf '%s\0' "$e" ;;
+                # (what other programs load first, and which Xcode and which tools build the app)
+                NODE_OPTIONS|DYLD_INSERT_LIBRARIES|DYLD_LIBRARY_PATH|DYLD_FRAMEWORK_PATH) printf '%s\0' "$e" ;;
+                LD_PRELOAD|LD_LIBRARY_PATH|PYTHONPATH|PYTHONHOME|PERL5LIB|PERL5OPT) printf '%s\0' "$e" ;;
+                DEVELOPER_DIR|TOOLCHAINS|XCODE_XCCONFIG_FILE) printf '%s\0' "$e" ;;
+                # (and every fastlane, match, spaceship, git, dyld and bundler one, and any bash function handed down)
+                FASTLANE_*|MATCH_*|SPACESHIP_*|GIT_*|DYLD_*|BUNDLE_*|BASH_FUNC_*) printf '%s\0' "$e" ;;
+              esac
+            done | /usr/bin/env -i LC_ALL=C /usr/bin/sort -z | /usr/bin/env -i /usr/bin/shasum -a 256
+          }
+          tools_sum() {
+            # git's and ssh's own settings for this user, every setting git reads from here (each with the file it came
+            # from: ~/.config/git/config too), and the fastlane program the signing step starts: where each is, what it says.
+            local f
+            {
+              for f in "$HOME/.gitconfig" "$HOME/.ssh/config"; do
+                if [ ! -f "$f" ]; then printf 'none %s\n' "$f"; continue; fi
+                printf 'file %s\n' "$f"; /bin/cat "$f" || printf 'unreadable\n'
+              done
+              printf 'git config --global --list\n'; git config --global --list 2>&1 || printf 'answered %s\n' "$?"
+              printf 'git config --list --show-origin\n'; git config --list --show-origin 2>&1 || printf 'answered %s\n' "$?"
+              f="$(command -v fastlane || true)"; printf 'fastlane %s\n' "$f"
+              if [ -n "$f" ] && [ -f "$f" ]; then /bin/cat "$f" || printf 'unreadable\n'; fi
+            } | /usr/bin/env -i /usr/bin/shasum -a 256
+          }
+          env_sum() {
+            # The job's own settings and every one a step added through $GITHUB_ENV, as the runner holds them (WORKFLOW_ENV,
+            # from env: above), whatever this shell is shown: macOS hides DYLD_ ones from its own programs, /bin/bash among them.
+            # (LOCK_NEW aside: the install sets it when no lock file is committed.)
+            printf '%s\n' "${WORKFLOW_ENV:-}" | /usr/bin/env -i /usr/bin/grep -v '^  "LOCK_NEW": ' |
+              /usr/bin/env -i /usr/bin/sed 's/,$//' | /usr/bin/env -i /usr/bin/shasum -a 256
+          }
+          recipe_sum() {
+            # Every file, link and folder in the signing recipe (ios-app/fastlane) and in .github, and any env file fastlane
+            # would read from ios-app itself (it looks there too when its own folder has none): each one's name, kind, contents.
+            local f
+            { /usr/bin/find ios-app/fastlane .github -print0; /usr/bin/find ios-app -maxdepth 1 -name '*.env*' -print0; } |
+              /usr/bin/env -i LC_ALL=C /usr/bin/sort -z | while IFS= read -r -d '' f; do
+                if [ -L "$f" ]; then printf 'link %s %s\0' "$f" "$(/usr/bin/readlink "$f")"
+                elif [ -f "$f" ]; then printf 'file %s %s\0' "$f" "$(/usr/bin/env -i /usr/bin/shasum -a 256 < "$f")"
+                else printf 'other %s\0' "$f"; fi
+              done | /usr/bin/env -i /usr/bin/shasum -a 256
+          }
+          if [ -z "$BEFORE_VARS" ] || [ "$(vars_sum)" != "$BEFORE_VARS" ]; then echo "A setting that changes how a program runs (BASH_ENV, RUBYOPT, a proxy or certificate setting, git's, ssh's or fastlane's own, a bash function and the like) changed after the packages came in."; bad=1; fi
+          if [ -z "$BEFORE_TOOLS" ] || [ "$(tools_sum)" != "$BEFORE_TOOLS" ]; then echo "git's or ssh's own settings, or the fastlane program, changed after the packages came in."; bad=1; fi
+          if [ -z "$BEFORE_ENV" ] || [ "$(env_sum)" != "$BEFORE_ENV" ]; then echo "A setting for the later steps was added or changed (through \$GITHUB_ENV) after the packages came in."; bad=1; fi
+          if [ -z "$BEFORE_RECIPE" ] || [ "$(recipe_sum)" != "$BEFORE_RECIPE" ]; then echo "The signing recipe (ios-app/fastlane), an env file fastlane reads in ios-app, or .github changed during the run."; bad=1; fi
+          if ! st="$(git status --porcelain --ignored --untracked-files=all -- ios-app/fastlane .github)" || [ -n "$st" ]; then echo "git says the signing recipe (ios-app/fastlane) or .github holds a change, or a file that was not committed."; bad=1; fi
+          if [ -n "${BASH_ENV:-}" ] || [ -n "${ENV:-}" ]; then echo "BASH_ENV or ENV was set during the run."; bad=1; fi
+          [ "$bad" = 0 ] || { echo "Stopped before any Apple key was handed over."; exit 1; }
+          echo "The signing step runs as committed."
+
       - name: Check the secrets are all there (names only, never values)
         if: github.event_name == 'push' || inputs.mode == 'testflight'
         env:

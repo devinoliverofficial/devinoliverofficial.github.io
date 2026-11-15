@@ -62,6 +62,7 @@
   var srKnown = null, srProbing = false;
   var ssKnown = null;
   var ctKnown = null;
+  var pnKnown = null;
   var readyKnown = null;
   var readyIdle = '';
   var seatMarks = 2;
@@ -364,6 +365,30 @@
     return !!e && (e.code === 'PGRST202' || e.code === '42883' ||
       /could not find the function|function .* does not exist/i.test(String(e.message || '')));
   }
+  async function pushLeave() {
+    if (!(navigator.serviceWorker && 'PushManager' in window)) return;
+    var reg = await navigator.serviceWorker.getRegistration();
+    var sub = reg && reg.pushManager ? await reg.pushManager.getSubscription() : null;
+    if (!sub) return;
+    try { await sb.from('push_subs').delete().eq('endpoint', sub.endpoint); } catch (e) {   }
+    try { await sub.unsubscribe(); } catch (e) {   }
+  }
+  function peopleNames(ids) {
+    var list = (ids || []).filter(Boolean);
+    if (!list.length) return Promise.resolve({ data: [] });
+    var rows = function () {
+      return Promise.resolve(sb.from('profiles').select('user_id, full_name, username, email, phone, tour_role').in('user_id', list));
+    };
+    if (pnKnown === false) return rows();
+    return Promise.resolve(sb.rpc('tour_people_names', { ids: list.slice(0, 500) })).then(function (q) {
+      if (q && q.error) {
+        if (fnMissing(q.error)) pnKnown = false;
+        return rows();
+      }
+      pnKnown = true;
+      return { data: Array.isArray(q && q.data) ? q.data : [] };
+    }, function () { return rows(); });
+  }
   function tableMissing(e) {
     return !!e && (e.code === 'PGRST205' || e.code === '42P01' ||
       /could not find the table|relation .* does not exist/i.test(String(e.message || '')));
@@ -394,6 +419,26 @@
     catch (e) { throw e && e.code === 'offline' ? e : err('offline'); }
     if (q.error) throw fnMissing(q.error) ? err('unavailable') : signalError(q.error);
     return q.data;
+  }
+  var LINK_PLATFORMS = ['instagram', 'facebook', 'youtube', 'tiktok', 'apple', 'deezer', 'spotify', 'soundcloud'];
+  var LINK_SIGN_IN = { instagram: 'https://www.facebook.com/v27.0/dialog/oauth?', facebook: 'https://www.facebook.com/v27.0/dialog/oauth?',
+    youtube: 'https://accounts.google.com/o/oauth2/v2/auth?', tiktok: 'https://www.tiktok.com/v2/auth/authorize/?' };
+  var LINK_CATALOG = ['apple', 'deezer', 'spotify', 'soundcloud'];
+  var LINK_UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+  async function linkCall(body) {
+    if (!sb || !session) throw err('unavailable');
+    var res;
+    try { res = await callFn('link', { method: 'POST', body: JSON.stringify(body) }); }
+    catch (e) { throw err('unavailable'); }
+    if (!res || res.status === 404) throw err('unavailable');
+    if (res.status === 401 || res.status === 403) throw err('session_expired');
+    if (res.status === 429) throw err('rate_limited');
+    if (!res.ok) throw err('unavailable');
+    var out;
+    try { out = await res.json(); } catch (e) { throw err('unavailable'); }
+    if (!isObj(out)) throw err('unavailable');
+    if (out.error) throw err(/^[a-z_]{1,40}$/.test(String(out.error)) ? String(out.error) : 'failed');
+    return out;
   }
   async function reimburseCall(fn, args) {
     if (!sb || !session || !session.user) return { ok: false, why: 'unavailable' };
@@ -451,6 +496,11 @@
   function keptClear() {
     try {
       Object.keys(localStorage).forEach(function (k) { if (/^gr-keep-(crew|fw):|^gr-card:|^gr-off-pick:/.test(k)) localStorage.removeItem(k); });
+    } catch (e) {   }
+    try { if (typeof window !== 'undefined' && typeof window.GR_SIGNAL_FORGET === 'function') window.GR_SIGNAL_FORGET(); } catch (e) {   }
+    try { if (typeof indexedDB !== 'undefined' && indexedDB) indexedDB.deleteDatabase('gr-signal'); } catch (e) {   }
+    try {
+      Object.keys(localStorage).forEach(function (k) { if (/^gr\.signal\./.test(k)) localStorage.removeItem(k); });
     } catch (e) {   }
   }
   function suggestClear() {
@@ -1955,6 +2005,82 @@
       if (!fn || !id) throw err('invalid');
       return (await signalRpc(fn, { p_id: String(id) })) === true;
     },
+    signalAnalyze: async function (req, opts) {
+      var o = opts || {};
+      if (!sb || !session) throw err('unavailable');
+      if (window.GR_AI_CONSENT && !(await window.GR_AI_CONSENT('signal'))) throw err('cancelled');
+      var ctl = typeof AbortController === 'function' ? new AbortController() : null;
+      var stop = function () { if (ctl) ctl.abort(); };
+      if (o.signal && o.signal.addEventListener) o.signal.addEventListener('abort', stop);
+      var timer = ctl ? setTimeout(stop, 95000) : 0;
+      var res;
+      try {
+        res = await callFn('signal', { method: 'POST', signal: ctl ? ctl.signal : undefined, body: JSON.stringify(isObj(req) ? req : {}) });
+      } catch (e) {
+        if (o.signal && o.signal.aborted) throw err('cancelled');
+        throw err('unavailable');
+      } finally { if (timer) clearTimeout(timer); }
+      if (!res || res.status === 404) throw err('unavailable');
+      if (res.status === 401 || res.status === 403) throw err('session_expired');
+      if (res.status === 429) throw err('rate_limited');
+      if (!res.ok) throw err('unavailable');
+      var out;
+      try { out = await res.json(); } catch (e) { throw err('unavailable'); }
+      if (!isObj(out)) throw err('unavailable');
+      if (out.error) throw err(String(out.error));
+      return out;
+    },
+    signalLinks: async function () {
+      if (!sb || !session) return null;
+      var q;
+      try { q = await sgLimit(sb.rpc('signal_links'), 20000); }
+      catch (e) { throw e && e.code === 'offline' ? e : err('offline'); }
+      if (q.error) { if (fnMissing(q.error)) return null; throw signalError(q.error); }
+      return Array.isArray(q.data) ? q.data.filter(function (x) {
+        return isObj(x) && LINK_PLATFORMS.indexOf(x.platform) >= 0 && typeof x.id === 'string';
+      }) : null;
+    },
+    signalLinkStatus: async function () {
+      try {
+        var out = await linkCall({ action: 'status' });
+        return { on: (Array.isArray(out.on) ? out.on : []).filter(function (p) { return LINK_PLATFORMS.indexOf(p) >= 0; }) };
+      } catch (e) { return { on: [] }; }
+    },
+    signalLinkStart: async function (platform, account, shell) {
+      var p = String(platform || '');
+      if (!Object.prototype.hasOwnProperty.call(LINK_SIGN_IN, p)) throw err('bad_request');
+      var out = await linkCall({ action: 'start', platform: p, account: String(account || '').slice(0, 120), shell: shell === true });
+      var url = typeof out.url === 'string' ? out.url : '';
+      if (url.indexOf(LINK_SIGN_IN[p]) !== 0 || /[\s"'<>]/.test(url) || url.length > 4000) throw err('failed');
+      return url;
+    },
+    signalLinkSync: async function (id) {
+      if (!LINK_UUID.test(String(id || ''))) throw err('bad_request');
+      return await linkCall({ action: 'sync_now', link_id: String(id) });
+    },
+    signalLinkUnlink: async function (id) {
+      if (!LINK_UUID.test(String(id || ''))) throw err('bad_request');
+      return await linkCall({ action: 'unlink', link_id: String(id) });
+    },
+    signalLinkSearch: async function (platform, q) {
+      var p = String(platform || '');
+      if (LINK_CATALOG.indexOf(p) < 0) throw err('bad_request');
+      var term = String(q || '').trim().slice(0, 100);
+      if (term.length < 2) throw err('bad_request');
+      var out = await linkCall({ action: 'search', platform: p, q: term });
+      return (Array.isArray(out.results) ? out.results : []).filter(isObj).map(function (r) {
+        return { ext_id: String(r.ext_id || '').slice(0, 80), name: String(r.name || '').slice(0, 120),
+          image: typeof r.image === 'string' && /^https:\/\/[^\s"'<>]+$/.test(r.image) ? r.image : '',
+          fans: typeof r.fans === 'number' && isFinite(r.fans) ? r.fans : null };
+      }).filter(function (r) { return r.ext_id && r.name; }).slice(0, 10);
+    },
+    signalLinkPick: async function (platform, extId, artistId) {
+      var p = String(platform || '');
+      if (LINK_CATALOG.indexOf(p) < 0 || !extId) throw err('bad_request');
+      if (artistId != null && artistId !== '' && !LINK_UUID.test(String(artistId))) throw err('bad_request');
+      return await linkCall({ action: 'pick', platform: p, ext_id: String(extId).slice(0, 80),
+        artist_id: artistId == null || artistId === '' ? null : String(artistId) });
+    },
     reportSet: async function (id, act) {
       if (!sb || !session) throw err('unavailable');
       var q = await sb.rpc('report_set', { r_id: id, act: String(act || '') });
@@ -2010,8 +2136,7 @@
       if (ownerId) ids.push(ownerId);
       var byId = {};
       if (ids.length) {
-        var pq = await sb.from('profiles')
-          .select('user_id, full_name, username, email, phone, tour_role').in('user_id', ids);
+        var pq = await peopleNames(ids);
         (pq.data || []).forEach(function (x) { byId[x.user_id] = x; });
       }
       var since = {}, sq = await sinceP;
@@ -3503,15 +3628,24 @@
       if (perm !== 'granted') throw err('denied');
       var reg = await navigator.serviceWorker.ready;
       var sub = await reg.pushManager.getSubscription();
-      if (!sub) {
+      var fresh = function () {
         var key = Uint8Array.from(atob((cfg.vapidPublic || '').replace(/-/g, '+').replace(/_/g, '/')
           .padEnd(Math.ceil(cfg.vapidPublic.length / 4) * 4, '=')), function (c) { return c.charCodeAt(0); });
-        sub = await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: key });
+        return reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: key });
+      };
+      if (!sub) sub = await fresh();
+      var save = function () {
+        var j = sub.toJSON();
+        return sb.from('push_subs').upsert({
+          endpoint: sub.endpoint, p256dh: j.keys.p256dh, auth: j.keys.auth, prefs: prefs || {}
+        });
+      };
+      var q = await save();
+      if (q.error && q.error.code === '42501') {
+        try { await sub.unsubscribe(); } catch (e) {   }
+        sub = await fresh();
+        q = await save();
       }
-      var j = sub.toJSON();
-      var q = await sb.from('push_subs').upsert({
-        endpoint: sub.endpoint, p256dh: j.keys.p256dh, auth: j.keys.auth, prefs: prefs || {}
-      });
       if (q.error) throw mapError(q.error);
     },
     pushSetPrefs: async function (prefs) {
@@ -3665,6 +3799,12 @@
       }
       try {
         await Promise.race([
+          pushLeave(),
+          new Promise(function (r) { setTimeout(r, 1500); })
+        ]);
+      } catch (e) {   }
+      try {
+        await Promise.race([
           sb.auth.signOut({ scope: 'local' }),
           new Promise(function (r) { setTimeout(r, 2000); })
         ]);
@@ -3802,8 +3942,7 @@
         riders.unshift({ user_id: doc._ownerId, display_name: '' });
       }
       var ids = riders.map(function (m) { return m.user_id; });
-      return (ids.length ? sb.from('profiles').select('user_id, full_name, username').in('user_id', ids)
-        : Promise.resolve({ data: [] })).then(function (pq) {
+      return peopleNames(ids).then(function (pq) {
         var names = {};
         (pq.data || []).forEach(function (x) { names[x.user_id] = x.full_name || x.username || ''; });
         var word = {};
@@ -4569,8 +4708,7 @@
         var ids = [];
         (qs[0].data || []).forEach(function (r) { if (r.assigned_to && ids.indexOf(r.assigned_to) < 0) ids.push(r.assigned_to); });
         (qs[1].data || []).forEach(function (r) { if (r.user_id && ids.indexOf(r.user_id) < 0) ids.push(r.user_id); });
-        return (ids.length ? sb.from('profiles').select('user_id, full_name, username').in('user_id', ids)
-          : Promise.resolve({ data: [] })).then(function (pq) {
+        return peopleNames(ids).then(function (pq) {
           var names = {};
           (pq.data || []).forEach(function (x) { names[x.user_id] = x.full_name || x.username || ''; });
           return { can: true, names: names,
@@ -4602,7 +4740,7 @@
       });
       return Promise.all([
         aIds.length ? sb.from('artists').select('id, name').in('id', aIds) : Promise.resolve({ data: [] }),
-        uIds.length ? sb.from('profiles').select('user_id, full_name, username').in('user_id', uIds) : Promise.resolve({ data: [] })
+        peopleNames(uIds)
       ]).then(function (qs) {
         var an = {}, names = {};
         (qs[0].data || []).forEach(function (x) { an[x.id] = x.name || ''; });
@@ -4739,8 +4877,7 @@
         }
         var rows = q.data || [], ids = [];
         rows.forEach(function (r) { if (r.user_id && ids.indexOf(r.user_id) < 0) ids.push(r.user_id); });
-        return (ids.length ? sb.from('profiles').select('user_id, full_name, username').in('user_id', ids)
-          : Promise.resolve({ data: [] })).then(function (pq) {
+        return peopleNames(ids).then(function (pq) {
           var names = {};
           (pq.data || []).forEach(function (x) { names[x.user_id] = x.full_name || x.username || ''; });
           return rows.map(function (r) {
@@ -6325,6 +6462,42 @@
       error: p.get('error_description') || p.get('error_code') || ''
     };
   }
+  async function linkTake(user, access, auth) {
+    if (!user || !user.id) return { take: true, email: '' };
+    var who = null;
+    try {
+      var got = await sgLimit(auth.getUser(access), 15000);
+      who = got && !got.error && got.data && got.data.user && typeof got.data.user.id === 'string' ? got.data.user : null;
+    } catch (e) { who = null; }
+    if (who && who.id === user.id) return { take: true, email: typeof who.email === 'string' ? who.email : '' };
+    return { take: false, email: who && typeof who.email === 'string' ? who.email : '' };
+  }
+  function linkCheck() {
+    try {
+      return sbMod.createClient(cfg.url, cfg.anonKey, { auth: { persistSession: false, autoRefreshToken: false,
+        detectSessionInUrl: false, storageKey: 'gr-link-check', lock: sbMod.processLock || undefined },
+        global: { fetch: sturdyFetch } }).auth;
+    } catch (e) { return null; }
+  }
+  function linkSwitchAsk(mine, theirs) {
+    return new Promise(function (resolve) {
+      var wrap = document.createElement('div');
+      wrap.id = 'gr-link-ask';
+      wrap.className = 'gr-gate-like';
+      wrap.innerHTML =
+        '<div class="gate-card">' +
+        '<span class="logo-mark gate-mark" role="img" aria-label="Greenroom"></span>' +
+        '<p class="gate-hi">This link is for another account.</p>' +
+        '<p class="gate-hi quiet">You\u2019re signed in here as ' + esc(mine || 'another account') + '. The link is for ' +
+          esc(theirs || 'a different account') + '.</p>' +
+        '<button class="btn primary block" id="gr-link-stay" type="button">Stay signed in as ' + esc(mine || 'this account') + '</button>' +
+        '<button class="linkbtn quiet" id="gr-link-switch" type="button">Switch to ' + esc(theirs || 'the link\u2019s account') + '</button>' +
+        '</div>';
+      document.body.appendChild(wrap);
+      wrap.querySelector('#gr-link-stay').addEventListener('click', function () { wrap.remove(); resolve(false); });
+      wrap.querySelector('#gr-link-switch').addEventListener('click', function () { wrap.remove(); resolve(true); });
+    });
+  }
   async function boot() {
     var mod = (localHost() && window.GR_SUPABASE) || await import('https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.117.3/+esm');
     sbMod = mod;
@@ -6354,6 +6527,10 @@
     session = got.data ? got.data.session : null;
     if (session) setTimeout(placeProbe, 1200);
     var note = '';
+    if (link.access && link.refresh && session && session.user) {
+      var how = await linkTake(session.user, link.access, linkCheck());
+      if (!how.take && !(await linkSwitchAsk(session.user.email || '', how.email))) link = {};
+    }
     if (link.access && link.refresh) {
       var set = await sb.auth.setSession({ access_token: link.access, refresh_token: link.refresh });
       if (set.data && set.data.session) session = set.data.session;
@@ -6541,14 +6718,15 @@
   function newPasswordGate(must) {
     resetting = false;
     if (document.getElementById('gr-pass-gate')) return;
+    var who = session && session.user ? String(session.user.email || '') : '';
     var wrap = document.createElement('div');
     wrap.id = 'gr-pass-gate';
     wrap.className = 'gr-gate-like';
     wrap.innerHTML =
       '<div class="gate-card">' +
       '<span class="logo-mark gate-mark" role="img" aria-label="Greenroom"></span>' +
-      '<p class="gate-hi">' + (must ? 'Choose your password.' : 'Pick a new password.') + '</p>' +
-      (must ? '<p class="gate-hi quiet">This account was started for your email. Set a password only you know.</p>' : '') +
+      '<p class="gate-hi">' + (must ? 'Choose your password.' : 'Pick a new password' + (who ? ' for ' + esc(who) : '') + '.') + '</p>' +
+      (must ? '<p class="gate-hi quiet">This account was started for ' + (who ? esc(who) : 'your email') + '. Set a password only you know.</p>' : '') +
       '<form id="gr-pass-form" novalidate>' +
       '<input class="input" type="password" id="gr-pass-new" placeholder="New password" ' +
         'autocomplete="new-password" aria-label="New password">' +
