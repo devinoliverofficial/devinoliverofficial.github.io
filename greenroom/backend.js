@@ -404,6 +404,24 @@
     fact: 'signal_fact_delete', pitch: 'signal_pitch_delete', confirmation: 'signal_confirmation_delete',
     asset: 'signal_asset_delete', post: 'signal_post_delete', result: 'signal_result_delete',
     campaign: 'signal_campaign_delete', snapshot: 'signal_snapshot_delete' };
+  var MERCH_SAVES = { product: 'merchroom_product_save', move: 'merchroom_move_save', night: 'merchroom_night_save', sale: 'merchroom_sale_save' };
+  var MERCH_DELETES = { move: 'merchroom_move_delete', night: 'merchroom_night_delete', sale: 'merchroom_sale_delete' };
+  function merchError(e) {
+    var msg = String(e && e.message || '');
+    var bad = /merchroom_bad: ?([a-z_ ]*)/.exec(msg);
+    if (bad) { var x = err('invalid'); x.field = String(bad[1] || '').trim(); return x; }
+    if (/merchroom_full/.test(msg)) return err('full');
+    if (e && e.code === '42501') return err('permission');
+    return mapError(e);
+  }
+  async function merchRpc(fn, args) {
+    if (!sb || !session) throw err('unavailable');
+    var q;
+    try { q = await sgLimit(sb.rpc(fn, args), 20000); }
+    catch (e) { throw e && e.code === 'offline' ? e : err('offline'); }
+    if (q.error) throw fnMissing(q.error) ? err('unavailable') : merchError(q.error);
+    return q.data;
+  }
   function signalError(e) {
     var msg = String(e && e.message || '');
     var bad = /signal_bad: ?([a-z_]*)/.exec(msg);
@@ -501,6 +519,11 @@
     try { if (typeof indexedDB !== 'undefined' && indexedDB) indexedDB.deleteDatabase('gr-signal'); } catch (e) {   }
     try {
       Object.keys(localStorage).forEach(function (k) { if (/^gr\.signal\./.test(k)) localStorage.removeItem(k); });
+    } catch (e) {   }
+    try { if (typeof window !== 'undefined' && typeof window.GR_MERCH_FORGET === 'function') window.GR_MERCH_FORGET(); } catch (e) {   }
+    try { if (typeof indexedDB !== 'undefined' && indexedDB) indexedDB.deleteDatabase('gr-merch'); } catch (e) {   }
+    try {
+      Object.keys(localStorage).forEach(function (k) { if (/^gr\.merch\./.test(k)) localStorage.removeItem(k); });
     } catch (e) {   }
   }
   function suggestClear() {
@@ -2004,6 +2027,52 @@
       var fn = Object.prototype.hasOwnProperty.call(SIGNAL_DELETES, kind) ? SIGNAL_DELETES[kind] : '';
       if (!fn || !id) throw err('invalid');
       return (await signalRpc(fn, { p_id: String(id) })) === true;
+    },
+    merchMay: async function () {
+      if (!sb || !session) return false;
+      var q;
+      try { q = await sgLimit(sb.rpc('signal_may'), 15000); }
+      catch (e) { throw err('offline'); }
+      if (q.error) { if (fnMissing(q.error)) return false; throw err('offline'); }
+      return q.data === true;
+    },
+    merchRoom: async function () {
+      if (!sb || !session) return null;
+      var q;
+      try { q = await sgLimit(sb.rpc('merchroom_room'), 20000); }
+      catch (e) { throw e && e.code === 'offline' ? e : err('offline'); }
+      if (q.error) { if (fnMissing(q.error)) return null; throw merchError(q.error); }
+      return isObj(q.data) ? q.data : null;
+    },
+    merchSave: async function (kind, row) {
+      var fn = Object.prototype.hasOwnProperty.call(MERCH_SAVES, kind) ? MERCH_SAVES[kind] : '';
+      if (!fn || !isObj(row) || !row.id) throw err('invalid');
+      var d = await merchRpc(fn, { p: row });
+      return isObj(d) ? d : null;
+    },
+    merchDelete: async function (kind, id) {
+      var fn = Object.prototype.hasOwnProperty.call(MERCH_DELETES, kind) ? MERCH_DELETES[kind] : '';
+      if (!fn || !id) throw err('invalid');
+      return (await merchRpc(fn, { p_id: String(id) })) === true;
+    },
+    merchSquare: async function () {
+      if (!sb || !session) return null;
+      var q;
+      try { q = await sgLimit(sb.rpc('merchroom_square'), 20000); }
+      catch (e) { throw e && e.code === 'offline' ? e : err('offline'); }
+      if (q.error) { if (fnMissing(q.error)) return { missing: true }; throw merchError(q.error); }
+      return isObj(q.data) ? q.data : null;
+    },
+    merchSquareMatch: async function (p) {
+      if (!isObj(p) || !p.variation_id) throw err('invalid');
+      var row = { variation_id: String(p.variation_id), product_id: p.product_id ? String(p.product_id) : null };
+      if (row.product_id) row.size = String(p.size || 'One size');
+      var d = await merchRpc('merchroom_square_match_save', { p: row });
+      return isObj(d) ? d : null;
+    },
+    merchSquareRefresh: async function () {
+      var d = await merchRpc('merchroom_square_refresh', {});
+      return isObj(d) ? d : { asked: false };
     },
     signalAnalyze: async function (req, opts) {
       var o = opts || {};
