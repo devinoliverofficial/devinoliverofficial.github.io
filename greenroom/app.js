@@ -867,6 +867,7 @@
     else if (S.route.name === 'search') node = viewSearch();
     else if (S.route.name === 'mainmenu') node = viewMenu();
     else if (S.route.name === 'merchroom') node = viewMerchroom();
+    else if (S.route.name === 'mroom') node = viewMroom();
     else if (S.route.name === 'signal') node = viewSignal();
     else if (S.route.name === 'history') node = viewHistory();
     else if (S.route.name === 'place') node = viewPlace();
@@ -964,10 +965,17 @@
   }
   function pullToClose(panel) {
     var y0 = null, dy = 0, t0 = 0, active = false;
+    var typing = function () {
+      var a = document.activeElement;
+      if (a && a !== panel && typeof panel.contains === 'function' && panel.contains(a) && /^(INPUT|SELECT|TEXTAREA)$/.test(String(a.tagName || ''))) return true;
+      var vv = window.visualViewport;
+      return !!(vv && window.innerHeight - vv.height > 120);
+    };
     panel.addEventListener('touchstart', function (e) {
       y0 = null;
       if (e.touches.length !== 1) return;
       if (e.target.closest && e.target.closest('.rv-chips, input, select, textarea, .no-pull')) return;
+      if (typing()) return;
       var fromTop = e.touches[0].clientY - panel.getBoundingClientRect().top < 56;
       if (panel.scrollTop > 0 && !fromTop) return;
       y0 = e.touches[0].clientY; dy = 0; t0 = Date.now(); active = false;
@@ -979,6 +987,7 @@
         if (dy < -4) { y0 = null; return; }
         if (dy < 8) return;
         if (panel.scrollTop > 0 && e.touches[0].clientY - panel.getBoundingClientRect().top >= 56) { y0 = null; return; }
+        if (typing()) { y0 = null; return; }
         active = true;
         panel.style.transition = 'none';
       }
@@ -8535,7 +8544,6 @@
     pnlCatsPeople: 'People',
     pnlCatsPeopleSub: 'People: a list of people you pay, with their pay, the way Crew works.',
     pnlCatsBack: 'Or pick one of these:',
-    pnlCatsOff: function (label) { return '“' + label + '” is off this P&L. Categories + brings it back.'; },
     pnlCatsMade: function (label, people) { return '“' + label + '” is a category now, on this P&L' + (people ? '. Add its people from its line.' : '.'); },
     pnlCatsList: 'People',
     pnlUpload: 'Upload',
@@ -8610,6 +8618,45 @@
     },
     pnlBudsViaNone: function (via) { return 'It counts with ' + via[0].who + '’s budget. Change that on their page.'; },
     pnlBudsLost: 'its budget didn’t save: pick it again under Logged Card Transactions',
+    pnlCatsSwipe: 'Swipe a category left to edit or delete it.',
+    pnlCatRenameSub: function (was) { return 'Everything under “' + was + '” moves to the new name, on this P&L only.'; },
+    pnlCatDelTitle: function (name) { return 'Delete ' + name + '?'; },
+    pnlCatDelLogged: function (name) { return 'There are transactions logged in ' + name + '.'; },
+    pnlCatDelLines: function (n) {
+      n = n && typeof n === 'object' ? n : {};
+      var say = function (k, one, many) { return typeof k === 'number' && k > 0 ? (k === 1 ? one : many.replace('#', String(k))) : ''; };
+      return [say(n.hand, '1 logged by hand will be deleted.', '# logged by hand will be deleted.'),
+        say(n.cards, '1 from your cards goes back to New charges, to be filed again.', '# from your cards go back to New charges, to be filed again.'),
+        say(n.whole, '1 split with another category goes back to New charges whole.', '# split with another category go back to New charges whole.'),
+        say(n.part, '1 logged by hand and split with another category keeps only its other part.', '# logged by hand and split with another category keep only their other part.'),
+        say(n.statements, '1 from a statement you brought in will be deleted.', '# from statements you brought in will be deleted.'),
+        say(n.owed, '1 not paid yet will be deleted.', '# not paid yet will be deleted.'),
+        say(n.people, '1 person comes off this P&L, with their pay.', '# people come off this P&L, with their pay.'),
+        say(n.cardParts, 'Its part of a card balance goes back to that card.', 'Its parts of # card balances go back to those cards.'),
+        n.projection > 0.004 ? 'Its projection of ' + money(n.projection) + ' is cleared.' : ''].filter(Boolean);
+    },
+    pnlCatDelCardsWho: 'Card charges go back to New charges only from the account that linked the cards. Ask them to delete it.',
+    pnlCatDeleted: function (name, sent) {
+      return '“' + name + '” is deleted. Categories + brings it back.' + (sent ? ' ' + (sent === 1 ? '1 card charge is' : sent + ' card charges are') + ' back in New charges.' : '');
+    },
+    pnlCatDelGoing: function (i, n) { return 'Sending back ' + i + ' of ' + n; },
+    pnlCatDelStopped: function (sent) { return sent ? sent + ' went back to New charges. The rest stayed. Try Delete again.' : 'Nothing was deleted. Try Delete again.'; },
+    pnlPaid: 'Paid',
+    pnlOwed: 'Not paid yet',
+    pnlOwedAsk: 'Paid or not paid yet',
+    pnlOwedNote: 'Not paid yet: a bill still to pay. It counts in this P&L’s total now, never in what is spent. Mark it paid when it goes out.',
+    pnlOwedWhat: 'Optional: what it was for',
+    pnlOwedSave: 'Save as not paid yet',
+    pnlOwedSaved: function (amt, label) { return amt + ' not paid yet · ' + label; },
+    pnlOwedPeople: 'Still owed? Set their pay on their page, and what is left to pay them shows there.',
+    pnlOwedPay: 'Still owed? Set their pay plan above, and the top says what is left to pay.',
+    pnlOwedMark: 'Mark paid',
+    pnlOwedMarkSub: 'How was it paid?',
+    pnlOwedEdit: 'Edit',
+    pnlOwedMarked: function (amt, kind) { return amt + ' marked paid · logged as ' + kind; },
+    pnlOwedGone: 'That isn’t here anymore.',
+    pnlOwedDelBody: function (amt, label) { return amt + ' not paid yet comes off ' + label + '.'; },
+    pnlDayOptional: function (word) { return 'Day it was ' + word + ' (optional)'; },
     thisPnl: 'This P&L',
     notPnlIncome: 'Not P&L income: clear it',
     addStudio: 'Add studio time',
@@ -12970,6 +13017,7 @@
     return h('div', { class: 'page home profile menu-page has-tabs' },
       menuHead('Merchroom', { menu: true }),
       dbBanner(),
+      S.route.back && S.route.back.name === 'mroom' ? h('button', { class: 'mrm-back', type: 'button', onclick: function () { go(S.route.back); } }, icon('back', 18), 'Back to MERCHROOM') : null,
       body,
       socialBar(''));
   }
@@ -12994,6 +13042,1861 @@
           h('button', { class: 'btn ghost block', type: 'button', onclick: function () { closeSheet(); } }, 'Cancel'))
       ];
     }, { label: 'Connect Square' });
+  }
+  var MR_TABS = [['night', 'Show night'], ['products', 'Products'], ['stock', 'Stock'], ['results', 'Results']];
+  var MR_OK = 'gr.merch.ok.';
+  var MR_KINDS = ['products', 'moves', 'nights', 'sales'];
+  var MR_ONE = { products: 'product', moves: 'move', nights: 'night', sales: 'sale' };
+  var MR_STEPS = [['in', 'Count in'], ['adds', 'Adds'], ['comps', 'Comps'], ['sell', 'Sell'], ['out', 'Count out'], ['settle', 'Settle']];
+  var MR_WHY = ['Band', 'Crew', 'Guest', 'Venue', 'Damaged', 'Other'];
+  var MR_PHOTOS = { urls: {}, loaded: false, loading: false, db: null };
+  function mrUid() {
+    var B = window.GR_BACKEND;
+    return S.mode === 'db' && B && typeof B.uid === 'function' ? (B.uid() || 'local') : 'local';
+  }
+  function mrStore() {
+    var uid = mrUid(), st = S.mrStore;
+    if (st && st.uid === uid) return st;
+    var raw = null;
+    try { raw = JSON.parse(lsGet('gr.merch.v1.' + uid) || 'null'); } catch (e) { raw = null; }
+    var ok = G.isObj(raw);
+    st = { uid: uid, data: {}, outbox: ok && G.isObj(raw.outbox) ? raw.outbox : {}, gone: ok && G.isObj(raw.gone) ? raw.gone : {},
+      regs: ok && G.isObj(raw.regs) ? raw.regs : {}, dbOn: !!(ok && raw.dbOn === true), ver: 1, ix: null };
+    MR_KINDS.forEach(function (k) { st.data[k] = ok && G.isObj(raw.data) && G.isObj(raw.data[k]) ? raw.data[k] : {}; });
+    S.mrStore = st;
+    return st;
+  }
+  function mrKeep(st) {
+    st.ver += 1; st.ix = null;
+    var ok = lsSet('gr.merch.v1.' + st.uid, JSON.stringify({ v: 1, data: st.data, outbox: st.outbox, gone: st.gone, regs: st.regs, dbOn: st.dbOn }));
+    if (!ok && !st.fullSaid) { st.fullSaid = true; toast('This phone has no room left to keep MERCHROOM. Free up some space.', 5200, true); }
+    return ok;
+  }
+  function mrRows(kind) {
+    var d = mrStore().data[kind] || {};
+    return Object.keys(d).map(function (k) { return d[k]; }).filter(G.isObj);
+  }
+  function mrIx() {
+    var st = mrStore(), today = G.tourToday();
+    if (st.ix && st.ixVer === st.ver && st.ixDay === today) return st.ix;
+    st.ix = window.GMERCH.index({ products: mrRows('products'), moves: mrRows('moves'), nights: mrRows('nights'), sales: mrRows('sales'),
+      registers: st.regs }, today);
+    st.ixVer = st.ver; st.ixDay = today;
+    return st.ix;
+  }
+  function mrNewId() {
+    var b = [];
+    try { var a = new Uint8Array(16); window.crypto.getRandomValues(a); b = Array.prototype.slice.call(a); } catch (e) { b = []; }
+    for (var i = b.length; i < 16; i++) b.push(Math.floor(Math.random() * 256));
+    b[6] = (b[6] & 15) | 64; b[8] = (b[8] & 63) | 128;
+    var hx = b.map(function (x) { return (x < 16 ? '0' : '') + x.toString(16); }).join('');
+    return hx.slice(0, 8) + '-' + hx.slice(8, 12) + '-' + hx.slice(12, 16) + '-' + hx.slice(16, 20) + '-' + hx.slice(20);
+  }
+  function mrPut(kind, row) {
+    var st = mrStore(), now = new Date().toISOString(), was = st.data[kind][row.id];
+    var rec = Object.assign({}, row, { created_at: (was && was.created_at) || row.created_at || now, updated_at: now });
+    st.data[kind][row.id] = rec;
+    if (mrDbOn() && !rec.sample) st.outbox[kind + ':' + row.id] = true;
+    mrKeep(st);
+    mrFlushSoon();
+    return rec;
+  }
+  function mrDrop(kind, id) {
+    var st = mrStore(), was = st.data[kind][id];
+    if (!was) return;
+    delete st.data[kind][id];
+    delete st.outbox[kind + ':' + id];
+    if (mrDbOn() && (was._s || was._t)) st.gone[kind + ':' + id] = kind === 'sales' ? { night: String(was.night_id || '') } : true;
+    if (kind === 'nights') {
+      Object.keys(st.data.sales).forEach(function (sid) {
+        if (st.data.sales[sid] && st.data.sales[sid].night_id === id) { delete st.data.sales[sid]; delete st.outbox['sales:' + sid]; delete st.gone['sales:' + sid]; }
+      });
+    }
+    mrKeep(st);
+    mrFlushSoon();
+  }
+  function mrGate() {
+    var uid = mrUid(), g = S.mrGate;
+    if (!g || g.uid !== uid) g = S.mrGate = { uid: uid, state: 'unknown', at: 0, asking: false };
+    return g;
+  }
+  function mrGateKept(uid) { return uid !== 'local' && lsGet(MR_OK + uid) === '1'; }
+  function mrGateKeep(uid, yes) {
+    if (uid === 'local') return;
+    var v = yes ? '1' : '0';
+    if (lsGet(MR_OK + uid) !== v) lsSet(MR_OK + uid, v);
+  }
+  function mrMay() {
+    var g = mrGate();
+    if (g.uid === 'local' || g.state === 'no') return false;
+    if (S.signalOk === true || g.state === 'yes') { mrGateKeep(g.uid, true); return true; }
+    return mrGateKept(g.uid);
+  }
+  function mrGateKnown(room) {
+    var B = window.GR_BACKEND, g = mrGate();
+    if (g.uid === 'local' || S.mode !== 'db' || !B || typeof B.merchMay !== 'function' || (S.signalOk === true && g.state !== 'no')) return g;
+    if (!room && !mrGateKept(g.uid)) return g;
+    if (g.asking || (g.at && Date.now() - g.at < (g.state === 'yes' ? 600e3 : g.state === 'no' ? 120e3 : 30e3))) return g;
+    g.asking = true;
+    Promise.resolve().then(function () { return B.merchMay(); }).then(function (yes) {
+      g.asking = false; g.at = Date.now();
+      if (S.mrGate !== g) return;
+      var was = mrMay();
+      g.state = yes === true ? 'yes' : 'no';
+      mrGateKeep(g.uid, g.state === 'yes');
+      if (mrMay() !== was) mrGateDrawn();
+    }, function () {
+      g.asking = false; g.at = Date.now();
+      if (S.mrGate !== g) return;
+      if (g.state === 'unknown') g.state = 'failed';
+    });
+    return g;
+  }
+  function mrGateNo() {
+    var g = mrGate(), was = mrMay();
+    g.state = 'no'; g.at = Date.now();
+    mrGateKeep(g.uid, false);
+    if (was) mrGateDrawn();
+  }
+  function mrGateDrawn() { if (S.route && (S.route.name === 'mroom' || S.route.name === 'mainmenu')) render(true); }
+  function mrDb() {
+    var c = S.mrDb, uid = mrUid();
+    if (!c || c.uid !== uid) c = S.mrDb = { uid: uid, state: 'unknown', at: 0, asking: false, flushing: false, failed: 0, timer: 0 };
+    return c;
+  }
+  function mrDbOn() {
+    var c = mrDb();
+    return c.state === 'on' || (c.state !== 'off' && mrStore().dbOn === true);
+  }
+  function mrDbKnown(fresh) {
+    var B = window.GR_BACKEND, c = mrDb();
+    if (!mrMay() || S.mode !== 'db' || !B || typeof B.merchRoom !== 'function') return c;
+    if (c.asking || (!fresh && c.at && Date.now() - c.at < 120e3)) return c;
+    c.asking = true;
+    Promise.resolve().then(function () { return B.merchRoom(); }).then(function (room) {
+      c.asking = false; c.at = Date.now();
+      if (S.mrDb !== c) return;
+      if (G.isObj(room)) { c.state = 'on'; mrAbsorb(room); mrFlush(); }
+      else {
+        c.state = 'off';
+        var st = mrStore();
+        if (st.dbOn) { st.dbOn = false; mrKeep(st); }
+      }
+      mrLanded();
+    }, function () {
+      c.asking = false; c.at = Date.now();
+      if (S.mrDb !== c) return;
+      if (c.state !== 'on') c.state = 'failed';
+      mrLanded();
+    });
+    return c;
+  }
+  function mrLanded() { if (S.route && S.route.name === 'mroom') render(); }
+  function mrAbsorb(room) {
+    var st = mrStore();
+    st.dbOn = true;
+    window.GMERCH.stripSample(st.data);
+    var regs = G.isObj(room.registers) ? room.registers : {};
+    st.regs = regs;
+    var sent = {};
+    (Array.isArray(room.nights) ? room.nights : []).forEach(function (n) { if (G.isObj(n) && n.id) sent[n.id] = true; });
+    MR_KINDS.forEach(function (k) {
+      var list = Array.isArray(room[k]) ? room[k].filter(G.isObj) : [];
+      var seen = {};
+      list.forEach(function (r) {
+        if (!r.id) return;
+        seen[r.id] = true;
+        if (st.outbox[k + ':' + r.id] || st.gone[k + ':' + r.id]) return;
+        st.data[k][r.id] = Object.assign({}, r, { _s: true });
+      });
+      var counts = G.isObj(room.counts) ? room.counts : {};
+      var cut = typeof counts[k] === 'number' && counts[k] > list.length;
+      Object.keys(st.data[k]).forEach(function (id) {
+        var r = st.data[k][id];
+        if (!r || !r._s || seen[id] || st.outbox[k + ':' + id]) return;
+        if (k === 'sales') {
+          if (sent[r.night_id] || !st.data.nights[r.night_id]) delete st.data[k][id];
+          return;
+        }
+        if (!cut) delete st.data[k][id];
+      });
+    });
+    mrKeep(st);
+  }
+  function mrPreviewLeft() {
+    var st = mrStore(), out = { products: 0, nights: 0, total: 0 };
+    if (!mrDbOn()) return out;
+    MR_KINDS.forEach(function (k) {
+      Object.keys(st.data[k]).forEach(function (id) {
+        var r = st.data[k][id];
+        if (!r || r._s || r._t || r.sample || st.outbox[k + ':' + id]) return;
+        out.total += 1;
+        if (k === 'products') out.products += 1;
+        if (k === 'nights') out.nights += 1;
+      });
+    });
+    return out;
+  }
+  function mrPreviewMove(yes) {
+    var st = mrStore();
+    window.GMERCH.stripSample(st.data);
+    MR_KINDS.forEach(function (k) {
+      Object.keys(st.data[k]).forEach(function (id) {
+        var r = st.data[k][id];
+        if (!r || r._s || r._t || st.outbox[k + ':' + id]) return;
+        if (yes && !r.sample) st.outbox[k + ':' + id] = true; else delete st.data[k][id];
+      });
+    });
+    mrKeep(st);
+    if (yes) mrFlush();
+    render();
+  }
+  function mrFlushSoon() {
+    var c = mrDb();
+    if (!mrDbOn()) return;
+    clearTimeout(c.timer);
+    c.timer = setTimeout(function () { mrFlush(); }, 700);
+  }
+  function mrWire(kind, r) {
+    var M = window.GMERCH, x;
+    if (kind === 'products') { x = M.cleanProduct(r) || {}; x.id = r.id; return x; }
+    if (kind === 'moves') { x = M.cleanMove(r) || {}; x.id = r.id; x.at = r.at || null; return x; }
+    if (kind === 'nights') {
+      return { id: r.id, tour_id: String(r.tour_id || ''), show_id: String(r.show_id || ''), show_day: r.show_day || null, label: String(r.label || '').slice(0, M.LIMITS.label),
+        head_count: r.head_count == null ? null : r.head_count, counts: M.cleanCounts(r.counts),
+        comps: (Array.isArray(r.comps) ? r.comps : []).map(M.cleanComp).filter(Boolean).slice(0, M.LIMITS.comps),
+        deal: G.isObj(r.deal) && Object.keys(r.deal).length ? M.cleanDeal(r.deal) : {}, prices: M.cleanPrices(r.prices),
+        card_sales: r.card_sales == null ? null : r.card_sales,
+        in_at: r.in_at || null, out_at: r.out_at || null, settled_at: r.settled_at || null, settlement: G.isObj(r.settlement) ? r.settlement : null,
+        note: String(r.note || '').slice(0, M.LIMITS.nightNote) };
+    }
+    return { id: r.id, night_id: r.night_id, items: (r.items || []).slice(0, M.LIMITS.saleItems), pay: r.pay === 'card' ? 'card' : 'cash',
+      subtotal: r.subtotal, tax: r.tax, total: r.total, at: r.at || null };
+  }
+  async function mrFlush() {
+    var B = window.GR_BACKEND, c = mrDb(), st = mrStore();
+    if (!mrDbOn() || c.flushing || !B || typeof B.merchSave !== 'function') return;
+    c.flushing = true;
+    var mine = function () { return S.mrStore === st && S.mrDb === c && mrUid() === st.uid; };
+    var no = function (e) { if (e && e.code === 'permission') mrGateNo(); return e; };
+    var rank = function (key) { return MR_KINDS.indexOf(key.split(':')[0]); };
+    var later = [], refused = 0, settled = 0;
+    try {
+      var dels = Object.keys(st.gone).sort(function (a, b) { return rank(b) - rank(a); });
+      for (var i = 0; i < dels.length; i++) {
+        var dk = dels[i].split(':')[0], did = dels[i].slice(dk.length + 1);
+        try { await B.merchDelete(MR_ONE[dk], did); }
+        catch (e) {
+          if (!mine()) return;
+          if (!e || e.code !== 'invalid') throw no(e);
+          if (dk === 'sales' && e.field === 'settled') { later.push(dels[i]); continue; }
+          refused += 1;
+        }
+        if (!mine()) return;
+        delete st.gone[dels[i]];
+      }
+      var ups = Object.keys(st.outbox).sort(function (a, b) { return rank(a) - rank(b); });
+      for (var j = 0; j < ups.length; j++) {
+        var k = ups[j].split(':')[0], id = ups[j].slice(k.length + 1), r = st.data[k] && st.data[k][id];
+        if (!r) { delete st.outbox[ups[j]]; continue; }
+        r._t = true;
+        var got;
+        try { got = await B.merchSave(MR_ONE[k], mrWire(k, r)); }
+        catch (e) {
+          if (!mine()) return;
+          if (!e || (e.code !== 'invalid' && e.code !== 'full')) throw no(e);
+          delete st.outbox[ups[j]];
+          toast(e.code === 'full' ? 'MERCHROOM is full: one change could not be saved.' : 'MERCHROOM could not save one change' + (e.field ? ' (' + e.field + ')' : '') + '.', 5200, true);
+          continue;
+        }
+        if (!mine()) return;
+        if (st.data[k][id] === r) delete st.outbox[ups[j]];
+        if (st.data[k][id] && got !== null) st.data[k][id]._s = true;
+      }
+      for (var m = 0; m < later.length; m++) {
+        var key = later[m], sid = key.slice('sales:'.length), info = st.gone[key];
+        if (!info) continue;
+        var nid = G.isObj(info) ? String(info.night || '') : '', ok = await mrDropSettled(B, st, sid, nid, mine);
+        if (!mine()) return;
+        delete st.gone[key];
+        if (!ok) settled += 1;
+      }
+      if (settled) toast(settled === 1 ? 'A sale you took off is still in MERCHROOM’s database: its show is settled there. Unlock the show and take the sale off again.'
+        : settled + ' sales you took off are still in MERCHROOM’s database: their show is settled there. Unlock it and take them off again.', 6200, true);
+      else if (refused) toast('MERCHROOM’s database would not take ' + (refused === 1 ? 'one thing' : refused + ' things') + ' off. ' + (refused === 1 ? 'It comes' : 'They come') + ' back on this phone.', 6200, true);
+      c.failed = 0;
+    } catch (e) {
+      if (!mine()) return;
+      c.failed += 1;
+      clearTimeout(c.timer);
+      c.timer = setTimeout(function () { mrFlush(); }, Math.min(60e3, 5e3 * c.failed));
+      var ls = S.mrLastSale;
+      if (c.failed === 1 && ls && Date.now() - ls.at < 6000 && st.data.sales[ls.id]) { S.mrLastSale = null; mrSaleToast(st.data.sales[ls.id], true); }
+    } finally {
+      c.flushing = false;
+      if (mine()) {
+        mrKeep(st);
+        mrLanded();
+        if (!c.failed && (Object.keys(st.outbox).length || Object.keys(st.gone).length)) mrFlushSoon();
+      }
+    }
+  }
+  async function mrDropSettled(B, st, sid, nid, mine) {
+    var refusal = function (e) { if (!e || (e.code !== 'invalid' && e.code !== 'full')) throw e; return false; };
+    try { await B.merchDelete('sale', sid); return true; }
+    catch (e) { if (!e || e.code !== 'invalid' || e.field !== 'settled') throw e; }
+    var n = nid && st.data.nights[nid];
+    if (!mine() || !n || !n.settled_at || !(n._s || n._t)) return false;
+    st.outbox['nights:' + nid] = true;
+    try { await B.merchSave('night', mrWire('nights', Object.assign({}, n, { settled_at: null, settlement: null }))); }
+    catch (e) { return refusal(e); }
+    if (!mine()) return false;
+    var went = true;
+    try { await B.merchDelete('sale', sid); }
+    catch (e) { went = refusal(e); }
+    if (!mine()) return false;
+    var now = st.data.nights[nid], back = true;
+    try { if (now) await B.merchSave('night', mrWire('nights', now)); }
+    catch (e) { back = refusal(e); }
+    if (back && mine() && st.data.nights[nid] === now) delete st.outbox['nights:' + nid];
+    return went;
+  }
+  function mrForget() {
+    var P = MR_PHOTOS, had = P.db;
+    try { if (S.mrDb) clearTimeout(S.mrDb.timer); } catch (e) {   }
+    try { Object.keys(P.urls).forEach(function (k) { var u = P.urls[k]; if (/^blob:/.test(String(u))) URL.revokeObjectURL(u); }); } catch (e) {   }
+    P.urls = {}; P.loaded = false; P.loading = false; P.db = null;
+    try { if (had && typeof had.then === 'function') had.then(function (db) { try { if (db) db.close(); } catch (e) {   } }); } catch (e) {   }
+    try { if (window.indexedDB) window.indexedDB.deleteDatabase('gr-merch'); } catch (e) {   }
+    try {
+      var ls = window.localStorage, keys = [];
+      for (var i = 0; ls && i < ls.length; i++) { var k = ls.key(i); if (/^gr\.merch\./.test(String(k))) keys.push(k); }
+      keys.forEach(function (k) { try { ls.removeItem(k); } catch (e) {   } });
+    } catch (e) {   }
+    S.mrStore = null; S.mrDb = null; S.mrUi = null; S.mrGate = null; S.mrSq = null;
+  }
+  window.GR_MERCH_FORGET = mrForget;
+  function mrSignOutWords() {
+    try {
+      if (!mrMay()) return '';
+      var st = mrStore(), waiting = Object.keys(st.outbox).length + Object.keys(st.gone).length;
+      if (mrDbOn()) return waiting ? ' ' + plural(waiting, 'MERCHROOM change') + ' still waiting for signal would be lost. Wait for signal first.' : '';
+      var made = mrRows('products').some(function (p) { return !p.sample; }) || mrRows('nights').length > 0;
+      return made ? ' MERCHROOM’s Preview is kept on this phone only: signing out clears it.' : '';
+    } catch (e) { return ''; }
+  }
+  function mrPhotoDb() {
+    var P = MR_PHOTOS;
+    if (P.db) return P.db;
+    P.db = new Promise(function (ok) {
+      try {
+        var idb = window.indexedDB;
+        if (!idb) { ok(null); return; }
+        var rq = idb.open('gr-merch', 1);
+        rq.onupgradeneeded = function () { try { rq.result.createObjectStore('photos'); } catch (e) {   } };
+        rq.onsuccess = function () { var db = rq.result; try { db.onversionchange = function () { try { db.close(); } catch (e) {   } }; } catch (e) {   } ok(db); };
+        rq.onerror = function () { ok(null); };
+        rq.onblocked = function () { ok(null); };
+      } catch (e) { ok(null); }
+    });
+    return P.db;
+  }
+  function mrPhotoUrlOf(b) {
+    try {
+      if (typeof b === 'string') return /^(data:image\/|blob:)/.test(b) ? b : null;
+      return b && window.URL && typeof URL.createObjectURL === 'function' ? URL.createObjectURL(b) : null;
+    } catch (e) { return null; }
+  }
+  function mrPhotosLoad() {
+    var P = MR_PHOTOS;
+    if (P.loaded || P.loading) return;
+    P.loading = true;
+    mrPhotoDb().then(function (db) {
+      if (!db) return {};
+      return new Promise(function (ok) {
+        try {
+          var out = {}, cur = db.transaction('photos', 'readonly').objectStore('photos').openCursor();
+          cur.onsuccess = function () { var c = cur.result; if (c) { out[String(c.key)] = c.value; c.continue(); } else ok(out); };
+          cur.onerror = function () { ok(out); };
+        } catch (e) { ok({}); }
+      });
+    }).then(function (all) {
+      var n = 0;
+      Object.keys(all || {}).forEach(function (k) { if (!P.urls[k]) { var u = mrPhotoUrlOf(all[k]); if (u) { P.urls[k] = u; n += 1; } } });
+      P.loaded = true; P.loading = false;
+      if (n) mrLanded();
+    }, function () { P.loaded = true; P.loading = false; });
+  }
+  function mrPhoto(pid) { mrPhotosLoad(); return pid ? MR_PHOTOS.urls[pid] || null : null; }
+  async function mrPhotoPut(pid, blob) {
+    var u = mrPhotoUrlOf(blob);
+    if (u) MR_PHOTOS.urls[pid] = u;
+    var db = await mrPhotoDb();
+    if (!db) return false;
+    return await new Promise(function (ok) {
+      try {
+        var tx = db.transaction('photos', 'readwrite');
+        if (blob) tx.objectStore('photos').put(blob, pid); else tx.objectStore('photos').delete(pid);
+        tx.oncomplete = function () { ok(true); };
+        tx.onerror = function () { ok(false); };
+      } catch (e) { ok(false); }
+    });
+  }
+  async function mrSquareJpeg(file, side) {
+    try {
+      var img = null, url = null;
+      if (typeof window.createImageBitmap === 'function') { try { img = await window.createImageBitmap(file); } catch (e) { img = null; } }
+      if (!img) {
+        url = URL.createObjectURL(file);
+        img = await new Promise(function (ok, no) { var i = new Image(); i.onload = function () { ok(i); }; i.onerror = no; i.src = url; });
+      }
+      var w = img.width, hgt = img.height, cut = Math.min(w, hgt);
+      var cv = document.createElement('canvas');
+      cv.width = side; cv.height = side;
+      cv.getContext('2d').drawImage(img, (w - cut) / 2, (hgt - cut) / 2, cut, cut, 0, 0, side, side);
+      if (url) URL.revokeObjectURL(url);
+      return await new Promise(function (ok) { cv.toBlob(function (b) { ok(b || null); }, 'image/jpeg', 0.82); });
+    } catch (e) { return null; }
+  }
+  function mrFace(p, size, cls) {
+    var M = window.GMERCH, ix = mrIx(), pid = p ? M.canonOf(ix.byId, p.id) : null, url = pid ? mrPhoto(pid) || mrPhoto(p.id) : null;
+    var words = String(p && p.name || '?').trim().split(/\s+/).filter(Boolean);
+    var letters = ((words[0] || '?').charAt(0) + (words.length > 1 ? words[1].charAt(0) : '')).toUpperCase();
+    return h('span', { class: 'mrm-face' + (url ? '' : ' none') + (cls ? ' ' + cls : ''), style: 'width:' + size + 'px;height:' + size + 'px;font-size:' + Math.round(size * 0.34) + 'px',
+      'aria-hidden': 'true' }, url ? h('img', { src: url, alt: '' }) : letters);
+  }
+  function mrShows() {
+    var out = [];
+    allTourEntries().forEach(function (e) {
+      G.rows(e[1].shows).forEach(function (s) {
+        if (!G.parseDay(s.date) || G.showCancelled(s)) return;
+        out.push({ tour: e[0], show: s.id, date: s.date, venue: String(s.venue || '').trim(), city: String(s.city || '').trim(), tourName: tourNameOf(e[1]) });
+      });
+    });
+    return out.sort(function (a, b) { return a.date < b.date ? -1 : a.date > b.date ? 1 : a.venue.localeCompare(b.venue); });
+  }
+  function mrShowRow(tourId, showId) {
+    var t = getTour(tourId), s = t && G.isObj(t.shows) ? t.shows[showId] : null;
+    return G.isObj(s) ? Object.assign({ id: showId }, s) : null;
+  }
+  function mrPlace(s) { return [String(s && s.venue || '').trim(), String(s && s.city || '').trim()].filter(Boolean).join(', '); }
+  function mrNightName(n) {
+    var s = n ? mrShowRow(n.tour_id, n.show_id) : null;
+    var place = s ? mrPlace(s) : String(n && n.label || '');
+    var day = (s && s.date) || (n && n.show_day) || '';
+    return (place || 'A show') + (day ? ' (' + window.GMERCH.dayWords(day) + ')' : '');
+  }
+  function mrUi() {
+    var u = S.mrUi;
+    if (!G.isObj(u)) u = S.mrUi = { tab: 'night', night: null, step: null, cart: [], res: null, sq: null };
+    if (MR_TABS.every(function (t) { return t[0] !== u.tab; })) u.tab = 'night';
+    if (!Array.isArray(u.cart)) u.cart = [];
+    return u;
+  }
+  function mrTop0() { try { if (typeof window.scrollTo === 'function') window.scrollTo(0, 0); } catch (e) {   } }
+  function mrNight() {
+    var ui = mrUi();
+    return ui.night ? window.GMERCH.nightOf(mrIx(), ui.night.tour, ui.night.show) : null;
+  }
+  function mrNightEdit(fn) {
+    var ui = mrUi();
+    if (!ui.night) return null;
+    var n = mrNight(), show = mrShowRow(ui.night.tour, ui.night.show);
+    var next = n ? JSON.parse(JSON.stringify(n)) : { id: mrNewId(), tour_id: ui.night.tour, show_id: ui.night.show, head_count: null, counts: {}, comps: [],
+      deal: {}, prices: window.GMERCH.pricesNow(mrRows('products')), card_sales: null, in_at: null, out_at: null, settled_at: null, settlement: null, note: '' };
+    if (show) { next.show_day = show.date || next.show_day || null; next.label = mrPlace(show) || next.label || ''; }
+    if (!G.isObj(next.counts)) next.counts = {};
+    if (!Array.isArray(next.comps)) next.comps = [];
+    fn(next);
+    return mrPut('nights', next);
+  }
+  function mrSettled(n) { return !!(n && n.settled_at); }
+  function mrLocked() {
+    if (!mrSettled(mrNight())) return false;
+    toast('This show is settled. Unlock it on Settle to change it.');
+    return true;
+  }
+  function viewMroom() {
+    signalKnown();
+    mrGateKnown(true);
+    if (!mrMay()) {
+      return h('div', { class: 'page home profile menu-page has-tabs' }, menuHead('', { menu: true }), dbBanner(), socialBar(''));
+    }
+    mrDbKnown();
+    var ui = mrUi();
+    var body = !window.GMERCH ? h('p', { class: 'note' }, 'MERCHROOM’s rules didn’t load. Close the app and open it again.')
+      : ui.tab === 'products' ? mrProductsTab() : ui.tab === 'stock' ? mrStockTab() : ui.tab === 'results' ? mrResultsTab() : mrNightTab();
+    return h('div', { class: 'page home profile menu-page has-tabs mrm-room' + (mrSelling() ? ' mrm-selling' : '') },
+      menuHead('MERCHROOM', { menu: true }),
+      dbBanner(),
+      window.GMERCH ? mrTop() : null,
+      h('div', { class: 'mrm-tabs', role: 'tablist', 'aria-label': 'MERCHROOM' }, MR_TABS.map(function (t) {
+        var on = t[0] === ui.tab;
+        return h('button', { class: 'mrm-tab' + (on ? ' on' : ''), type: 'button', role: 'tab', 'aria-selected': on ? 'true' : 'false',
+          onclick: function () { if (ui.tab === t[0] && t[0] === 'night') ui.step = null; ui.sq = null; ui.tab = t[0]; mrTop0(); render(); } }, t[1]);
+      })),
+      h('div', { class: 'mrm-body', role: 'tabpanel' }, body),
+      socialBar(''));
+  }
+  function mrSelling() { var ui = mrUi(); return ui.tab === 'night' && ui.step === 'sell' && !!ui.night; }
+  function mrTop() {
+    var st = mrStore(), c = mrDb();
+    if (!mrDbOn()) {
+      if (mrSelling()) return h('p', { class: 'mrm-preview slim' }, h('b', null, 'Preview: '), 'saved on this phone only');
+      var prods = mrRows('products'), sample = prods.some(function (p) { return p.sample; });
+      return h('div', { class: 'mrm-preview' },
+        h('p', { class: 'mrm-preview-t' }, h('b', null, 'Preview: '), 'saved on this phone only until MERCHROOM’s database is turned on. Signing out clears it.'),
+        !prods.length ? mrBtn('Try it with sample merch', mrSampleLoad, { icon: 'tag', cls: 'mrm-try' })
+          : sample ? h('button', { class: 'mrm-link', type: 'button', onclick: mrSampleClear }, 'Take the sample merch off') : null);
+    }
+    var left = mrPreviewLeft(), waiting = Object.keys(st.outbox).length + Object.keys(st.gone).length;
+    return [
+      left.total ? h('div', { class: 'mrm-card mrm-move' },
+        h('p', { class: 'mrm-card-t' }, 'MERCHROOM’s database is on.'),
+        h('p', { class: 'mrm-card-s' }, 'This phone still has what you made in the Preview' + (left.products || left.nights ? ': ' + [left.products ? plural(left.products, 'product') : '',
+          left.nights ? plural(left.nights, 'show night') : ''].filter(Boolean).join(' and ') : '') + '. Move it into the database?'),
+        h('div', { class: 'mrm-two' }, mrBtn('Move it in', function () { mrPreviewMove(true); }, { block: false }),
+          mrBtn('Leave it off', function () {
+            confirmSheet({ title: 'Leave the Preview off?', body: 'What you made in the Preview goes from this phone. Nothing in the database changes.',
+              action: 'Leave it off', danger: true, cf: true, onConfirm: function () { mrPreviewMove(false); return true; } });
+          }, { quiet: true, block: false }))) : null,
+      waiting ? h('p', { class: 'mrm-saving' + (c.failed ? ' late' : '') },
+        c.failed ? plural(waiting, 'change') + ' not saved yet. ' + (waiting === 1 ? 'It saves by itself' : 'They save by themselves') + ' when there’s signal' +
+          (mrSelling() ? '.' : ' (signing out before then loses ' + (waiting === 1 ? 'it' : 'them') + ').') : 'Saving ' + plural(waiting, 'change') + '…',
+        c.failed ? h('button', { class: 'mrm-link', type: 'button', onclick: function () { mrFlush(); } }, 'Try now') : null) : null];
+  }
+  function mrSampleLoad() {
+    var st = mrStore(), s = window.GMERCH.sampleMerch(mrNewId, new Date().toISOString());
+    s.products.forEach(function (p) { st.data.products[p.id] = p; });
+    s.moves.forEach(function (m) { st.data.moves[m.id] = m; });
+    mrKeep(st);
+    toast('Sample merch is in: ' + plural(s.products.length, 'made-up product') + ', each with its stock.');
+    render();
+  }
+  function mrSampleClear() {
+    confirmSheet({ title: 'Take the sample merch off?', body: 'The made-up products go, with their stock and anything counted, given away or rung up of them.',
+      action: 'Take it off', danger: true, cf: true,
+      onConfirm: function () {
+        var st = mrStore();
+        window.GMERCH.stripSample(st.data);
+        mrKeep(st);
+        toast('The sample merch is off.');
+        return true;
+      } });
+  }
+  function mrBtn(words, onTap, o) {
+    o = o || {};
+    return h('button', { class: 'btn ' + (o.quiet ? 'ghost' : 'primary') + (o.sm ? ' sm' : '') + (o.block === false ? '' : ' block') + cfCls(!o.quiet) + (o.cls ? ' ' + o.cls : ''),
+      type: o.submit ? 'submit' : 'button', onclick: onTap || null, disabled: o.disabled || null }, o.icon ? icon(o.icon, 18) : null, words);
+  }
+  function mrH(words, o) { return h(o && o.tag || 'h2', { class: 'mrm-h' + (o && o.cls ? ' ' + o.cls : '') }, words); }
+  function mrSub(words) { return h('h3', { class: 'mrm-sub' }, words); }
+  function mrLead(words) { return h('p', { class: 'mrm-lead' }, words); }
+  function mrRow(o) {
+    var label = h('div', { class: 'row-label' }, o.title, o.hint ? h('span', { class: 'hint' }, o.hint) : null,
+      o.tags && o.tags.length ? h('span', { class: 'mrm-tags' }, o.tags.map(function (t) { return h('span', { class: 'mrm-tag ' + (t[1] || '') }, t[0]); })) : null);
+    var kids = [o.face || null, label, o.right != null ? h('span', { class: 'amt num mrm-amt' }, o.right) : null,
+      o.onTap ? h('span', { class: 'mrm-chev', 'aria-hidden': 'true' }, icon('chevron', 16)) : null];
+    return o.onTap ? h('button', { class: 'row mrm-row rowbtn' + (o.cls ? ' ' + o.cls : ''), type: 'button', onclick: o.onTap }, kids)
+      : h('div', { class: 'row mrm-row' + (o.cls ? ' ' + o.cls : '') }, kids);
+  }
+  function mrChips(options, value, onPick, label) {
+    var wrap = h('div', { class: 'mrm-chips', role: 'radiogroup', 'aria-label': label });
+    options.forEach(function (opt) {
+      wrap.append(h('button', { class: 'mrm-chip', type: 'button', role: 'radio', 'aria-checked': String(opt[0] === value),
+        onclick: function (e) {
+          Array.prototype.forEach.call(wrap.children, function (b) { b.setAttribute('aria-checked', 'false'); });
+          e.currentTarget.setAttribute('aria-checked', 'true');
+          onPick(opt[0]);
+        } }, opt[1]));
+    });
+    return wrap;
+  }
+  function mrStepper(o) {
+    var cap = window.GMERCH.LIMITS.qty;
+    var input = h('input', { class: 'mrm-num num', type: 'text', inputmode: 'numeric', pattern: '[0-9]*', autocomplete: 'off', 'aria-label': o.label, 'data-k': o.k || null,
+      value: o.value == null ? '' : String(o.value), placeholder: o.ph == null ? '' : String(o.ph), disabled: o.off || null,
+      oninput: function (e) {
+        var v = String(e.target.value || '').replace(/[^0-9]/g, '');
+        if (v !== e.target.value) e.target.value = v;
+        o.onSet(v === '' ? null : Math.min(cap, parseInt(v, 10)), true);
+      } });
+    var by = function (d) {
+      return function () {
+        var cur = String(input.value || '') === '' ? null : parseInt(input.value, 10) || 0;
+        o.onSet(cur === null ? (d > 0 ? 1 : 0) : Math.max(0, Math.min(cap, cur + d)), false);
+      };
+    };
+    return h('div', { class: 'mrm-step' + (o.off ? ' off' : '') },
+      h('button', { class: 'mrm-pm', type: 'button', 'aria-label': 'One less, ' + o.label, disabled: o.off || null, onclick: by(-1) }, icon('minus', 22)),
+      input,
+      h('button', { class: 'mrm-pm', type: 'button', 'aria-label': 'One more, ' + o.label, disabled: o.off || null, onclick: by(1) }, icon('plus', 22)));
+  }
+  function mrHow(title, rows, foot, note) {
+    openSheet(function () {
+      return [
+        h('h2', { class: 'sh-title' }, title),
+        note ? h('p', { class: 'sh-sub' }, note) : null,
+        rows.length ? h('div', { class: 'ledger mrm-how' }, rows.map(function (r) {
+          return h('div', { class: 'row mrm-how-row' }, h('span', { class: 'row-label' }, r[0]), r[1] != null ? h('span', { class: 'amt num' }, r[1]) : null);
+        }), foot ? h('div', { class: 'row mrm-how-row total' }, h('span', { class: 'row-label' }, foot[0]), h('span', { class: 'amt num' }, foot[1])) : null)
+          : h('p', { class: 'note' }, 'Nothing to add up yet.'),
+        h('div', { class: 'stack' }, mrBtn('Done', function () { closeSheet(); }, { quiet: true }))
+      ];
+    }, { label: title, cls: 'mrm-sheet' });
+  }
+  function mrBig(label, value, sub, onTap, cls) {
+    var kids = [h('span', { class: 'mrm-big-l' }, label), h('span', { class: 'mrm-big-v num' }, value), sub ? h('span', { class: 'mrm-big-s' }, sub) : null];
+    return onTap ? h('button', { class: 'mrm-big' + (cls ? ' ' + cls : ''), type: 'button', onclick: onTap }, kids) : h('div', { class: 'mrm-big' + (cls ? ' ' + cls : '') }, kids);
+  }
+  function mrSquareRow() {
+    return h('div', { class: 'mrm-more' }, mrSub('Card reader'), mrSqCard(),
+      h('div', { class: 'ledger' }, mrRow({ title: 'Square (test)', hint: 'The Square test page from before. Nothing on it changed.',
+        onTap: function () { go({ name: 'merchroom', back: S.route }); } })));
+  }
+  var MR_SQ = 'gr.merch.sq.';
+  function mrSq(fresh) {
+    var B = window.GR_BACKEND, uid = mrUid(), c = S.mrSq;
+    if (!c || c.uid !== uid) c = S.mrSq = { uid: uid, raw: undefined, kept: undefined, at: 0, asking: false, failed: false, off: false, picks: {}, memo: null, sample: null };
+    if (!mrMay() || S.mode !== 'db' || !mrDbOn()) return c;
+    if (!B || typeof B.merchSquare !== 'function') { c.off = true; return c; }
+    if (c.asking || (!fresh && c.at && Date.now() - c.at < 60e3)) return c;
+    c.asking = true;
+    Promise.resolve().then(function () { return B.merchSquare(); }).then(function (raw) {
+      c.asking = false; c.at = Date.now();
+      if (S.mrSq !== c) return;
+      var missing = G.isObj(raw) && raw.missing === true;
+      c.off = missing; c.failed = !missing && !G.isObj(raw); c.memo = null;
+      if (G.isObj(raw) && !missing) { c.raw = raw; mrSqKeep(c, raw); }
+      mrLanded();
+    }, function (e) {
+      c.asking = false; c.at = Date.now();
+      if (S.mrSq !== c) return;
+      if (e && e.code === 'permission') { mrGateNo(); return; }
+      c.failed = true;
+      mrLanded();
+    });
+    return c;
+  }
+  function mrSqKept(c) {
+    if (c.kept === undefined) {
+      c.kept = null;
+      if (c.uid !== 'local') { try { var x = JSON.parse(lsGet(MR_SQ + c.uid) || 'null'); c.kept = G.isObj(x) ? x : null; } catch (e) { c.kept = null; } }
+    }
+    return c.kept;
+  }
+  function mrSqKeep(c, raw) {
+    var k = window.GMERCH.squareKeep(raw);
+    if (!k || c.uid === 'local') return;
+    c.kept = k;
+    lsSet(MR_SQ + c.uid, JSON.stringify(k));
+  }
+  function mrSqLive() {
+    var c = mrSq();
+    if (!mrDbOn() || c.off) return null;
+    var raw = G.isObj(c.raw) ? c.raw : mrSqKept(c);
+    if (!G.isObj(raw)) return null;
+    if (!c.memo || c.memo.raw !== raw) c.memo = { raw: raw, st: window.GMERCH.squareState(raw, { kept: raw !== c.raw }) };
+    return c.memo.st;
+  }
+  function mrSqSampleOn() { return !mrDbOn() || mrSq().off; }
+  function mrSqSampleDays() {
+    var out = {}, ui = mrUi(), s = ui.night ? mrShowRow(ui.night.tour, ui.night.show) : null;
+    mrIx().nights.forEach(function (n) { if (n.show_day) out[n.show_day] = true; });
+    if (s && s.date) out[s.date] = true;
+    return Object.keys(out).sort();
+  }
+  function mrSqState() {
+    var live = mrSqLive();
+    if (live) return live;
+    if (!mrSqSampleOn()) return null;
+    var c = mrSq(), days = mrSqSampleDays(), key = mrStore().ver + '|' + G.tourToday() + '|' + JSON.stringify(c.picks) + '|' + days.join(',');
+    if (!c.sample || c.sample.key !== key) {
+      c.sample = { key: key, st: window.GMERCH.squareState(window.GMERCH.sampleSquare(mrIx(), { days: days, today: G.tourToday(), picks: c.picks })) };
+    }
+    return c.sample.st;
+  }
+  function mrSqIsSample() { return !mrSqLive() && mrSqSampleOn(); }
+  function mrSqDay(n) {
+    var ui = mrUi(), s = ui.night ? mrShowRow(ui.night.tour, ui.night.show) : null;
+    return (n && n.show_day) || (s && s.date) || '';
+  }
+  function mrSqNight(n) { var st = mrSqState(), day = mrSqDay(n); return st && day ? window.GMERCH.squareNight(st, day) : null; }
+  function mrSqForSettle(n) { var st = mrSqLive(), day = mrSqDay(n); return st && day ? window.GMERCH.squareNight(st, day) : null; }
+  function mrSqShows(n) { return window.GMERCH.showsOn(mrIx(), mrShows(), mrSqDay(n)); }
+  function mrSqStaleWhy(sqn) {
+    if (sqn.status === 'bad_token') return 'Square refused the token';
+    if (sqn.catchingUp) return 'Square is still reading its older sales';
+    var ago = window.GMERCH.squareAgo(sqn.ordersAt);
+    return ago === 'Not read yet' ? 'Square’s sales are not read yet' : 'Square was last ' + ago.charAt(0).toLowerCase() + ago.slice(1);
+  }
+  function mrSqSettleWords(n, live) {
+    var u = live.square || {}, sqn = mrSqForSettle(n), typed = live.cardFrom === 'typed' ? 'the one typed in' : 'the register’s';
+    if (u.shared) return 'Two shows on this date: Square’s numbers are the whole day’s and can’t be split between them, so the card total is ' + typed + '.';
+    if (live.cardFrom === 'square' && u.test) return 'Test money from Square’s test account. Not real sales.';
+    if (live.cardFrom === 'square' && u.stale && sqn) return mrSqStaleWhy(sqn) + ', so its card total may be missing the last sales. Settle again once it’s read.';
+    if (u.why === 'typed' && u.test) return 'Square · Test has sales for this show, but test money never takes the place of a card total typed in.';
+    if (u.why === 'typed' && u.stale && sqn) return mrSqStaleWhy(sqn) + ', so the card total is the one typed in. Settle again once it’s read.';
+    var c = mrSq();
+    if (mrDbOn() && !c.off && c.failed && !mrSqLive()) return 'Square couldn’t be read just now, so the card total is ' + typed + '. Settle again once it’s read.';
+    return '';
+  }
+  function mrSqName(st) { return 'Square' + (mrSqIsSample() ? ' · Sample' : st && st.env === 'sandbox' ? ' · Test' : ''); }
+  function mrSqItemName(it) { return it.item + (it.size !== 'One size' && it.name ? ' · ' + it.name : ''); }
+  function mrSqCard() {
+    if (!window.GMERCH) return null;
+    var M = window.GMERCH, c = mrSq(), st = mrSqState(), sample = mrSqIsSample();
+    if (!st) {
+      return h('div', { class: 'mrm-card mrm-sqcard' }, h('p', { class: 'mrm-card-t' }, 'Square'),
+        h('p', { class: 'mrm-card-s' }, c.failed ? 'Couldn’t read Square just now. It tries again by itself.' : 'Looking…'));
+    }
+    if (!st.connected) {
+      return h('div', { class: 'mrm-card mrm-sqcard' }, h('p', { class: 'mrm-card-t' }, 'Square'),
+        h('p', { class: 'mrm-card-s' }, 'Not connected'),
+        h('p', { class: 'mrm-card-n mrm-quietline' }, 'Connect a Square test account on Square (test) below, and MERCHROOM reads its sales.'));
+    }
+    var live = st.items.filter(function (i) { return !i.deleted; });
+    var warn = st.status === 'bad_token' ? 'Square refused the test token. Replace it on Square (test) below.'
+      : st.kept && c.failed ? 'No answer from Square just now. These are its numbers as last read.'
+      : st.status === 'error' ? (st.detail || 'Square had trouble. It tries again every few minutes.') : st.problem || '';
+    return h('div', { class: 'mrm-card mrm-sqcard' },
+      h('p', { class: 'mrm-card-t' }, mrSqName(st)),
+      h('p', { class: 'mrm-card-s' }, sample ? 'Made-up numbers, so you can see how it looks. Nothing here is from Square.'
+        : [st.location, M.squareAgo(st.readAt)].filter(Boolean).join(' · ')),
+      warn ? h('p', { class: 'mrm-warn' }, warn) : null,
+      h('p', { class: 'mrm-card-s' + (st.unmatched ? ' mrm-sq-un' : '') }, st.unmatched ? plural(st.unmatched, 'item') + ' not matched yet'
+        : live.length ? 'Every item matched' : 'No items read from Square yet'),
+      h('div', { class: 'mrm-two' },
+        sample ? null : mrBtn('Refresh', mrSqRefresh, { block: false, sm: true }),
+        mrBtn('Match items', function () { var ui = mrUi(); ui.sq = 'match'; mrTop0(); render(); }, { quiet: !sample, block: false, sm: true })));
+  }
+  async function mrSqRefresh() {
+    var B = window.GR_BACKEND;
+    if (!B || typeof B.merchSquareRefresh !== 'function') return;
+    var r;
+    try { r = await B.merchSquareRefresh(); }
+    catch (e) {
+      if (e && e.code === 'permission') { mrGateNo(); return; }
+      toast(e && e.code === 'offline' ? 'No signal. Try again when there is.' : 'Couldn’t ask Square just now.', 4200, true);
+      return;
+    }
+    toast(r && r.asked ? 'Asked Square. MERCHROOM reads it again within five minutes.' : 'Asked a moment ago. MERCHROOM reads Square again within five minutes.');
+    mrSq(true);
+  }
+  function mrSqMatchPage() {
+    var M = window.GMERCH, ui = mrUi(), st = mrSqState(), ix = mrIx(), sample = mrSqIsSample();
+    var from = ui.night && ui.step ? (MR_STEPS.filter(function (s) { return s[0] === ui.step; })[0] || [null, 'the show'])[1] : ui.night ? 'the show' : '';
+    var back = h('button', { class: 'mrm-back', type: 'button', onclick: function () { ui.sq = null; mrTop0(); render(); } }, icon('back', 18), from ? 'Back to ' + from : 'All shows');
+    if (!st || !st.connected) return [back, mrH('Match items'), emptyState('Nothing to match yet', 'Once MERCHROOM reads your Square items, they are here.')];
+    var items = st.items.filter(function (i) { return !i.deleted; }).sort(function (a, b) {
+      return a.item.toLowerCase().localeCompare(b.item.toLowerCase()) || M.SIZE_ORDER.indexOf(a.size) - M.SIZE_ORDER.indexOf(b.size) || a.name.localeCompare(b.name);
+    });
+    var un = items.filter(function (i) { return !i.match; }).length;
+    var rows = items.map(function (it) {
+      var m = it.match, p = m && m.product_id ? ix.byId[M.canonOf(ix.byId, m.product_id)] || ix.byId[m.product_id] : null;
+      return mrRow({ title: mrSqItemName(it),
+        hint: !m ? 'Pick what it is, once' : !m.product_id ? 'Not counted as merch' : 'Is ' + M.itemName(p, m.size),
+        tags: !m ? [['Not matched', 'bad']] : !m.product_id ? [['Not merch', '']] : m.how === 'auto' ? [['Matched by name', 'ok']] : [['Picked', '']],
+        onTap: function () { mrSqPickSheet(it); } });
+    });
+    return [back, mrH('Match items'),
+      mrLead('Each item and size in ' + mrSqName(st) + ', and the MERCHROOM product it is. Matched by name where the names agree. Anything else, you pick once.'),
+      sample ? h('p', { class: 'mrm-warn' }, 'Sample: made-up Square items, so you can see how it looks. Picks here are not saved.') : null,
+      un ? h('p', { class: 'mrm-warn' }, plural(un, 'item') + ' not matched yet.') : null,
+      items.length ? h('div', { class: 'ledger mrm-list' }, rows) : emptyState('No items yet', 'MERCHROOM reads your Square items within the hour, or on Refresh.')];
+  }
+  function mrSqPickSheet(it) {
+    var M = window.GMERCH, ix = mrIx(), list = M.liveProducts(ix.products), open = null, panelRef = null;
+    var redraw = function () { if (panelRef) { var keep = panelRef.querySelector('.sheet-x'); fillEl(panelRef, [keep, draw()]); } };
+    var save = async function (pid, size) {
+      var c = mrSq(), what = pid ? M.itemName(ix.byId[pid], size) : '';
+      var said = mrSqItemName(it) + (pid ? ' is ' + what + '.' : ' is not merch.');
+      if (!mrSqLive()) {
+        c.picks[it.id] = { product_id: pid, size: size }; c.sample = null;
+        closeSheet(); toast(said + ' (Sample: not saved.)'); render();
+        return;
+      }
+      var B = window.GR_BACKEND;
+      if (!B || typeof B.merchSquareMatch !== 'function') return;
+      try { await B.merchSquareMatch({ variation_id: it.id, product_id: pid, size: size }); }
+      catch (e) {
+        if (e && e.code === 'permission') { closeSheet(true); mrGateNo(); return; }
+        toast(e && e.code === 'offline' ? 'No signal. The match is not saved: try again when there is.'
+          : 'MERCHROOM could not save that match' + (e && e.field ? ' (' + e.field + ')' : '') + '.', 5200, true);
+        return;
+      }
+      if (G.isObj(c.raw) && Array.isArray(c.raw.items)) {
+        c.raw.items.forEach(function (x) { if (x && x.id === it.id) x.match = { product_id: pid, size: pid ? size : null, how: 'picked' }; });
+        c.memo = null;
+      }
+      closeSheet(); toast(said); render();
+      mrSq(true);
+    };
+    var draw = function () {
+      return [h('h2', { class: 'sh-title' }, mrSqItemName(it)),
+        h('p', { class: 'sh-sub' }, 'In Square' + (it.price != null ? ' at ' + M.money(it.price) : '') + '. Which MERCHROOM product and size is it?'),
+        list.length ? h('div', { class: 'ledger mrm-list' }, list.map(function (p) {
+          var sizes = M.cleanSizes(p.sizes), now = it.match && it.match.product_id === p.id;
+          return [mrRow({ face: mrFace(p, 40), title: p.name, hint: M.sizeWords(p.sizes), tags: now ? [['Now', 'ok']] : null,
+            onTap: function () { if (sizes.length === 1) save(p.id, sizes[0]); else { open = open === p.id ? null : p.id; redraw(); } } }),
+            open === p.id ? h('div', { class: 'mrm-sqsizes' }, mrChips(sizes.map(function (s) { return [s, s]; }), now ? it.match.size : null,
+              function (s) { save(p.id, s); }, p.name + ' size')) : null];
+        })) : emptyState('No products yet', 'Add what you sell on Products first.'),
+        h('div', { class: 'stack' },
+          mrBtn('Not merch', function () { save(null, null); }, { quiet: true }),
+          mrBtn('Cancel', function () { closeSheet(); }, { quiet: true }))];
+    };
+    openSheet(function (panel) { panelRef = panel; return draw(); }, { label: 'Match ' + mrSqItemName(it), cls: 'mrm-sheet' });
+  }
+  function mrSqDepositLine(sqn) {
+    var M = window.GMERCH, d = sqn && sqn.deposit;
+    if (!d) return sqn && sqn.card ? h('p', { class: 'mrm-card-s' }, 'Not paid out by Square yet.') : null;
+    var on = d.on ? M.dayWords(d.on) : '';
+    return h('p', { class: 'mrm-card-s' }, (d.status === 'PAID' ? 'Square paid it' + (on ? ' ' + on : '') : 'On its way from Square' + (on ? ', ' + on : '')) + ': ' +
+      M.exact(d.net) + ' after ' + M.exact(d.fees) + ' in fees' + (d.complete ? '' : ', part of it so far') + '.');
+  }
+  function mrSqBlock(n, o) {
+    if (!window.GMERCH) return null;
+    var M = window.GMERCH, st = mrSqState(), sqn = mrSqNight(n), sample = mrSqIsSample(), tonight = mrIsTonight();
+    if (!st || !st.connected) return null;
+    var kick = 'From ' + mrSqName(st), none = 'Nothing sold on Square ' + (tonight ? 'tonight' : 'for this show') + ' yet';
+    if (o && o.short) {
+      return h('button', { class: 'mrm-sqline', type: 'button', onclick: function () { mrSqSheet(n); } },
+        h('span', { class: 'mrm-kick' }, kick), h('span', null, sqn ? 'Card ' + M.money(sqn.card) + ' · ' + plural(sqn.sales, 'sale') : none));
+    }
+    var c = mrSq();
+    return h('div', { class: 'mrm-card mrm-sq' },
+      h('p', { class: 'mrm-kick' }, kick),
+      sqn ? [h('p', { class: 'mrm-sq-line' }, M.squareLine(sqn)), mrSqDepositLine(sqn)] : h('p', { class: 'mrm-card-s' }, none + '.'),
+      sqn && mrSqShows(n) > 1 ? h('p', { class: 'mrm-card-n' }, 'Two shows on this date: these are Square’s numbers for the whole day.') : null,
+      st.kept && c.failed ? h('p', { class: 'mrm-card-n' }, 'No answer from Square just now. ' + M.squareAgo(st.readAt) + '.') : null,
+      sample ? h('p', { class: 'mrm-card-n' }, 'Made-up numbers, so you can see how it looks. Not from Square, and never in the settlement.') : null);
+  }
+  function mrSqNoAnswer() {
+    var c = mrSq();
+    return mrDbOn() && !c.off && c.failed && !mrSqLive()
+      ? h('p', { class: 'mrm-warn' }, 'Square couldn’t be read just now, so its numbers are not beside the count yet. It tries again by itself.') : null;
+  }
+  function mrHowRows(rows, foot) {
+    return h('div', { class: 'ledger mrm-how' }, rows.map(function (r) {
+      return h('div', { class: 'row mrm-how-row' }, h('span', { class: 'row-label' }, r[0]), r[1] != null ? h('span', { class: 'amt num' }, r[1]) : null);
+    }), foot ? h('div', { class: 'row mrm-how-row total' }, h('span', { class: 'row-label' }, foot[0]), h('span', { class: 'amt num' }, foot[1])) : null);
+  }
+  function mrSqSheet(n) {
+    var M = window.GMERCH, ix = mrIx(), sqn = mrSqNight(n), st = mrSqState(), title = 'From ' + mrSqName(st);
+    if (!sqn) { mrHow(title, [], null, 'Nothing sold on Square for this show yet.'); return; }
+    var card = [['Card and pay apps, tips not in it', M.exact(sqn.card)]];
+    if (sqn.cardRefunds) card.push(['Less what went back to cards, tips not in it', '-' + M.exact(sqn.cardRefunds)]);
+    if (sqn.cardNotMerch > 0) card.push(['Less card money on things marked Not merch', '-' + M.exact(sqn.cardNotMerch)]);
+    if (sqn.cardNotMerch < 0) card.push(['Plus Not merch given back to cards', M.exact(-sqn.cardNotMerch)]);
+    var rest = [['Cash', M.exact(sqn.cash)]];
+    if (sqn.other) rest.push(['Other (gift cards and the like)', M.exact(sqn.other)]);
+    rest.push(['Tips', M.exact(sqn.tips)], ['Given back, tips and all', M.exact(sqn.refunds)], ['Sales', String(sqn.sales)]);
+    if (sqn.returns) rest.push(['Refunds and returns', String(sqn.returns)]);
+    if (sqn.deposit) rest.push([(sqn.deposit.status === 'PAID' ? 'Paid by Square' : 'On its way') + (sqn.deposit.on ? ' ' + M.dayWords(sqn.deposit.on) : ''), M.exact(sqn.deposit.net)],
+      ['Square’s fees in it', M.exact(sqn.deposit.fees)]);
+    var map = M.squareSoldMap(ix, sqn), items = [], un = 0, custom = 0;
+    Object.keys(map).sort(function (a, b) {
+      var x = a.split('\u001f'), y = b.split('\u001f'), px = ix.byId[x[0]], py = ix.byId[y[0]];
+      return (px ? px.name : '').localeCompare(py ? py.name : '') || M.SIZE_ORDER.indexOf(x[1]) - M.SIZE_ORDER.indexOf(y[1]);
+    }).forEach(function (k) {
+      var p = k.split('\u001f'), e = map[k];
+      items.push([M.itemName(ix.byId[p[0]], p[1]), M.qtyWords(e.net) + ' sold' + (e.returned ? ' (' + M.qtyWords(e.returned) + ' back)' : '')]);
+    });
+    sqn.unmatched.forEach(function (x) { if (x.id) un += x.qty - x.returned; else custom += x.qty - x.returned; });
+    if (un) items.push(['Not matched to a product yet', plural(Math.round(un * 100) / 100, 'item')]);
+    if (custom) items.push(['Rung as a custom amount', plural(Math.round(custom * 100) / 100, 'sale')]);
+    if (sqn.notMerch) items.push(['Marked Not merch', plural(Math.round(sqn.notMerch * 100) / 100, 'item')]);
+    var note = mrSqIsSample() ? 'Made-up numbers, so you can see how it looks. Not from Square, and never in the settlement.'
+      : mrSqShows(n) > 1 ? 'As Square has them, for the whole day: two shows on this date, so they are in neither settlement.'
+        : 'As Square has them' + (st.kept ? ', as last read' : '') + '. Card and pay apps, less what went back to cards and less Not merch, is Square’s card total for a settlement.';
+    openSheet(function () {
+      return [h('h2', { class: 'sh-title' }, title), h('p', { class: 'sh-sub' }, note),
+        mrHowRows(card, ['Square’s card total', M.exact(M.squareCard(sqn))]),
+        mrHowRows(rest),
+        items.length ? [mrSub('What sold on Square'), mrHowRows(items)] : null,
+        M.squareElsewhere(sqn).map(function (x) { return h('p', { class: 'mrm-warn' }, x.words); }),
+        h('div', { class: 'stack' }, mrBtn('Done', function () { closeSheet(); }, { quiet: true }))];
+    }, { label: title, cls: 'mrm-sheet' });
+  }
+  function mrSqDiffBox(n) {
+    var M = window.GMERCH, ix = mrIx(), sqn = mrSqNight(n), ui = mrUi();
+    if (!n || !sqn || !M.nightTable(ix, n).rows.some(function (r) { return r.out !== null; })) return null;
+    var head = mrSub('The count and ' + mrSqName(mrSqState()));
+    if (mrSqShows(n) > 1) return [head, h('p', { class: 'mrm-warn' }, 'Two shows on this date: Square’s numbers are the whole day’s, so they can’t be held beside this show’s count.')];
+    var d = M.squareDiffs(ix, n, sqn), diffs = d.filter(function (x) { return x.square !== null; }), notes = d.filter(function (x) { return x.square === null; });
+    var unmatched = sqn.unmatched.some(function (x) { return x.id && x.qty - x.returned > 0; });
+    return [head,
+      diffs.length ? h('div', { class: 'mrm-diffs' }, diffs.map(function (x) { return h('p', { class: 'mrm-warn' }, x.words); }))
+        : h('p', { class: 'mrm-warn ok' }, 'Everything counted matches Square.'),
+      notes.length ? h('div', { class: 'mrm-diffs' }, notes.map(function (x) { return h('p', { class: 'mrm-warn' }, x.words); })) : null,
+      unmatched ? h('div', { class: 'stack' }, mrBtn('Match items', function () { ui.sq = 'match'; mrTop0(); render(); }, { quiet: true })) : null,
+      h('p', { class: 'mrm-lead mrm-sqnote' }, 'You settle by the count. Square’s numbers sit beside it.')];
+  }
+  function mrSqCardSheet(n, live) {
+    var M = window.GMERCH, sqn = mrSqForSettle(n), u = live.square || {}, typed = n && n.card_sales != null && String(n.card_sales) !== '' ? M.cents(n.card_sales) : null;
+    var rows = sqn ? [['Card and pay apps on Square', M.exact(sqn.card)]] : [];
+    if (sqn && sqn.cardRefunds) rows.push(['Less what went back to cards', '-' + M.exact(sqn.cardRefunds)]);
+    if (sqn && sqn.cardNotMerch > 0) rows.push(['Less card money on things marked Not merch', '-' + M.exact(sqn.cardNotMerch)]);
+    if (sqn && sqn.cardNotMerch < 0) rows.push(['Plus Not merch given back to cards', M.exact(-sqn.cardNotMerch)]);
+    mrHow('Card sales', rows, ['Card sales, from Square' + (u.test ? ' · Test' : u.stale ? ', as last read' : ''), M.exact(live.card)],
+      'From ' + mrSqName(mrSqState()) + ' for this show, tax in it, tips never in it.' + (u.test ? ' Test money, not real sales.' : '') +
+      (u.stale && sqn ? ' ' + mrSqStaleWhy(sqn) + '.' : '') +
+      (typed !== null ? ' The ' + M.exact(typed) + ' typed in before is not used while Square has sales for this show.' : ''));
+  }
+  function mrNightTab() {
+    var ui = mrUi();
+    if (ui.sq === 'match') return mrSqMatchPage();
+    if (ui.night && !mrShowRow(ui.night.tour, ui.night.show) && !mrNight()) { ui.night = null; ui.step = null; }
+    if (!ui.night) return mrPicker();
+    if (ui.step) return mrStepPage(ui.step);
+    return mrNightPage();
+  }
+  function mrPicker() {
+    var all = mrShows(), today = G.tourToday();
+    var tonight = all.filter(function (x) { return x.date === today; });
+    var next = all.filter(function (x) { return x.date > today; }).slice(0, 4);
+    var past = all.filter(function (x) { return x.date < today; }).slice(-4).reverse();
+    var out = [mrH('Pick tonight’s show')];
+    if (!all.length) {
+      out.push(emptyState('No shows yet', 'MERCHROOM uses your Greenroom shows. Create a tour or a show from the three lines, and it is here.'));
+    } else {
+      if (tonight.length) tonight.forEach(function (x) { out.push(mrShowCard(x)); });
+      else out.push(mrLead('No show tonight.'));
+      if (next.length) out.push(mrSub('Coming up'), h('div', { class: 'ledger mrm-list' }, next.map(mrShowLine)));
+      if (past.length) out.push(mrSub('Played'), h('div', { class: 'ledger mrm-list' }, past.map(mrShowLine)));
+      if (all.length > tonight.length + next.length + past.length) out.push(h('div', { class: 'stack' }, mrBtn('Every show', mrAllShows, { quiet: true })));
+    }
+    out.push(mrSquareRow());
+    return out;
+  }
+  function mrPick(x) {
+    var ui = mrUi();
+    ui.night = { tour: x.tour, show: x.show }; ui.step = null; ui.cart = []; ui.sq = null;
+    closeSheet(true);
+    mrTop0(); render();
+  }
+  function mrNightTag(x) {
+    var n = window.GMERCH.nightOf(mrIx(), x.tour, x.show);
+    if (!n) return null;
+    if (n.settled_at) return ['Settled', 'ok'];
+    if (n.out_at) return ['Counted out', ''];
+    if ((mrIx().salesBy[n.id] || []).length) return [x.date < G.tourToday() ? 'Rung up' : 'Selling', ''];
+    if (n.in_at) return ['Counted in', ''];
+    return null;
+  }
+  function mrShowCard(x) {
+    var tag = mrNightTag(x);
+    return h('button', { class: 'mrm-tonight', type: 'button', onclick: function () { mrPick(x); } },
+      h('span', { class: 'mrm-kick' }, 'Tonight'),
+      h('span', { class: 'mrm-tonight-v' }, x.venue || x.city || 'Tonight’s show'),
+      h('span', { class: 'mrm-tonight-s' }, [x.venue ? x.city : '', x.tourName].filter(Boolean).join(' · ')),
+      tag ? h('span', { class: 'mrm-tag ' + tag[1] }, tag[0]) : h('span', { class: 'mrm-tonight-go' }, 'Start', icon('chevron', 16)));
+  }
+  function mrShowLine(x) {
+    var tag = mrNightTag(x), d = G.parseDay(x.date);
+    return h('button', { class: 'row mrm-row mrm-showrow rowbtn', type: 'button', onclick: function () { mrPick(x); } },
+      h('span', { class: 'mrm-date', 'aria-hidden': 'true' }, h('span', { class: 'mrm-date-m' }, d ? F.mon.format(d) : ''), h('span', { class: 'mrm-date-d num' }, d ? String(d.getDate()) : '')),
+      h('div', { class: 'row-label' }, x.venue || x.city || 'A show', h('span', { class: 'hint' }, [x.venue ? x.city : '', x.tourName].filter(Boolean).join(' · ')),
+        tag ? h('span', { class: 'mrm-tags' }, h('span', { class: 'mrm-tag ' + tag[1] }, tag[0])) : null),
+      h('span', { class: 'mrm-chev', 'aria-hidden': 'true' }, icon('chevron', 16)));
+  }
+  function mrAllShows() {
+    var all = mrShows().slice().reverse(), by = {}, order = [];
+    all.forEach(function (x) { if (!by[x.tour]) { by[x.tour] = []; order.push(x.tour); } by[x.tour].push(x); });
+    openSheet(function () {
+      return [h('h2', { class: 'sh-title' }, 'Every show'),
+        order.map(function (t) { return [mrSub(by[t][0].tourName), h('div', { class: 'ledger mrm-list' }, by[t].map(mrShowLine))]; }),
+        h('div', { class: 'stack' }, mrBtn('Close', function () { closeSheet(); }, { quiet: true }))];
+    }, { label: 'Every show', cls: 'mrm-sheet' });
+  }
+  function mrNightPage() {
+    var ui = mrUi(), M = window.GMERCH, ix = mrIx(), n = mrNight(), show = mrShowRow(ui.night.tour, ui.night.show);
+    var t = M.nightTable(ix, n), place = show ? show : { venue: n ? n.label : '', city: '' };
+    var day = (show && show.date) || (n && n.show_day) || '';
+    var back = h('button', { class: 'mrm-back', type: 'button', onclick: function () { ui.night = null; ui.step = null; mrTop0(); render(); } }, icon('back', 18), 'All shows');
+    var head = h('div', { class: 'mrm-night-h' },
+      h('p', { class: 'mrm-kick' }, day ? M.dayWords(day, { weekday: true }) + (day === G.tourToday() ? ' · Tonight' : '') : ''),
+      h('h2', { class: 'mrm-title' }, String(place.venue || '').trim() || String(place.city || '').trim() || 'This show'),
+      h('p', { class: 'mrm-title-s' }, [String(place.venue || '').trim() ? String(place.city || '').trim() : '', show ? tourNameOf(getTour(ui.night.tour)) : ''].filter(Boolean).join(' · ')));
+    return [back, head, mrNightTotal(n, t), h('div', { class: 'mrm-steps' }, MR_STEPS.map(function (s, i) { return mrStepRow(i + 1, s[0], s[1], n, t); })),
+      mrHeadRow(n, show)];
+  }
+  function mrIsTonight() {
+    var ui = mrUi(), show = ui.night ? mrShowRow(ui.night.tour, ui.night.show) : null, n = mrNight();
+    return ((show && show.date) || (n && n.show_day) || '') === G.tourToday();
+  }
+  function mrNightTotal(n, t) {
+    var M = window.GMERCH, ix = mrIx();
+    if (!n) return mrBig('Sold', M.money(0), 'Nothing rung up yet');
+    var s = M.nightSales(ix, n, { live: true }), counted = t.rows.some(function (r) { return r.out !== null; }), reg = t.reg;
+    var sub = counted ? plural(s.units, 'item') + (s.by === 'mixed' ? ', by the count and the register' : s.by === 'register' ? ', by the register' : ', by the count')
+      : reg.sales ? plural(reg.sales, 'sale') + (t.closed ? '' : ' so far') + ', by the register' : 'Nothing rung up yet';
+    return mrBig('Sold', M.money(s.gross), sub, function () { mrHowSold(n); });
+  }
+  function mrHowSold(n) {
+    var M = window.GMERCH, ix = mrIx(), t = M.nightTable(ix, n), s = M.nightSales(ix, n, { live: true });
+    var rows = Object.keys(s.per).map(function (pid) {
+      var p = ix.byId[pid];
+      return [(p ? p.name : 'An item') + ': ' + s.per[pid].units + ' sold', M.exact(s.per[pid].gross)];
+    });
+    var counted = t.rows.some(function (r) { return r.out !== null; });
+    mrHow('How we got this', rows, ['Sold', M.exact(s.gross)], !counted ? (t.closed ? 'From the register, at the prices rung up.'
+      : 'From the register, while the night goes on, at the prices rung up. Once you count out, the count is what counts.')
+      : 'By the count where it is in (in, plus adds, less comps, less what is left), else by the register. What the register rang up is at the prices it rang; any more the count found, at the night’s price.');
+  }
+  function mrStepRow(i, key, words, n, t) {
+    var M = window.GMERCH, ix = mrIx(), st = mrStepState(key, n, t, ix), ui = mrUi();
+    return h('button', { class: 'mrm-steprow' + (st.done ? ' done' : ''), type: 'button',
+      onclick: function () { ui.step = key; mrTop0(); render(); } },
+      h('span', { class: 'mrm-stepn num', 'aria-hidden': 'true' }, st.done ? icon('check', 18) : String(i)),
+      h('span', { class: 'mrm-stept' }, h('span', { class: 'mrm-steptt' }, words), h('span', { class: 'mrm-steps-s' + (st.warn ? ' warn' : '') }, st.words)),
+      h('span', { class: 'mrm-chev', 'aria-hidden': 'true' }, icon('chevron', 18)));
+  }
+  function mrStepState(key, n, t, ix) {
+    var M = window.GMERCH, sum = function (f) { return t.rows.reduce(function (a, r) { return a + (r[f] || 0); }, 0); };
+    var worth = function (f) { return t.rows.reduce(function (a, r) { return a + (r[f] || 0) * M.nightPrice(ix, n, r.pid); }, 0); };
+    if (!n) return { done: false, words: key === 'sell' ? 'No sales yet' : key === 'settle' ? 'Not settled' : key === 'comps' || key === 'adds' ? 'None yet' : 'Not yet' };
+    if (key === 'in') {
+      var has = t.rows.some(function (r) { return r.in !== null; });
+      return has ? { done: true, words: plural(sum('in'), 'item') + ' in · ' + M.money(worth('in')) + ' at table prices' } : { done: false, words: 'Not yet' };
+    }
+    if (key === 'adds') { var a = sum('adds'); return a ? { done: true, words: a + ' brought out' } : { done: false, words: 'None yet' }; }
+    if (key === 'comps') { var c = sum('comps'); return c ? { done: true, words: c + ' given away' } : { done: false, words: 'None yet' }; }
+    if (key === 'sell') return t.reg.sales ? { done: true, words: plural(t.reg.sales, 'sale') + ' · ' + M.money(t.reg.subtotal) } : { done: false, words: 'No sales yet' };
+    if (key === 'out') {
+      if (!t.rows.some(function (r) { return r.out !== null; })) return { done: false, words: 'Not yet' };
+      var d = M.diffs(ix, n).length, missing = t.rows.filter(function (r) { return r.out === null && r.total > 0; }).length;
+      if (missing) return { done: false, words: plural(missing, 'size') + ' still to count', warn: true };
+      return d ? { done: true, words: 'Done · ' + plural(d, 'difference') + ' with the register', warn: true } : { done: true, words: t.reg.sales ? 'Done · matches the register' : 'Done' };
+    }
+    if (n.settled_at) return { done: true, words: 'Settled · You get ' + M.exact(G.isObj(n.settlement) && typeof n.settlement.you_get === 'number' ? M.cents(n.settlement.you_get) : M.settleNight(ix, n).youGet) };
+    return { done: false, words: 'Not settled' };
+  }
+  function mrHeadRow(n, show) {
+    var M = window.GMERCH, own = n && n.head_count != null ? n.head_count : null, fromShow = show ? G.pnlAttendance(show) : null;
+    var hc = own != null ? own : fromShow;
+    return h('div', { class: 'ledger mrm-headcount' }, mrRow({ title: 'Head count', hint: own != null ? 'For dollars per head' : fromShow ? 'From the show’s settlement' : 'For dollars per head. Paid attendance, or the room’s capacity.',
+      right: hc != null ? Number(hc).toLocaleString('en-US') : 'Add', onTap: function () { mrHeadSheet(hc); } }));
+  }
+  function mrHeadSheet(hc) {
+    var v = hc;
+    openSheet(function () {
+      return [h('h2', { class: 'sh-title' }, 'Head count'),
+        h('p', { class: 'sh-sub' }, 'How many people were there: paid attendance, or the room’s capacity when that is all you have. Per head is what sold, divided by it.'),
+        mrStepper({ value: v, label: 'Head count', k: 'mr-heads', onSet: function (x) { v = x; } }),
+        h('div', { class: 'stack' },
+          mrBtn('Save', function () {
+            if (mrLocked()) return;
+            mrNightEdit(function (x) { x.head_count = v == null ? null : Math.min(window.GMERCH.LIMITS.headCount, v); });
+            closeSheet(); render();
+          }),
+          mrBtn('Cancel', function () { closeSheet(); }, { quiet: true }))];
+    }, { label: 'Head count', cls: 'mrm-sheet' });
+  }
+  function mrStepPage(step) {
+    var ui = mrUi(), show = mrShowRow(ui.night.tour, ui.night.show), n = mrNight();
+    var name = show ? String(show.venue || '').trim() || String(show.city || '').trim() : n ? n.label : '';
+    var back = h('button', { class: 'mrm-back', type: 'button', onclick: function () { ui.step = null; mrTop0(); render(); } }, icon('back', 18), 'Back to ' + (name || 'the show'));
+    var body = step === 'in' || step === 'adds' || step === 'out' ? mrCountStep(step, n) : step === 'comps' ? mrCompsStep(n) : step === 'sell' ? mrSellStep(n) : mrSettleStep(n);
+    return [back, body];
+  }
+  function mrSetCount(field, pid, size, v, start) {
+    var M = window.GMERCH, ix = mrIx();
+    mrNightEdit(function (x) {
+      var now = new Date().toISOString();
+      if (start && start.values) {
+        M.liveProducts(ix.products).forEach(function (p) {
+          M.cleanSizes(p.sizes).forEach(function (s) {
+            var c = x.counts[p.id] = x.counts[p.id] || {}, row = c[s] = c[s] || {};
+            if (row.in == null) row.in = start.values[p.id] && start.values[p.id][s] != null ? start.values[p.id][s] : 0;
+          });
+        });
+      }
+      Object.keys(x.counts).forEach(function (k) {
+        if (k !== pid && M.canonOf(ix.byId, k) === pid && G.isObj(x.counts[k][size])) delete x.counts[k][size][field];
+      });
+      var per = x.counts[pid] = x.counts[pid] || {}, row = per[size] = per[size] || {};
+      if (v === null) delete row[field]; else row[field] = v;
+      if (field === 'in' && !x.in_at) x.in_at = now;
+      if (field === 'out' && v !== null && !x.out_at) x.out_at = now;
+    });
+  }
+  function mrCountStep(field, n) {
+    var M = window.GMERCH, ix = mrIx(), ui = mrUi(), t = M.nightTable(ix, n);
+    var show = mrShowRow(ui.night.tour, ui.night.show);
+    var started = t.rows.some(function (r) { return r.in !== null; });
+    var start = field === 'in' && !started ? M.countInStart(ix, n || { id: '', show_day: show ? show.date : '' }) : null;
+    var locked = mrSettled(n);
+    var title = field === 'in' ? 'Count in' : field === 'adds' ? 'Adds' : 'Count out';
+    var lead = field === 'in' ? (start && start.from ? 'Starts from the last count out, ' + mrNightName(start.from) + '. Change what’s different.' : started ? 'What went on the table.' : 'Count what goes on the table.')
+      : field === 'adds' ? 'What came out of the boxes during the night.' : 'Count what is left on the table. Under each size: what should be left, by the register.';
+    var products = M.liveProducts(ix.products);
+    if (!products.length) {
+      return [mrH(title), emptyState('No products yet', 'Add what you sell on Products first.'),
+        h('div', { class: 'stack' }, mrBtn('Go to Products', function () { ui.tab = 'products'; mrTop0(); render(); }))];
+    }
+    var sqn = field === 'out' ? mrSqNight(n) : null, sqMine = sqn && sqn.sales && mrSqShows(n) <= 1, sqSample = mrSqIsSample();
+    var sqMap = sqMine ? M.squareSoldMap(ix, sqn) : null;
+    var cards = products.map(function (p) {
+      var rows = M.cleanSizes(p.sizes).map(function (s) {
+        var r = t.rows.filter(function (x) { return x.pid === p.id && x.size === s; })[0] || { in: null, adds: null, out: null, comps: 0, reg: 0, left: 0, total: 0 };
+        var val = r[field];
+        if (val === null && start) val = start.values[p.id] && start.values[p.id][s] != null ? start.values[p.id][s] : 0;
+        var hint = field !== 'out' ? null : r.in !== null || r.adds !== null ? 'Should be ' + Math.max(0, r.left) + ' left' + (r.left < 0 ? ' (more rung up than came in)' : '')
+          : r.reg ? 'Not counted in · ' + r.reg + ' rung up' : null;
+        var sq = sqMap ? (sqMap[M.keyOf(p.id, s)] || { net: 0 }).net : null, byCount = r.by === 'count' && r.sold !== null;
+        var sqHint = sq === null ? null : (sqSample ? 'Sample: ' : '') + 'Square sold ' + M.qtyWords(sq) + (byCount ? ' · counted ' + r.sold + ' sold' : '');
+        return h('div', { class: 'mrm-size' },
+          h('span', { class: 'mrm-size-l' }, s === 'One size' ? 'All' : s, hint ? h('span', { class: 'mrm-size-h' }, hint) : null),
+          mrStepper({ value: val, label: p.name + ' ' + s + ' ' + title.toLowerCase(), k: 'mr-' + field + '-' + p.id + '-' + s, off: locked,
+            onSet: function (v, typing) { if (mrLocked()) return; mrSetCount(field, p.id, s, v, start); render(); } }),
+          sqHint ? h('span', { class: 'mrm-size-sq' + (byCount && r.sold !== sq ? ' off' : '') }, sqHint) : null);
+      });
+      var countedIn = function (r) { return r.pid === p.id && (r.in !== null || r.adds !== null); };
+      var fill = field === 'out' && !locked && t.rows.some(countedIn)
+        ? h('button', { class: 'mrm-link mrm-fill', type: 'button', onclick: function () {
+          if (mrLocked()) return;
+          M.cleanSizes(p.sizes).forEach(function (s) {
+            var r = t.rows.filter(function (x) { return x.pid === p.id && x.size === s; })[0];
+            if (r && countedIn(r)) mrSetCount('out', p.id, s, Math.max(0, r.left), null);
+          });
+          render();
+        } }, 'Same as the register') : null;
+      return h('div', { class: 'mrm-card mrm-count' },
+        h('div', { class: 'mrm-count-h' }, mrFace(p, 44), h('span', { class: 'mrm-count-n' }, p.name, h('span', { class: 'hint' }, M.money(M.nightPrice(ix, n, p.id))), fill)),
+        rows);
+    });
+    var sum = function (f) { return t.rows.reduce(function (a, r) { return a + (r[f] || 0); }, 0); };
+    var foot = field === 'in' ? (started ? plural(sum('in'), 'item') + ' in' : 'Nothing kept yet: change a number, or Save count in.')
+      : field === 'adds' ? (sum('adds') ? sum('adds') + ' brought out' : 'Nothing brought out yet.')
+      : t.rows.some(function (r) { return r.out !== null; }) ? sum('out') + ' left · ' + t.rows.reduce(function (a, r) { return a + (r.by === 'count' ? Math.max(0, r.sold) : 0); }, 0) + ' sold by the count' : 'Nothing counted out yet.';
+    var after = field === 'out' ? [mrDiffBox(n), mrSqDiffBox(n)] : null;
+    return [mrH(title), mrLead(lead), field === 'out' ? mrSqBlock(n) || mrSqNoAnswer() : null,
+      locked ? h('p', { class: 'mrm-warn' }, 'This show is settled. Unlock it on Settle to change the counts.') : null,
+      cards, h('p', { class: 'mrm-foot' }, foot), after,
+      h('div', { class: 'stack' }, mrBtn(field === 'in' && !started ? 'Save count in' : 'Done', function () {
+        if (field === 'in' && !started && !locked) {
+          var p0 = products[0], s0 = M.cleanSizes(p0.sizes)[0];
+          var v0 = start && start.values[p0.id] && start.values[p0.id][s0] != null ? start.values[p0.id][s0] : 0;
+          mrSetCount('in', p0.id, s0, v0, start);
+        }
+        ui.step = null; mrTop0(); render();
+      }))];
+  }
+  function mrDiffBox(n) {
+    var M = window.GMERCH, ix = mrIx(), t = M.nightTable(ix, n);
+    if (!n || !t.rows.some(function (r) { return r.out !== null; })) return null;
+    var d = M.diffs(ix, n), nc = M.notCounted(ix, n), s = M.nightSales(ix, n, { live: true });
+    return [mrSub('The count and the register'),
+      s.problems.map(function (w) { return h('p', { class: 'mrm-warn bad' }, w); }),
+      d.length ? h('div', { class: 'mrm-diffs' }, d.map(function (x) { return h('p', { class: 'mrm-warn' }, x.words); })) : null,
+      nc.length ? h('div', { class: 'mrm-diffs mrm-nc' }, nc.map(function (x) { return h('p', { class: 'mrm-warn' }, x.words); })) : null,
+      d.length || nc.length ? null : t.reg.sales ? h('p', { class: 'mrm-warn ok' }, 'Everything counted matches the register.')
+        : h('p', { class: 'mrm-lead' }, 'Nothing was rung up on the register ' + (mrIsTonight() ? 'tonight' : 'for this show') + ', so the count is the whole story.')];
+  }
+  function mrCompsStep(n) {
+    var M = window.GMERCH, ix = mrIx(), comps = n && Array.isArray(n.comps) ? n.comps : [], locked = mrSettled(n), ui = mrUi();
+    return [mrH('Comps'), mrLead('What was given away, who to and why. Comps leave the stock and are never money.'),
+      locked ? h('p', { class: 'mrm-warn' }, 'This show is settled. Unlock it on Settle to change the comps.') : null,
+      comps.length ? h('div', { class: 'ledger mrm-list' }, comps.map(function (c) {
+        var p = ix.byId[M.canonOf(ix.byId, c.product_id)] || ix.byId[c.product_id];
+        return mrRow({ face: mrFace(p, 40), title: (p ? p.name : 'An item') + (c.size && c.size !== 'One size' ? ' ' + c.size : '') + ' × ' + c.qty,
+          hint: [c.who ? 'To ' + c.who : '', c.why].filter(Boolean).join(' · ') || 'No one named', onTap: function () { mrCompSheet(c); } });
+      })) : h('p', { class: 'mrm-lead' }, 'Nothing given away yet.'),
+      h('div', { class: 'stack' }, mrBtn('Give one away', function () { if (!mrLocked()) mrCompSheet(null); }, { icon: 'plus' }),
+        mrBtn('Done', function () { ui.step = null; mrTop0(); render(); }, { quiet: true }))];
+  }
+  function mrCompSheet(c) {
+    var M = window.GMERCH, ix = mrIx(), live = M.liveProducts(ix.products);
+    var f = c ? { product_id: M.canonOf(ix.byId, c.product_id), size: c.size, qty: c.qty, who: c.who || '', why: c.why || '' }
+      : { product_id: live[0] ? live[0].id : '', size: live[0] ? M.cleanSizes(live[0].sizes)[0] : '', qty: 1, who: '', why: '' };
+    var draw = function () {
+      var p = ix.byId[f.product_id], sizes = p ? M.cleanSizes(p.sizes) : [];
+      if (sizes.indexOf(f.size) < 0) f.size = sizes[0] || 'One size';
+      return [h('h2', { class: 'sh-title' }, c ? 'Change this comp' : 'Give one away'),
+        mrSub('What'), mrChips(live.map(function (x) { return [x.id, x.name]; }), f.product_id, function (v) { f.product_id = v; redraw(); }, 'What'),
+        sizes.length > 1 ? [mrSub('Size'), mrChips(sizes.map(function (s) { return [s, s]; }), f.size, function (v) { f.size = v; }, 'Size')] : null,
+        mrSub('How many'), mrStepper({ value: f.qty, label: 'How many', k: 'mr-comp-qty', onSet: function (v, typing) { f.qty = v; if (!typing) redraw(); } }),
+        mrSub('Who to'), h('input', { class: 'input', type: 'text', maxlength: M.LIMITS.who, value: f.who, placeholder: 'A name, or the band', 'aria-label': 'Who to', autocomplete: 'off',
+          oninput: function (e) { f.who = e.target.value; } }),
+        mrSub('Why'), mrChips(MR_WHY.map(function (w) { return [w, w]; }), MR_WHY.indexOf(f.why) >= 0 ? f.why : (f.why ? 'Other' : ''), function (v) { f.why = v; }, 'Why'),
+        h('div', { class: 'stack' },
+          mrBtn(c ? 'Save' : 'Give it away', function () {
+            if (mrLocked()) return;
+            if (!f.product_id || !(f.qty > 0)) { toast('Pick what, and how many.'); return; }
+            var comp = M.cleanComp({ id: c ? c.id : mrNewId().slice(0, 8), product_id: f.product_id, size: f.size, qty: f.qty, who: f.who, why: f.why });
+            mrNightEdit(function (x) {
+              var at = c ? x.comps.map(function (y) { return y.id; }).indexOf(c.id) : -1;
+              if (at >= 0) x.comps[at] = comp; else x.comps.push(comp);
+            });
+            closeSheet(); render();
+          }),
+          c ? mrBtn('Take this comp off', function () {
+            if (mrLocked()) return;
+            mrNightEdit(function (x) { x.comps = x.comps.filter(function (y) { return y.id !== c.id; }); });
+            closeSheet(); render();
+          }, { quiet: true, cls: 'mrm-danger' }) : null,
+          mrBtn('Cancel', function () { closeSheet(); }, { quiet: true }))];
+    };
+    var panelRef = null;
+    var redraw = function () { if (panelRef) { var keep = panelRef.querySelector('.sheet-x'); fillEl(panelRef, [keep, draw()]); } };
+    openSheet(function (panel) { panelRef = panel; return draw(); }, { label: 'Comp', cls: 'mrm-sheet' });
+  }
+  function mrSellStep(n) {
+    var M = window.GMERCH, ix = mrIx(), ui = mrUi(), t = M.nightTable(ix, n), live = M.liveProducts(ix.products), locked = mrSettled(n);
+    if (!live.length) {
+      return [mrH('Sell'), emptyState('No products yet', 'Add what you sell on Products first.'),
+        h('div', { class: 'stack' }, mrBtn('Go to Products', function () { ui.tab = 'products'; mrTop0(); render(); }))];
+    }
+    var tonight = mrIsTonight();
+    var sales = n ? (ix.salesBy[n.id] || []).slice().reverse() : [];
+    var tiles = h('div', { class: 'mrm-tiles' }, live.map(function (p) {
+      var sizes = M.cleanSizes(p.sizes), left = null;
+      if (t.rows.some(function (r) { return r.pid === p.id && r.in !== null; })) {
+        left = t.rows.filter(function (r) { return r.pid === p.id; }).reduce(function (a, r) { return a + Math.max(0, r.left); }, 0);
+      }
+      var inCart = ui.cart.filter(function (l) { return l.product_id === p.id; }).reduce(function (a, l) { return a + l.qty; }, 0);
+      if (left !== null) left = Math.max(0, left - inCart);
+      return h('button', { class: 'mrm-tile' + (inCart ? ' on' : ''), type: 'button', disabled: locked || null,
+        onclick: function () { if (sizes.length === 1) { mrCartAdd(p.id, sizes[0], 1); render(); } else mrSizeSheet(p); } },
+        h('span', { class: 'mrm-tile-top' }, mrFace(p, 38), h('span', { class: 'mrm-tile-n' }, p.name)),
+        h('span', { class: 'mrm-tile-b' }, h('span', { class: 'mrm-tile-p num' }, M.money(M.cents(p.price))),
+          left !== null ? h('span', { class: 'mrm-tile-l' + (left ? '' : ' none') }, left ? left + ' left' : 'None left') : null),
+        inCart ? h('span', { class: 'mrm-tile-c num' }, String(inCart)) : null);
+    }));
+    var reg = t.reg;
+    return [
+      h('button', { class: 'mrm-tonightline', type: 'button', disabled: !n || null, onclick: function () { if (n) mrHowSold(n); } },
+        h('span', null, 'Rung up' + (tonight ? ' tonight' : '')), h('b', { class: 'num' }, M.money(reg.subtotal)),
+        h('span', { class: 'hint' }, reg.sales ? plural(reg.sales, 'sale') : 'Tap an item to start a sale.')),
+      mrTaxLine(n),
+      mrSqBlock(n, { short: true }),
+      locked ? h('p', { class: 'mrm-warn' }, 'This show is settled. Unlock it on Settle to ring up more.') : null,
+      tiles,
+      sales.length || reg.kept ? [mrSub(tonight ? 'Sales tonight' : 'Sales'),
+        sales.length ? h('div', { class: 'ledger mrm-list' }, sales.slice(0, 12).map(mrSaleLine)) : null,
+        reg.kept ? h('p', { class: 'mrm-lead mrm-kept' }, plural(reg.kept, 'sale') + ' rung up ' + (sales.length ? 'before these ' : '') + (reg.kept === 1 ? 'is' : 'are') +
+          ' kept in MERCHROOM’s database, and ' + (reg.kept === 1 ? 'its total counts' : 'their totals count') + ' here.') : null] : null,
+      mrCart(n)];
+  }
+  function mrTaxLine(n) {
+    var M = window.GMERCH, df = M.dealFor(mrIx(), n), d = df.deal;
+    var words = d.tax_method === 'top' && d.tax_rate ? 'Tax ' + M.pct(d.tax_rate) + ' on top'
+      : d.tax_method === 'inclusive' && d.tax_rate ? 'Tax ' + M.pct(d.tax_rate) + ' in the price' : 'No sales tax added';
+    return h('p', { class: 'mrm-taxline' }, h('span', null, words + (!df.own && df.from ? ',' : '')),
+      !df.own && df.from ? h('span', { class: 'hint' }, 'from ' + mrNightShort(df.from)) : null,
+      mrSettled(n) ? null : h('button', { class: 'mrm-link', type: 'button', onclick: function () { mrDealSheet(d); } }, 'Change'));
+  }
+  function mrNightShort(n) {
+    var s = n ? mrShowRow(n.tour_id, n.show_id) : null;
+    var place = s ? String(s.venue || '').trim() || String(s.city || '').trim() : String(n && n.label || '').split(',')[0].trim();
+    return place || 'another show';
+  }
+  function mrSaleLine(s) {
+    var M = window.GMERCH, d = new Date(Date.parse(s.at || s.created_at || '') || Date.now());
+    var items = (s.items || []).reduce(function (a, i) { return a + (i.qty || 0); }, 0);
+    return mrRow({ title: M.money(M.cents(s.total)) + ' · ' + (s.pay === 'card' ? 'Card' : 'Cash'),
+      hint: d.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' }) + ' · ' + plural(items, 'item'), onTap: function () { mrSaleSheet(s); } });
+  }
+  function mrCartAdd(pid, size, d) {
+    var ui = mrUi();
+    if (mrLocked()) return;
+    var line = ui.cart.filter(function (l) { return l.product_id === pid && l.size === size; })[0];
+    if (!line) { if (d <= 0) return; line = { product_id: pid, size: size, qty: 0 }; ui.cart.push(line); }
+    line.qty = Math.max(0, Math.min(window.GMERCH.LIMITS.saleQty, line.qty + d));
+    ui.cart = ui.cart.filter(function (l) { return l.qty > 0; });
+  }
+  function mrSizeSheet(p) {
+    var M = window.GMERCH, ix = mrIx(), n = mrNight(), t = M.nightTable(ix, n), ui = mrUi();
+    var counted = t.rows.some(function (r) { return r.pid === p.id && r.in !== null; });
+    var panelRef = null;
+    var draw = function () {
+      return [h('h2', { class: 'sh-title' }, p.name), h('p', { class: 'sh-sub' }, M.money(M.cents(p.price)) + ' · tap a size for each one sold'),
+        h('div', { class: 'mrm-sizes' }, M.cleanSizes(p.sizes).map(function (s) {
+          var r = t.rows.filter(function (x) { return x.pid === p.id && x.size === s; })[0];
+          var inCart = ui.cart.filter(function (l) { return l.product_id === p.id && l.size === s; }).reduce(function (a, l) { return a + l.qty; }, 0);
+          var left = counted && r ? Math.max(0, r.left) - inCart : null;
+          return h('button', { class: 'mrm-sizebtn' + (inCart ? ' on' : '') + (left !== null && left <= 0 ? ' out' : ''), type: 'button',
+            onclick: function () { mrCartAdd(p.id, s, 1); if (panelRef) { var keep = panelRef.querySelector('.sheet-x'); fillEl(panelRef, [keep, draw()]); } } },
+            h('span', { class: 'mrm-sizebtn-s' }, s), left !== null ? h('span', { class: 'mrm-sizebtn-l' }, left > 0 ? left + ' left' : 'count says none') : null,
+            inCart ? h('span', { class: 'mrm-tile-c num' }, String(inCart)) : null);
+        })),
+        h('div', { class: 'stack' }, mrBtn('Done', function () { closeSheet(); render(); }))];
+    };
+    openSheet(function (panel) { panelRef = panel; return draw(); }, { label: p.name, cls: 'mrm-sheet', onClose: function () { render(); } });
+  }
+  function mrCart(n) {
+    var M = window.GMERCH, ix = mrIx(), ui = mrUi(), deal = M.dealFor(ix, n).deal;
+    var last = n ? (ix.salesBy[n.id] || []).slice(-1)[0] : null;
+    if (!ui.cart.length) {
+      return last && !mrSettled(n) ? h('div', { class: 'mrm-cart empty' },
+        h('button', { class: 'mrm-link', type: 'button', onclick: function () { mrUndoSale(last); } },
+          'Undo last sale (' + M.money(M.cents(last.total)) + ' ' + (last.pay === 'card' ? 'card' : 'cash') + ')')) : null;
+    }
+    var tot = M.cartTotals(ix.byId, ui.cart, deal);
+    return h('div', { class: 'mrm-cart' },
+      h('button', { class: 'mrm-cart-sum', type: 'button', onclick: function () { mrCartSheet(n); } },
+        h('span', { class: 'mrm-cart-l' }, h('span', { class: 'mrm-cart-k' }, 'Collect'), h('b', { class: 'num' }, M.exact(tot.total))),
+        h('span', { class: 'mrm-cart-r' }, h('span', null, plural(tot.items, 'item')),
+          h('span', { class: 'hint' }, deal.tax_method === 'top' && tot.tax ? M.exact(tot.tax) + ' tax on top' : 'See the sale')),
+        h('span', { class: 'mrm-chev', 'aria-hidden': 'true' }, icon('chevron', 18))),
+      h('div', { class: 'mrm-two' },
+        mrBtn('Cash', function () { mrPay('cash'); }, { icon: 'cash', block: false }),
+        mrBtn('Card', function () { mrPay('card'); }, { icon: 'card', block: false })));
+  }
+  function mrCartSheet(n) {
+    var M = window.GMERCH, ix = mrIx(), ui = mrUi(), panelRef = null;
+    var redraw = function () { if (panelRef) { var keep = panelRef.querySelector('.sheet-x'); fillEl(panelRef, [keep, draw()]); } };
+    var draw = function () {
+      var deal = M.dealFor(ix, n).deal, tot = M.cartTotals(ix.byId, ui.cart, deal);
+      if (!ui.cart.length) {
+        return [h('h2', { class: 'sh-title' }, 'This sale'), h('p', { class: 'sh-sub' }, 'Nothing in the sale.'),
+          h('div', { class: 'stack' }, mrBtn('Done', function () { closeSheet(); render(); }, { quiet: true }))];
+      }
+      return [h('h2', { class: 'sh-title' }, 'This sale'),
+        h('div', { class: 'mrm-lines' }, ui.cart.map(function (l) {
+          var p = ix.byId[l.product_id], what = M.itemName(p, l.size);
+          return h('div', { class: 'mrm-line' },
+            h('span', { class: 'mrm-line-n' }, l.size && l.size !== 'One size' ? h('span', { class: 'mrm-sz' }, l.size) : null, h('span', null, p ? p.name : 'An item')),
+            h('span', { class: 'mrm-line-r' },
+              h('button', { class: 'mrm-pm sm', type: 'button', 'aria-label': 'One less, ' + what, onclick: function () { mrCartAdd(l.product_id, l.size, -1); redraw(); } }, icon('minus', 18)),
+              h('span', { class: 'mrm-cart-q num' }, String(l.qty)),
+              h('button', { class: 'mrm-pm sm', type: 'button', 'aria-label': 'One more, ' + what, onclick: function () { mrCartAdd(l.product_id, l.size, 1); redraw(); } }, icon('plus', 18)),
+              h('span', { class: 'mrm-cart-a num' }, M.money(M.cents(p ? p.price : 0) * l.qty))));
+        })),
+        h('p', { class: 'mrm-collect' }, h('span', null, 'Collect'), h('b', { class: 'num' }, M.exact(tot.total)),
+          h('span', { class: 'hint' }, deal.tax_method === 'top' && tot.tax ? M.exact(tot.tax) + ' tax on top' : deal.tax_method === 'inclusive' && deal.tax_rate ? 'tax in the price' : plural(tot.items, 'item'))),
+        h('div', { class: 'mrm-two' },
+          mrBtn('Cash', function () { closeSheet(true); mrPay('cash'); }, { icon: 'cash', block: false }),
+          mrBtn('Card', function () { closeSheet(true); mrPay('card'); }, { icon: 'card', block: false })),
+        h('div', { class: 'stack' },
+          mrBtn('Done', function () { closeSheet(); render(); }, { quiet: true }),
+          h('button', { class: 'mrm-link mrm-quiet', type: 'button', onclick: function () { ui.cart = []; closeSheet(); render(); } }, 'Clear this sale'))];
+    };
+    openSheet(function (panel) { panelRef = panel; return draw(); }, { label: 'This sale', cls: 'mrm-sheet', onClose: function () { render(); } });
+  }
+  function mrPay(pay, sure) {
+    var M = window.GMERCH, ui = mrUi();
+    if (!ui.cart.length || mrLocked()) return;
+    var n0 = mrNight(), df = M.dealFor(mrIx(), n0);
+    if (!sure && !df.own && df.from && df.deal.tax_method === 'top' && df.deal.tax_rate > 0 && !(n0 && M.registerOf(mrIx(), n0.id).sales)) { mrTaxAsk(df, pay); return; }
+    var n = n0 || mrNightEdit(function () {}), ix = mrIx();
+    var sale = M.saleFrom(ix.byId, ui.cart, M.dealFor(ix, n).deal, pay, { id: mrNewId(), night_id: n.id, at: new Date().toISOString() });
+    if (!sale) return;
+    var kept = mrPut('sales', sale);
+    ui.cart = [];
+    S.mrLastSale = { id: kept.id, at: Date.now() };
+    mrSaleToast(kept, mrDbOn() && (mrDb().failed > 0 || (typeof navigator !== 'undefined' && navigator.onLine === false)));
+    render();
+  }
+  function mrSaleToast(s, waiting) {
+    var M = window.GMERCH, pay = s.pay === 'card' ? 'card' : 'cash';
+    toast([h('span', null, M.exact(M.cents(s.total)) + ' ' + pay + ' sale ' + (waiting ? 'kept on this phone. It goes up when there’s signal.' : 'saved')),
+      h('button', { class: 'linkbtn', type: 'button', onclick: function () { mrUndoSale(s); } }, 'Undo')], 5200, false, 't-undo');
+  }
+  function mrTaxAsk(df, pay) {
+    var M = window.GMERCH, d = df.deal;
+    openSheet(function () {
+      return [h('h2', { class: 'sh-title' }, 'Add ' + M.pct(d.tax_rate) + ' sales tax?'),
+        h('p', { class: 'sh-sub' }, 'This show has no deal of its own yet. The last one, from ' + mrNightName(df.from) + ', adds ' + M.pct(d.tax_rate) +
+          ' sales tax on top of every sale. Is that right here?'),
+        h('div', { class: 'stack' },
+          mrBtn('Yes, add ' + M.pct(d.tax_rate), function () { closeSheet(true); mrNightEdit(function (x) { x.deal = M.cleanDeal(d); }); mrPay(pay, true); }),
+          mrBtn('Change the deal first', function () { closeSheet(true); mrDealSheet(d); }, { quiet: true }),
+          mrBtn('Cancel', function () { closeSheet(); }, { quiet: true }))];
+    }, { label: 'Sales tax', cls: 'mrm-sheet' });
+  }
+  function mrUndoSale(s) {
+    if (mrLocked()) return;
+    if (!mrStore().data.sales[s.id]) return;
+    mrDrop('sales', s.id);
+    toast('Sale undone: ' + window.GMERCH.exact(window.GMERCH.cents(s.total)) + ' ' + (s.pay === 'card' ? 'card' : 'cash') + '.');
+    render();
+  }
+  function mrSaleSheet(s) {
+    var M = window.GMERCH, ix = mrIx();
+    openSheet(function () {
+      return [h('h2', { class: 'sh-title' }, M.exact(M.cents(s.total)) + ' · ' + (s.pay === 'card' ? 'Card' : 'Cash')),
+        h('div', { class: 'ledger mrm-how' }, (s.items || []).map(function (it) {
+          var p = ix.byId[M.canonOf(ix.byId, it.product_id)] || ix.byId[it.product_id];
+          return h('div', { class: 'row mrm-how-row' }, h('span', { class: 'row-label' }, (p ? p.name : 'An item') + (it.size && it.size !== 'One size' ? ' ' + it.size : '') + ' × ' + it.qty),
+            h('span', { class: 'amt num' }, M.exact(M.cents(it.price) * it.qty)));
+        }), M.cents(s.tax) ? h('div', { class: 'row mrm-how-row' }, h('span', { class: 'row-label' }, 'Tax on top'), h('span', { class: 'amt num' }, M.exact(M.cents(s.tax)))) : null),
+        h('div', { class: 'stack' },
+          mrBtn(s.pay === 'card' ? 'It was cash' : 'It was card', function () {
+            if (mrLocked()) return;
+            mrPut('sales', Object.assign({}, mrStore().data.sales[s.id] || s, { pay: s.pay === 'card' ? 'cash' : 'card' }));
+            closeSheet(); render();
+          }, { quiet: true }),
+          mrBtn('Delete this sale', function () { closeSheet(true); mrUndoSale(s); }, { quiet: true, cls: 'mrm-danger' }),
+          mrBtn('Close', function () { closeSheet(); }, { quiet: true }))];
+    }, { label: 'Sale', cls: 'mrm-sheet' });
+  }
+  function mrSettleStep(n) {
+    var M = window.GMERCH, ix = mrIx(), ui = mrUi(), show = mrShowRow(ui.night.tour, ui.night.show), tonight = mrIsTonight();
+    var heads = n && n.head_count != null ? n.head_count : show ? G.pnlAttendance(show) : null;
+    var live = M.settleNight(ix, n, { heads: heads, square: mrSqForSettle(n), shows: mrSqShows(n), now: Date.now() });
+    var snap = n && n.settled_at && G.isObj(n.settlement) ? n.settlement : null;
+    var df = live.dealFrom, d = live.deal;
+    var dealWords = [
+      (d.seller === 'artist' ? 'We sell' : 'The venue sells') + '. Venue cut ' + M.pct(d.soft_pct) + ' on apparel and other, ' + M.pct(d.music_pct) + ' on music, from ' +
+        (d.cut_from === 'gross' ? 'everything fans paid.' : 'what’s left after tax' + (d.card_who === 'shared' ? ' and card fees.' : '.')),
+      d.tax_method === 'none' ? 'No sales tax.' : 'Sales tax ' + M.pct(d.tax_rate) + (d.tax_method === 'top' ? ' on top' : ' in the price') + ', filed by ' + (d.tax_by === 'venue' ? 'the venue.' : 'you.'),
+      'Card fee ' + M.pct(d.card_pct) + (d.card_who === 'shared' ? ', split like the cut.' : d.card_who === 'artist' ? ', you pay it.' : ', the venue pays it.')];
+    var dealCard = h('div', { class: 'mrm-card mrm-deal' },
+      h('p', { class: 'mrm-card-t' }, 'The deal'),
+      dealWords.map(function (w) { return h('p', { class: 'mrm-card-s' }, w); }),
+      !df.own ? h('p', { class: 'mrm-card-n' }, df.from ? 'Copied from ' + mrNightName(df.from) + '. Check it’s the same ' + (tonight ? 'tonight.' : 'for this show.') : 'No deal set yet: no cut, no tax, no card fee.') : null,
+      snap ? null : mrBtn(df.own ? 'Change the deal' : tonight ? 'Set tonight’s deal' : 'Set this show’s deal', function () { mrDealSheet(d); }, { quiet: !!df.own, sm: true }));
+    var st = snap ? { venueGets: M.cents(snap.venue_gets), youGet: M.cents(snap.you_get), owe: { from: snap.owe_from, amount: M.cents(snap.owe_amount) },
+      lines: (snap.lines || []).map(function (l) { return { words: l.words, band: l.band || undefined, amount: M.cents(l.amount), kind: l.kind }; }), warnings: [], problems: [] } : live;
+    var t = M.nightTable(ix, n), counted = t.rows.some(function (r) { return r.out !== null; });
+    var still = !snap && n && !counted && !t.closed && t.reg.sales ? h('p', { class: 'mrm-card-n mrm-still' }, 'Not counted out yet: what sold is what the register rang up so far. Count out to settle by the count.') : null;
+    var head = [
+      h('p', { class: 'mrm-result' }, 'The venue gets ', h('b', { class: 'num' }, M.exact(st.venueGets)), '.'),
+      h('p', { class: 'mrm-result you' }, 'You get ', h('b', { class: 'num' }, M.exact(st.youGet)), '.'),
+      h('p', { class: 'mrm-owe' }, M.oweWords(st))];
+    var how = h('div', { class: 'ledger mrm-how' }, st.lines.map(function (l) {
+      return h('div', { class: 'row mrm-how-row' + (l.kind === 'sum' ? ' total' : '') + (l.kind === 'note' ? ' note' : '') },
+        h('span', { class: 'row-label' }, l.words), l.kind === 'note' && !l.amount ? null : h('span', { class: 'amt num' }, M.exact(l.amount)));
+    }));
+    var use = live.square || {}, sqWords = snap ? '' : mrSqSettleWords(n, live);
+    var cardHint = live.cardFrom === 'square' ? 'From Square' + (use.test ? ' · Test' : use.stale ? ', as last read' : '') : live.cardFrom === 'typed' ? 'Typed in' : 'From the register';
+    var inputs = snap ? null : h('div', { class: 'ledger mrm-inputs' },
+      mrRow({ title: 'Card sales', hint: cardHint, right: M.exact(live.card),
+        onTap: function () { if (live.cardFrom === 'square') mrSqCardSheet(n, live); else mrCardSheet(n, live); } }),
+      mrRow({ title: 'Head count', hint: n && n.head_count != null ? 'For dollars per head' : heads ? 'From the show’s settlement' : 'For dollars per head',
+        right: heads != null ? String(heads) : 'Add', onTap: function () { mrHeadSheet(heads); } }),
+      live.perHead !== null ? mrRow({ title: 'Per head', hint: M.money(live.atTable) + ' sold, ' + heads + ' people', right: M.exact(live.perHead) }) : null);
+    return [mrH('Settle'),
+      snap ? h('div', { class: 'mrm-settled' }, h('span', null, icon('check', 16), 'Settled ' + mrWhen(n.settled_at)),
+        h('button', { class: 'mrm-link', type: 'button', onclick: function () { mrUnlock(n); } }, 'Unlock to change')) : null,
+      dealCard, head, still,
+      (st.problems || []).concat(st.warnings || []).map(function (w) { return h('p', { class: 'mrm-warn' }, w); }),
+      mrSub('How we got this'), how, inputs,
+      sqWords ? h('p', { class: 'mrm-warn' }, sqWords) : null,
+      mrSqBlock(n),
+      mrDiffBox(n), mrSqDiffBox(n),
+      h('div', { class: 'stack' },
+        snap ? null : mrBtn('Mark settled', function () { mrSettleNow(n, live); }, { icon: 'check' }),
+        mrBtn('Share as text', function () { mrShareSheet(n, st, snap); }, { quiet: true, icon: 'share' }))];
+  }
+  function mrWhen(iso, plain) {
+    var d = new Date(Date.parse(iso || '') || Date.now());
+    return window.GMERCH.dayWords(G.ymd(d), { plain: !!plain }) + ', ' + d.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' });
+  }
+  function mrSettleNow(n, st) {
+    var M = window.GMERCH, reg = n ? M.nightTable(mrIx(), n).reg : null;
+    if (!n || (!st.atTable && !st.card && !(reg && reg.sales))) { toast('Nothing has sold on this show yet.'); return; }
+    if (!st.atTable && reg && reg.sales) {
+      toast('The count says nothing sold, but the register rang up ' + plural(reg.sales, 'sale') + '. Check the count out first.', 5200, true);
+      return;
+    }
+    var D = function (c) { return M.dollars(c); };
+    mrNightEdit(function (x) {
+      x.settled_at = new Date().toISOString();
+      x.settlement = { v: 1, at_table: D(st.atTable), gross: D(st.gross), tax: D(st.tax), fees: D(st.fees), card: D(st.card), cash: D(st.cash),
+        venue_gets: D(st.venueGets), you_get: D(st.youGet), owe_from: st.owe.from, owe_amount: D(st.owe.amount), per_head: st.perHead === null ? null : D(st.perHead),
+        heads: st.heads, deal: st.deal, lines: st.lines.map(function (l) {
+          var x2 = { words: String(l.words).slice(0, 300), amount: D(l.amount), kind: l.kind };
+          if (l.band) x2.band = String(l.band).slice(0, 300);
+          return x2;
+        }).slice(0, 40) };
+      if (!G.isObj(x.deal) || !Object.keys(x.deal).length) x.deal = st.deal;
+    });
+    toast('Settled. ' + M.settleWords(st));
+    render();
+  }
+  function mrUnlock(n) {
+    confirmSheet({ title: 'Unlock this settlement?', body: 'The counts, comps, sales and deal can change again, and the numbers are worked out afresh. Mark it settled again when it’s right.',
+      action: 'Unlock', cf: true, onConfirm: function () { mrNightEdit(function (x) { x.settled_at = null; x.settlement = null; }); return true; } });
+  }
+  function mrDealSheet(deal) {
+    var M = window.GMERCH, f = M.cleanDeal(deal);
+    var pctBox = function (key, label, hi) {
+      return h('div', { class: 'mrm-pctin' }, h('input', { class: 'input num', type: 'text', inputmode: 'decimal', autocomplete: 'off', 'aria-label': label,
+        value: f[key] ? String(f[key]) : '', placeholder: '0', oninput: function (e) { var v = parseFloat(String(e.target.value).replace(/[^0-9.]/g, '')); f[key] = isFinite(v) ? Math.min(hi, v) : 0; } }),
+        h('span', { class: 'mrm-pctin-s' }, '%'));
+    };
+    openSheet(function () {
+      return [h('h2', { class: 'sh-title' }, mrIsTonight() ? 'Tonight’s deal' : 'This show’s deal'),
+        h('p', { class: 'sh-sub' }, 'As the venue’s contract or deal memo says. It carries on to the next show until you change it.'),
+        mrSub('Who sells'), mrChips([['artist', 'We sell'], ['venue', 'The venue sells']], f.seller, function (v) { f.seller = v; }, 'Who sells'),
+        mrSub('Venue’s cut on apparel and other'), pctBox('soft_pct', 'Venue’s cut on apparel and other', M.LIMITS.pct),
+        mrSub('Venue’s cut on music'), pctBox('music_pct', 'Venue’s cut on music', M.LIMITS.pct),
+        mrSub('The cut is taken from'), mrChips([['net', 'What’s left after tax and card fees'], ['gross', 'Everything fans paid']], f.cut_from, function (v) { f.cut_from = v; }, 'The cut is taken from'),
+        mrSub('Sales tax'), mrChips([['inclusive', 'In the price'], ['top', 'On top'], ['none', 'No tax']], f.tax_method, function (v) { f.tax_method = v; }, 'Sales tax'),
+        pctBox('tax_rate', 'Sales tax rate', M.LIMITS.taxRate),
+        mrSub('Who files the tax'), mrChips([['venue', 'The venue'], ['artist', 'We do']], f.tax_by, function (v) { f.tax_by = v; }, 'Who files the tax'),
+        mrSub('Card fee'), pctBox('card_pct', 'Card fee', M.LIMITS.cardPct),
+        mrSub('Who pays the card fee'), mrChips([['shared', 'Split like the cut'], ['artist', 'We pay it'], ['venue', 'The venue pays it']], f.card_who, function (v) { f.card_who = v; }, 'Who pays the card fee'),
+        h('div', { class: 'stack' },
+          mrBtn('Save the deal', function () {
+            if (mrLocked()) return;
+            mrNightEdit(function (x) { x.deal = M.cleanDeal(f); });
+            closeSheet(); render();
+          }),
+          mrBtn('Cancel', function () { closeSheet(); }, { quiet: true }))];
+    }, { label: 'The deal', cls: 'mrm-sheet' });
+  }
+  function mrCardSheet(n, live) {
+    var M = window.GMERCH, ix = mrIx(), regCard = M.nightTable(ix, n).reg.card;
+    var v = n && n.card_sales != null ? String(n.card_sales) : '';
+    openSheet(function () {
+      return [h('h2', { class: 'sh-title' }, 'Card sales'),
+        h('p', { class: 'sh-sub' }, 'Everything paid by card ' + (mrIsTonight() ? 'tonight' : 'at this show') + ', tax and all, from the card reader’s report or the venue’s. Leave it empty to use the register’s ' + M.exact(regCard) + '.'),
+        h('div', { class: 'money-in big' }, h('span', { class: 'cur', 'aria-hidden': 'true' }, '$'),
+          h('input', { type: 'text', inputmode: 'decimal', autocomplete: 'off', 'aria-label': 'Card sales', value: v, placeholder: M.dollars(regCard).toFixed(2),
+            oninput: function (e) { v = e.target.value; } })),
+        h('div', { class: 'stack' },
+          mrBtn('Save', function () {
+            if (mrLocked()) return;
+            var t = String(v).replace(/[$,\s]/g, ''), x = t === '' ? null : parseFloat(t);
+            if (x !== null && !(isFinite(x) && x >= 0 && x <= M.LIMITS.cardSales)) { toast('That isn’t an amount.'); return; }
+            mrNightEdit(function (y) { y.card_sales = x === null ? null : M.dollars(M.cents(x)); });
+            closeSheet(); render();
+          }),
+          mrBtn('Cancel', function () { closeSheet(); }, { quiet: true }))];
+    }, { label: 'Card sales', cls: 'mrm-sheet' });
+  }
+  function mrShareSheet(n, st, snap) {
+    var M = window.GMERCH, ui = mrUi(), show = mrShowRow(ui.night.tour, ui.night.show);
+    var full = snap ? Object.assign({}, st, { deal: M.cleanDeal(snap.deal), perHead: snap.per_head == null ? null : M.cents(snap.per_head), heads: snap.heads || null }) : st;
+    var tour = getTour(ui.night.tour), artist = tour ? String(tour.artist || '').trim() : '';
+    var text = M.shareText(full, show ? mrPlace(show) : (n ? n.label : ''), show ? show.date : (n ? n.show_day : ''), { settledAt: snap ? mrWhen(n.settled_at, true) : '', artist: artist });
+    openSheet(function () {
+      var ta = h('textarea', { class: 'update mrm-share', readonly: true, rows: 14, 'aria-label': 'The settlement as text' });
+      ta.value = text;
+      return [h('h2', { class: 'sh-title' }, 'Share as text'), h('p', { class: 'sh-sub' }, 'This is exactly what goes.'), ta,
+        h('div', { class: 'stack' },
+          mrBtn('Share', async function () {
+            var how = await sendUpdate(text, ta);
+            if (how === 'copied') toast('Copied. Paste it anywhere.');
+            else if (how === 'manual') toast('Select the words and copy them.');
+          }, { icon: 'share' }),
+          mrBtn('Close', function () { closeSheet(); }, { quiet: true }))];
+    }, { label: 'Share as text', cls: 'mrm-sheet' });
+  }
+  function mrNotSame() {
+    try { var x = JSON.parse(lsGet('gr.merch.notsame.' + mrUid()) || '{}'); return G.isObj(x) ? x : {}; } catch (e) { return {}; }
+  }
+  function mrProductsTab() {
+    var M = window.GMERCH, all = mrRows('products'), live = M.liveProducts(all);
+    var archived = all.filter(function (p) { return p.archived && !p.merged_into; });
+    var looks = M.lookAlikes(all, mrNotSame());
+    var groups = M.KINDS.map(function (k) {
+      var list = live.filter(function (p) { return M.kindOf(p.kind) === k; });
+      return list.length ? [mrSub(M.KIND_WORDS[k]), h('div', { class: 'ledger mrm-list' }, list.map(function (p) {
+        return mrRow({ face: mrFace(p, 44), title: p.name, hint: M.sizeWords(p.sizes) + (p.cost != null ? ' · costs ' + M.money(M.cents(p.cost)) : '') + (p.barcode ? ' · UPC ' + p.barcode : ''),
+          right: M.money(M.cents(p.price)), onTap: function () { mrProductSheet(p); } });
+      }))] : null;
+    });
+    return [h('div', { class: 'mrm-headrow' }, mrH('Products'), mrBtn('Add', function () { mrProductSheet(null); }, { sm: true, icon: 'plus', block: false })),
+      looks.map(mrLookCard),
+      live.length ? groups : emptyState('No products yet', 'Add what you sell: tees, hoodies, hats, records. A photo, a name, its sizes and its price.'),
+      archived.length ? h('div', { class: 'ledger mrm-list mrm-arch' }, mrRow({ title: 'Archived', hint: plural(archived.length, 'product') + ' put away', onTap: mrArchivedSheet })) : null];
+  }
+  function mrLookCard(group) {
+    var names = group.map(function (p) { return '“' + p.name + '”'; });
+    return h('div', { class: 'mrm-card mrm-look' },
+      h('p', { class: 'mrm-card-t' }, 'These look like the same item'),
+      h('p', { class: 'mrm-card-s' }, names.slice(0, -1).join(', ') + ' and ' + names[names.length - 1] + '.'),
+      h('div', { class: 'mrm-two' },
+        mrBtn('Merge them', function () { mrMergeSheet(group); }, { block: false, sm: true }),
+        mrBtn('They’re different', function () {
+          var x = mrNotSame();
+          group.forEach(function (a) { group.forEach(function (b) { if (a.id < b.id) x[a.id + '|' + b.id] = true; }); });
+          lsSet('gr.merch.notsame.' + mrUid(), JSON.stringify(x));
+          render();
+        }, { quiet: true, block: false, sm: true })));
+  }
+  function mrMergeSheet(group) {
+    var M = window.GMERCH, keep = group[0].id, panelRef = null;
+    var redraw = function () { if (panelRef) { var k2 = panelRef.querySelector('.sheet-x'); fillEl(panelRef, [k2, draw()]); } };
+    var draw = function () {
+      var ix = mrIx(), at = new Date().toISOString();
+      var moves = M.mergeMoves(ix, keep, group.map(function (p) { return p.id; }).filter(function (id) { return id !== keep; }), at);
+      var counts = moves.filter(function (m) { return m.kind === 'count'; }), short = moves.filter(function (m) { return m.kind === 'remove'; });
+      return [h('h2', { class: 'sh-title' }, 'Merge into one'),
+        h('p', { class: 'sh-sub' }, 'Pick the one to keep. The others are archived, and everything of theirs (stock, counts, comps, sales) counts under the one you keep from now on, past shows too. Sizes it doesn’t have are added to it.'),
+        mrChips(group.map(function (p) { return [p.id, p.name + ' · ' + M.money(M.cents(p.price))]; }), keep, function (v) { keep = v; redraw(); }, 'The one to keep'),
+        counts.length ? [mrSub('The stock, added together'), h('div', { class: 'ledger mrm-how' }, counts.map(function (m) {
+          var sh = short.filter(function (x) { return x.size === m.size; })[0];
+          return h('div', { class: 'row mrm-how-row' }, h('span', { class: 'row-label' }, (m.size === 'One size' ? '' : m.size + ': ') + m.note.replace(/^merged /, '') +
+            (sh ? ', less ' + sh.qty + ' sold that we did not know we had' : '')), h('span', { class: 'amt num' }, String(Math.max(0, m.qty - (sh ? sh.qty : 0)))));
+        }))] : null,
+        h('div', { class: 'stack' },
+          mrBtn('Merge', function () {
+            var byId = M.byIdOf(mrRows('products')), kept = null;
+            var adds = M.mergeMoves(mrIx(), keep, group.map(function (p) { return p.id; }).filter(function (id) { return id !== keep; }), new Date().toISOString());
+            group.forEach(function (p) {
+              if (p.id === keep) return;
+              var plan = M.mergePlan(byId, keep, p.id);
+              if (!plan) return;
+              kept = mrPut('products', plan.keep); byId[keep] = kept;
+              byId[p.id] = mrPut('products', plan.gone);
+            });
+            if (kept) adds.forEach(function (m) { var mv = M.cleanMove(Object.assign({ id: mrNewId() }, m)); if (mv) mrPut('moves', mv); });
+            closeSheet();
+            toast(kept ? 'Merged into ' + kept.name + '.' : 'Nothing to merge.');
+            render();
+          }),
+          mrBtn('Cancel', function () { closeSheet(); }, { quiet: true }))];
+    };
+    openSheet(function (panel) { panelRef = panel; return draw(); }, { label: 'Merge into one', cls: 'mrm-sheet' });
+  }
+  function mrArchivedSheet() {
+    var M = window.GMERCH;
+    openSheet(function () {
+      var list = mrRows('products').filter(function (p) { return p.archived && !p.merged_into; });
+      return [h('h2', { class: 'sh-title' }, 'Archived'), h('p', { class: 'sh-sub' }, 'Put away, never deleted: their past shows still count them. Bring one back to sell it again.'),
+        h('div', { class: 'ledger mrm-list' }, list.map(function (p) {
+          return mrRow({ face: mrFace(p, 40), title: p.name, hint: M.sizeWords(p.sizes), right: 'Bring back', onTap: function () {
+            mrPut('products', Object.assign({}, p, { archived: false })); closeSheet(); toast(p.name + ' is back.'); render();
+          } });
+        })),
+        h('div', { class: 'stack' }, mrBtn('Close', function () { closeSheet(); }, { quiet: true }))];
+    }, { label: 'Archived', cls: 'mrm-sheet' });
+  }
+  function mrProductSheet(p) {
+    var M = window.GMERCH;
+    if (!p && M.liveProducts(mrRows('products')).length >= M.LIMITS.products) { toast('MERCHROOM holds ' + M.LIMITS.products + ' products. Archive some first.'); return; }
+    var f = p ? { name: p.name, kind: M.kindOf(p.kind), sizes: M.cleanSizes(p.sizes), price: p.price, cost: p.cost, barcode: p.barcode || '' }
+      : { name: '', kind: 'apparel', sizes: M.SIZE_SETS[0].sizes.slice(), price: null, cost: null, barcode: '' };
+    var id = p ? p.id : mrNewId(), photo = null, panelRef = null, sizeIn = '';
+    var redraw = function () { if (panelRef) { var keep = panelRef.querySelector('.sheet-x'); fillEl(panelRef, [keep, draw()]); } };
+    var moneyBox = function (key, label, ph) {
+      return h('div', { class: 'money-in' }, h('span', { class: 'cur', 'aria-hidden': 'true' }, '$'),
+        h('input', { type: 'text', inputmode: 'decimal', autocomplete: 'off', 'aria-label': label, placeholder: ph || '0', value: f[key] == null ? '' : String(f[key]),
+          oninput: function (e) { var t = String(e.target.value).replace(/[$,\s]/g, ''); f[key] = t === '' ? null : t; } }));
+    };
+    var draw = function () {
+      var url = photo ? mrPhotoUrlOf(photo) : mrPhoto(id);
+      return [h('h2', { class: 'sh-title' }, p ? 'Change product' : 'Add a product'),
+        h('label', { class: 'mrm-photo', 'aria-label': 'Pick a photo' },
+          url ? h('img', { src: url, alt: '' }) : h('span', { class: 'mrm-photo-e' }, icon('plus', 20), 'Photo'),
+          h('input', { type: 'file', accept: 'image/*', class: 'mrm-file', onchange: async function (e) {
+            var file = e.target.files && e.target.files[0];
+            if (!file) return;
+            var b = await mrSquareJpeg(file, 320);
+            if (!b) { toast('That photo couldn’t be read.'); return; }
+            photo = b; redraw();
+          } })),
+        h('p', { class: 'mrm-photo-n' }, 'Optional. The photo stays on this phone.'),
+        mrSub('Name'), h('input', { class: 'input', type: 'text', maxlength: M.LIMITS.name, value: f.name, placeholder: 'Logo Tee', 'aria-label': 'Name', autocomplete: 'off',
+          oninput: function (e) { f.name = e.target.value; } }),
+        mrSub('Kind'), mrChips(M.KINDS.map(function (k) { return [k, M.KIND_WORDS[k]]; }), f.kind, function (v) { f.kind = v; redraw(); }, 'Kind'),
+        mrSub('Sizes'),
+        mrChips(M.SIZE_SETS.map(function (s) { return [s.key, s.words]; }), (M.SIZE_SETS.filter(function (s) { return s.sizes.join('|') === f.sizes.join('|'); })[0] || {}).key || '',
+          function (v) { f.sizes = M.SIZE_SETS.filter(function (s) { return s.key === v; })[0].sizes.slice(); redraw(); }, 'Sizes'),
+        h('div', { class: 'mrm-sizelist' }, f.sizes.map(function (s) {
+          return h('button', { class: 'mrm-sizechip', type: 'button', 'aria-label': 'Take ' + s + ' off',
+            onclick: function () { f.sizes = f.sizes.filter(function (x) { return x !== s; }); if (!f.sizes.length) f.sizes = ['One size']; redraw(); } }, s, icon('close', 12));
+        }), h('span', { class: 'mrm-sizeadd' },
+          h('input', { class: 'input sm', type: 'text', maxlength: M.LIMITS.size, placeholder: 'Add a size', 'aria-label': 'Add a size', autocomplete: 'off', value: sizeIn,
+            oninput: function (e) { sizeIn = e.target.value; },
+            onkeydown: function (e) { if (e.key === 'Enter') { e.preventDefault(); f.sizes = M.addSize(f.sizes, sizeIn); sizeIn = ''; redraw(); } } }),
+          h('button', { class: 'mrm-pm sm', type: 'button', 'aria-label': 'Add this size', onclick: function () { if (!String(sizeIn).trim()) return; f.sizes = M.addSize(f.sizes, sizeIn); sizeIn = ''; redraw(); } }, icon('plus', 18)))),
+        mrSub('Price'), moneyBox('price', 'Price', '30'),
+        mrSub('What one costs you'), moneyBox('cost', 'What one costs you', 'Optional'), h('p', { class: 'mrm-photo-n' }, 'Optional, for profit. Only you see it.'),
+        f.kind === 'music' ? [mrSub('Barcode (UPC)'), h('input', { class: 'input', type: 'text', inputmode: 'numeric', maxlength: 20, value: f.barcode, placeholder: 'The numbers under the bars',
+          'aria-label': 'Barcode', autocomplete: 'off', oninput: function (e) { f.barcode = e.target.value; } })] : null,
+        h('div', { class: 'stack' },
+          mrBtn(p ? 'Save' : 'Add it', async function () {
+            var row = M.cleanProduct(Object.assign({}, p || {}, { id: id, name: f.name, kind: f.kind, sizes: f.sizes, price: f.price == null ? '' : f.price,
+              cost: f.cost, barcode: f.kind === 'music' ? f.barcode : '', sort_order: p ? p.sort_order : mrRows('products').length }));
+            if (!row) { toast(!String(f.name).trim() ? 'Give it a name.' : 'Check the price' + (f.cost != null ? ' and the cost.' : '.')); return; }
+            if (p && p.sample) row.sample = true;
+            if (p && p._s) row._s = true;
+            mrPut('products', Object.assign({}, p || {}, row));
+            if (photo) await mrPhotoPut(id, photo);
+            closeSheet(); toast(p ? 'Saved.' : row.name + ' is in.'); render();
+          }),
+          p ? mrBtn(p.archived ? 'Bring it back' : 'Archive it', function () {
+            mrPut('products', Object.assign({}, p, { archived: !p.archived }));
+            closeSheet(); toast(p.archived ? p.name + ' is back.' : p.name + ' is put away. Past shows still count it.'); render();
+          }, { quiet: true }) : null,
+          mrBtn('Cancel', function () { closeSheet(); }, { quiet: true }))];
+    };
+    openSheet(function (panel) { panelRef = panel; return draw(); }, { label: p ? 'Change product' : 'Add a product', cls: 'mrm-sheet' });
+  }
+  function mrStockTab() {
+    var M = window.GMERCH, ix = mrIx(), live = M.liveProducts(ix.products);
+    if (!live.length) return [mrH('Stock'), emptyState('No products yet', 'Add what you sell on Products, then count what you have here.')];
+    var units = 0, worth = 0, needs = 0, each = [];
+    var cards = live.map(function (p) {
+      var mine = { p: p, units: 0 };
+      each.push(mine);
+      var rows = M.cleanSizes(p.sizes).map(function (s) {
+        var st = M.stockOf(ix, p.id, s, mrNightName);
+        units += st.have; worth += st.have * M.cents(p.price); mine.units += st.have;
+        if (st.over) needs += 1;
+        return h('button', { class: 'mrm-stockrow' + (st.over ? ' over' : ''), type: 'button', onclick: function () { mrStockHow(p, s); } },
+          h('span', { class: 'mrm-size-l' }, s === 'One size' ? 'All' : s),
+          h('span', { class: 'mrm-stock-v num' + (st.tracked ? '' : ' dim') }, String(st.have)),
+          st.over ? h('span', { class: 'mrm-tag bad' }, 'Count needed') : !st.tracked ? h('span', { class: 'mrm-tag' }, 'Not counted') : null);
+      });
+      return h('div', { class: 'mrm-card mrm-stock' },
+        h('div', { class: 'mrm-count-h' }, mrFace(p, 44), h('span', { class: 'mrm-count-n' }, p.name, h('span', { class: 'hint' }, M.sizeWords(p.sizes))),
+          h('button', { class: 'mrm-link', type: 'button', onclick: function () { mrStockSheet(p); } }, 'Change')),
+        h('div', { class: 'mrm-stockrows' }, rows));
+    });
+    var howItems = function () {
+      mrHow('Items', each.map(function (x) { return [x.p.name, String(x.units)]; }), ['Items', String(units)], 'Every size of every product, as Stock has it. Tap a size for how its number came about.');
+    };
+    var howWorth = function () {
+      mrHow('Worth at table prices', each.map(function (x) { return [x.p.name + ': ' + x.units + ' × ' + M.money(M.cents(x.p.price)), M.exact(x.units * M.cents(x.p.price))]; }),
+        ['Worth at table prices', M.exact(worth)], 'What it would all bring in at today’s prices. Not money yet.');
+    };
+    return [mrH('Stock'), mrLead('Everything you have, in the boxes and on the table. A show takes off what it sold once it is counted out.'),
+      h('div', { class: 'mrm-bigs' }, mrBig('Items', String(units), null, howItems), mrBig('Worth at table prices', M.money(worth), null, howWorth)),
+      needs ? h('p', { class: 'mrm-warn bad' }, 'Count needed: ' + plural(needs, 'size') + ' sold more than we thought you had. Count them, and the numbers are right again.') : null,
+      cards];
+  }
+  function mrStockHow(p, s) {
+    var M = window.GMERCH, st = M.stockOf(mrIx(), p.id, s, mrNightName);
+    var rows = st.lines.map(function (l) { return [l.words, String(l.total)]; });
+    var note = !st.tracked ? 'Never counted. Tap Change to count it.'
+      : st.over ? 'Count needed: sold ' + st.over + ' more than we thought you had. A number here never goes below 0, so it is the least you have; count it, and it is right again.'
+      : !st.counted ? 'Never counted: it starts from nothing.' : null;
+    mrHow(p.name + (s === 'One size' ? '' : ' ' + s), rows, ['You have', String(st.have)], note);
+  }
+  function mrStockSheet(p) {
+    var M = window.GMERCH, ix = mrIx(), mode = 'count', vals = {}, note = '', panelRef = null;
+    var sizes = M.cleanSizes(p.sizes);
+    var redraw = function () { if (panelRef) { var keep = panelRef.querySelector('.sheet-x'); fillEl(panelRef, [keep, draw()]); } };
+    var draw = function () {
+      return [h('h2', { class: 'sh-title' }, p.name),
+        mrChips([['count', 'I counted'], ['add', 'Got more'], ['remove', 'Took out']], mode, function (v) { mode = v; vals = {}; redraw(); }, 'What happened'),
+        h('p', { class: 'sh-sub' }, mode === 'count' ? 'The true number of each size, boxes and table together. It replaces what MERCHROOM thought.'
+          : mode === 'add' ? 'How many of each size came in.' : 'How many of each size are gone, not sold: damaged, lost, sent home.'),
+        sizes.map(function (s) {
+          var have = M.stockOf(ix, p.id, s, mrNightName).have;
+          var v = vals[s] !== undefined ? vals[s] : mode === 'count' ? have : null;
+          return h('div', { class: 'mrm-size' }, h('span', { class: 'mrm-size-l' }, s === 'One size' ? 'All' : s, h('span', { class: 'mrm-size-h' }, 'Now ' + have)),
+            mrStepper({ value: v, label: p.name + ' ' + s, k: 'mr-stock-' + s, onSet: function (x, typing) { vals[s] = x; if (!typing) redraw(); } }));
+        }),
+        mode !== 'count' ? [mrSub(mode === 'add' ? 'Where from (optional)' : 'Why'), h('input', { class: 'input', type: 'text', maxlength: M.LIMITS.moveNote, value: note,
+          placeholder: mode === 'add' ? 'The printer, the warehouse' : 'Damaged', 'aria-label': mode === 'add' ? 'Where from' : 'Why', autocomplete: 'off', oninput: function (e) { note = e.target.value; } })] : null,
+        h('div', { class: 'stack' },
+          mrBtn('Save', function () {
+            var at = new Date().toISOString(), n = 0;
+            sizes.forEach(function (s) {
+              var v = vals[s];
+              if (v === undefined && mode === 'count') v = M.stockOf(ix, p.id, s, mrNightName).have;
+              if (v === undefined || v === null) return;
+              if (mode !== 'count' && !(v > 0)) return;
+              var m = M.cleanMove({ id: mrNewId(), product_id: p.id, size: s, kind: mode, qty: v, note: note, at: at });
+              if (m) { mrPut('moves', m); n += 1; }
+            });
+            closeSheet();
+            toast(n ? 'Stock saved.' : 'Nothing changed.');
+            render();
+          }),
+          mrBtn('Cancel', function () { closeSheet(); }, { quiet: true }))];
+    };
+    openSheet(function (panel) { panelRef = panel; return draw(); }, { label: p.name + ' stock', cls: 'mrm-sheet' });
+  }
+  function mrResTours() {
+    var seen = {}, out = [];
+    mrIx().nights.slice().reverse().forEach(function (n) {
+      if (seen[n.tour_id]) return;
+      seen[n.tour_id] = true;
+      var t = getTour(n.tour_id);
+      out.push({ id: n.tour_id, name: t ? tourNameOf(t) : (n.label || 'A tour') });
+    });
+    return out;
+  }
+  function mrResultsTab() {
+    var M = window.GMERCH, ix = mrIx(), ui = mrUi(), tours = mrResTours();
+    var res = ui.res = G.isObj(ui.res) ? ui.res : { scope: ui.night ? 'show' : 'tour', tour: null };
+    var tourId = res.tour && tours.some(function (t) { return t.id === res.tour; }) ? res.tour : ui.night ? ui.night.tour : tours.length ? tours[0].id : null;
+    var night = mrNight();
+    if (res.scope === 'show' && !night) res.scope = 'tour';
+    var nights = res.scope === 'show' ? (night ? [night] : []) : ix.nights.filter(function (n) { return n.tour_id === tourId; });
+    var show = res.scope === 'show' && ui.night ? mrShowRow(ui.night.tour, ui.night.show) : null;
+    var heads = function (n) { if (n.head_count != null) return n.head_count; var s = mrShowRow(n.tour_id, n.show_id); return s ? G.pnlAttendance(s) : null; };
+    var sqSt = mrSqState(), sqSample = mrSqIsSample();
+    var r = M.results(ix, nights, heads, { live: true, shows: mrShows(), square: function (n) { return sqSt && n.show_day ? M.squareNight(sqSt, n.show_day) : null; } });
+    var scope = mrChips([['show', 'This show'], ['tour', 'Whole tour']], res.scope, function (v) {
+      if (v === 'show' && !night) { toast('Pick a show on Show night first.'); render(); return; }
+      res.scope = v; render();
+    }, 'Results for');
+    var out = [mrH('Results'), scope];
+    if (res.scope === 'tour' && tours.length > 1) {
+      out.push(mrChips(tours.map(function (t) { return [t.id, t.name]; }), tourId, function (v) { res.tour = v; render(); }, 'Tour'));
+    }
+    out.push(h('p', { class: 'mrm-lead' }, res.scope === 'show' ? (show ? mrNightName(night) : 'This show')
+      : (tours.filter(function (t) { return t.id === tourId; })[0] || { name: 'No tour yet' }).name + ' · ' + plural(nights.length, 'show') + ' with merch'));
+    if (!r.units && !r.compUnits) {
+      out.push(emptyState('No results yet', 'Results come in as shows are rung up and counted out.'));
+      return out;
+    }
+    out.push(h('div', { class: 'mrm-bigs' },
+      mrBig('Sold', M.money(r.gross), 'at table prices', function () { mrHow('Sold', r.top.map(function (x) { return [x.name + ': ' + x.units, M.exact(x.gross)]; }), ['Sold at table prices', M.exact(r.gross)]); }),
+      mrBig('Per head', r.perHead !== null ? M.exact(r.perHead) : 'None yet', r.perHead !== null ? r.heads + (r.heads === 1 ? ' person' : ' people')
+        : res.scope === 'show' ? 'Add a head count on Show night' : 'Add head counts on Show night', function () {
+        mrHow('Per head', r.nights.filter(function (x) { return x.heads; }).map(function (x) { return [mrNightName(x.night) + ': ' + M.money(x.gross) + ' ÷ ' + x.heads, M.exact(x.perHead)]; }),
+          r.perHead !== null ? ['All together: ' + M.money(r.headGross) + ' ÷ ' + r.heads, M.exact(r.perHead)] : null,
+          'Per head is what sold, divided by the head count. Shows with no head count are left out of it.');
+      }),
+      mrBig('Items', String(r.units), 'sold', function () { mrHow('Items sold', r.top.map(function (x) { return [x.name, String(x.units)]; }), ['Items', String(r.units)]); }),
+      mrBig('Given away', String(r.compUnits), 'comps', function () { mrHowComps(nights, res.scope === 'tour'); })));
+    if (r.square) {
+      out.push(h('div', { class: 'ledger mrm-sqres' }, mrRow({ title: 'Card on ' + mrSqName(sqSt),
+        hint: plural(r.square.sales, 'sale') + ' on Square · ' + plural(r.units, 'item') + ' sold by the count' + (sqSample ? ' · made-up numbers' : ''),
+        right: M.money(r.square.card), onTap: function () {
+          mrHow('Card on ' + mrSqName(sqSt), r.nights.filter(function (x) { return x.square && !x.square.again; }).map(function (x) {
+            return [mrNightName(x.night) + ': ' + plural(x.square.sales, 'sale') + ' on Square' + (x.square.shared ? ' (the whole day, two shows)' : '') + ', ' +
+              plural(x.units, 'item') + ' by the count', M.exact(x.square.card)];
+          }), ['Card on Square', M.exact(r.square.card)], sqSample ? 'Made-up numbers, so you can see how it looks. Not from Square.'
+            : 'Square’s card sales for each show, less what went back to cards and less Not merch, tips never in it. A date with two shows is Square’s whole day, once. The count is what settles.');
+        } })));
+    }
+    out.push(mrSub('Top sellers'), h('div', { class: 'ledger mrm-list' }, r.top.slice(0, 5).map(function (x, i) {
+      var p = ix.byId[x.pid];
+      return mrRow({ face: mrFace(p, 40), title: (i + 1) + '. ' + x.name, hint: x.units + ' sold', right: M.money(x.gross), onTap: function () { mrHowSeller(x, r); } });
+    })));
+    if (r.curve.length) {
+      var top = Math.max.apply(null, r.curve.map(function (c) { return c.pct; }));
+      out.push(mrSub('Sizes (apparel)'), h('div', { class: 'mrm-curve' }, r.curve.map(function (c) {
+        return h('div', { class: 'mrm-bar' }, h('span', { class: 'mrm-bar-s' }, c.size),
+          h('span', { class: 'mrm-bar-t' }, h('i', { style: 'width:' + Math.max(4, Math.round(c.pct / (top || 1) * 100)) + '%' })),
+          h('span', { class: 'mrm-bar-p num' }, c.pct + '%'));
+      })));
+    }
+    if (res.scope === 'tour') {
+      var left = mrShows().filter(function (x) { return x.tour === tourId && x.date > G.tourToday(); }).length;
+      var hints = M.reorderHints(ix, left, mrNightName);
+      out.push(mrSub('Reorder'), hints.length ? h('div', { class: 'mrm-hints' }, hints.slice(0, 8).map(function (x) {
+        return h('div', { class: 'mrm-hint' }, h('p', { class: 'mrm-hint-t' }, x.words), h('p', { class: 'mrm-hint-s' }, x.why));
+      })) : h('p', { class: 'mrm-lead' }, left ? 'At this pace nothing runs out in the ' + (left === 1 ? 'show' : left + ' shows') + ' left.' : 'Nothing is running low.'));
+      out.push(mrSub('Show by show'), h('div', { class: 'ledger mrm-list' }, r.nights.slice().reverse().map(function (x) {
+        return mrRow({ title: mrNightName(x.night), hint: plural(x.units, 'item') + (x.perHead !== null ? ' · ' + M.exact(x.perHead) + ' a head' : '') +
+          (x.square ? ' · Square card ' + M.money(x.square.card) + (x.square.shared ? ' for the whole day' : '') + (sqSample ? ' (sample)' : '') : ''), right: M.money(x.gross),
+          onTap: function () { ui.night = { tour: x.night.tour_id, show: x.night.show_id }; ui.step = null; ui.sq = null; ui.tab = 'night'; mrTop0(); render(); } });
+      })));
+    }
+    return out;
+  }
+  function mrHowComps(nights, many) {
+    var M = window.GMERCH, ix = mrIx(), rows = [], total = 0;
+    nights.forEach(function (n) {
+      (Array.isArray(n.comps) ? n.comps : []).forEach(function (c) {
+        var p = ix.byId[M.canonOf(ix.byId, c.product_id)] || ix.byId[c.product_id], q = Number(c.qty) || 0;
+        total += q;
+        rows.push([M.itemName(p, c.size) + (c.who ? ', to ' + c.who : '') + (c.why ? ' · ' + c.why : '') + (many ? ' · ' + mrNightName(n) : ''), String(q)]);
+      });
+    });
+    mrHow('Given away', rows, ['Given away', String(total)], 'Comps leave the stock and are never money: no cut, no tax.');
+  }
+  function mrHowSeller(x, r) {
+    var M = window.GMERCH;
+    var rows = r.nights.filter(function (row) { return row.per && row.per[x.pid]; }).map(function (row) {
+      return [mrNightName(row.night) + ': ' + row.per[x.pid].units + ' sold', M.exact(row.per[x.pid].gross)];
+    });
+    mrHow(x.name, rows, [x.units + ' sold', M.exact(x.gross)], 'At the prices it sold at, show by show.');
   }
   function signalKnown() {
     var B = window.GR_BACKEND;
@@ -17783,13 +19686,14 @@
   function menuGates() {
     var B = window.GR_BACKEND;
     return { mine: artistSide(), signedIn: !!(S.mode === 'db' && B && B.signOut), music: inMusic() || myPastRows().length > 0,
-      signal: S.signalOk === true };
+      signal: S.signalOk === true, merch: mrMay() };
   }
   var MENU_TITLE = 'Settings';
   function viewMenu() {
     var backTo = S.route.back || { name: 'home' };
     var here = { name: 'mainmenu', back: backTo };
     signalKnown();
+    mrGateKnown();
     var g = menuGates();
     var tg = menuTourGroup(backTo);
     var cards = settingsDoors().cards;
@@ -17804,7 +19708,8 @@
         g.mine ? menuRow('plus', 'Create a show', createShowFromMenu) : null,
         tg ? Array.prototype.slice.call(tg.childNodes) : null]),
       menuSection('Money', [
-        g.mine && !IN_SHELL ? menuRow('tag', 'Merchroom', function () { go({ name: 'merchroom', back: here }); }) : null,
+        g.merch ? menuRow('tag', 'MERCHROOM', function () { go({ name: 'mroom', back: here }); })
+          : g.mine && !IN_SHELL ? menuRow('tag', 'Merchroom', function () { go({ name: 'merchroom', back: here }); }) : null,
         g.music ? menuHistoryGroup(here) : null]),
       menuSection('Social and streaming', [
         g.signal ? menuRow('tabcost', 'SIGNAL', function () { go({ name: 'signal', back: here }); }) : null]));
@@ -17881,6 +19786,7 @@
     createshow: ['new show', 'add a show', 'make a show', 'one off show', 'one-off show', 'single show'],
     contact: ['profile', 'my info', 'me', 'username', 'photo', 'picture', 'phone', 'email'],
     merchroom: ['merch', 'square', 'sales', 'store', 'token'],
+    mroom: ['merch', 'merch table', 'atvenu', 'sales', 'settle', 'settlement', 'stock', 'inventory', 'count in', 'count out', 'comps', 'register', 'store', 'square'],
     signal: ['social', 'social media', 'streaming', 'streams', 'spotify', 'apple music', 'instagram', 'youtube', 'tiktok', 'dsp',
       'releases', 'pitch', 'pitches', 'posts', 'songs', 'audience', 'facts'],
     history: ['history', 'past tours', 'old tours', 'summary', 'closeout', 'pdf', 'spreadsheet', 'budget'],
@@ -17954,7 +19860,8 @@
     if (g.mine) add('createshow', 'plus', 'Create a show', 'Tours', createShowFromMenu);
     var tid = menuTourId(backTo), t = tid ? getTour(tid) : null, tname = t ? tourNameOf(t) : '';
     if (t) add('tour', 'calendar', tname, 'Tours', menuReveal(function () { S.menuTourOpen = true; }, tname));
-    if (g.mine && !IN_SHELL) add('merchroom', 'tag', 'Merchroom', 'Money', function () { go({ name: 'merchroom', back: here }); });
+    if (g.merch) add('mroom', 'tag', 'MERCHROOM', 'Money', function () { go({ name: 'mroom', back: here }); });
+    else if (g.mine && !IN_SHELL) add('merchroom', 'tag', 'Merchroom', 'Money', function () { go({ name: 'merchroom', back: here }); });
     var bh = function () { return G.isObj(S.menuBh) ? S.menuBh : (S.menuBh = { open: false, year: '', artist: '' }); };
     if (g.music) add('history', 'tabmoney', 'Budget History', 'Money', menuReveal(function () { bh().open = true; }, 'Budget History'));
     if (g.signal) add('signal', 'tabcost', 'SIGNAL', 'Social and streaming', function () { go({ name: 'signal', back: here }); });
@@ -17991,7 +19898,12 @@
       [['people', 'Name'], ['phone', 'Phone number'], ['mail', 'Email'], ['star', 'Status'], ['people', 'Role']].concat(ccdPurpose() === null ? [] : [['check', 'Purpose']])
         .forEach(function (x) { add('', x[0], x[1], 'Contact Card', card(x[1])); });
     }
-    if (g.mine && !IN_SHELL) {
+    if (g.merch) {
+      [['night', 'calendar', 'Show night'], ['products', 'tag', 'Products'], ['stock', 'deck', 'Stock'], ['results', 'tabstats', 'Results']].forEach(function (x) {
+        add('', x[1], x[2], 'MERCHROOM', function () { var u = mrUi(); u.tab = x[0]; u.step = null; go({ name: 'mroom', back: here }); });
+      });
+      add('', 'card', 'Square (test)', 'MERCHROOM', function () { go({ name: 'merchroom', back: { name: 'mroom', back: here } }); });
+    } else if (g.mine && !IN_SHELL) {
       ['Square', 'Nights'].forEach(function (l) { add('', l === 'Square' ? 'card' : 'calendar', l, 'Merchroom', function () { go({ name: 'merchroom', back: here }); }); });
     }
     if (g.music) {
@@ -18974,7 +20886,7 @@
     appTourBuild(t);
     appTourLoad().then(function (all) {
       if (appTour !== t) return;
-      t.cards = appTourFor(all, { fan: t.fan, iphone: t.iphone });
+      t.cards = appTourFor(all, { fan: t.fan, iphone: t.iphone }).filter(function (c) { return c.id !== 'bud-merchroom' || !mrMay(); });
       if (!t.cards.length) throw new Error('tour cards: none for this account');
       if (o.first) appTourMark(0);
       appTourShow(t, 0, 0);
@@ -21107,9 +23019,115 @@
       edit ? h('button', { class: 'btn primary block' + cfCls(true) + ' pk-cats-add', type: 'button', onclick: function () { openPnlCats(id, { adding: true }); } },
         WORDS.pnlCatsAdd) : null);
   }
+  function pnlCatEditOk(id, key) {
+    var t = getTour(id);
+    if (!G.isPnlBook(t) || !canEditTour(id) || !canWrite() || key === 'crew' || key === 'members' || key === 'commission' || G.isDerived(key)) return false;
+    if (key === 'card' && G.cardDebts(t).some(function (d) { return G.isObj(d.feed); })) return false;
+    return G.pnlCatsNow(t).some(function (c) { return c.key === key; });
+  }
+  function openPnlCatRename(id, key, back) {
+    var t = getTour(id);
+    if (!pnlCatEditOk(id, key)) return;
+    var was = (G.pnlCatsNow(t).filter(function (c) { return c.key === key; })[0] || {}).label || catName(t, key), busy = false;
+    var after = function () { if (back) back(); else closeSheet(); };
+    var nameIn = h('input', { class: 'input', type: 'text', maxlength: G.PNL_CAT_NAME_MAX, value: was, autocomplete: 'off',
+      enterkeyhint: 'done', 'aria-label': 'New name for ' + was,
+      onkeydown: function (e) { if (e.key === 'Enter') { e.preventDefault(); save(); } } });
+    async function save(btn) {
+      if (busy) return;
+      var r = G.pnlCatRename(getTour(id) || t, key, nameIn.value);
+      if (!r.patch) { toast(r.why, 4200); return; }
+      if (!Object.keys(r.patch).length) { after(); return; }
+      busy = true;
+      if (btn) btn.disabled = true;
+      var ok = await api.update(id, r.patch);
+      busy = false;
+      if (!ok) { if (btn) btn.disabled = false; return; }
+      delete S.drafts['exp:' + id];
+      toast('Renamed to “' + r.label + '”');
+      render(true);
+      after();
+    }
+    openSheet(function () {
+      return [
+        h('h2', { class: 'sh-title clean' }, 'Rename category'),
+        h('p', { class: 'sh-sub clean' }, WORDS.pnlCatRenameSub(was)),
+        h('div', { class: 'ledger lf-card lf-short' }, rowField('Name', nameIn)),
+        h('div', { class: 'stack lf-acts' },
+          h('button', { class: 'btn primary block', type: 'button', onclick: function (e) { save(e.currentTarget); } }, 'Save'),
+          h('button', { class: 'btn ghost block' + cfCls(false), type: 'button', onclick: after }, 'Cancel'))
+      ];
+    }, { label: 'Rename category', cls: 'rw-sheet' });
+    setTimeout(function () { try { nameIn.focus({ preventScroll: true }); nameIn.select(); } catch (e) {   } }, 60);
+  }
+  function pnlCatDeleteAsk(id, key, back) {
+    var t = getTour(id), r = G.pnlCatDeleteAll(t, key), busy = false;
+    var sentAll = {};
+    var after = function () { if (back) back(); else closeSheet(); };
+    if (!r) { toast('That category isn’t here anymore.'); return; }
+    if (r.empty) {
+      api.update(id, r.patch).then(function (ok) {
+        if (!ok) return;
+        delete S.drafts['exp:' + id];
+        toast(WORDS.pnlCatDeleted(r.label, 0));
+        render(true);
+        if (back) back();
+      });
+      return;
+    }
+    var view = function () {
+      var base = getTour(id) || t, gone = {};
+      Object.keys(sentAll).forEach(function (k) { gone[k] = null; });
+      return G.pnlCatDeleteAll(Object.keys(gone).length ? G.pnlMerge(base, { charges: gone }) : base, key) || r;
+    };
+    var go = async function (btn, cancel) {
+      if (busy) return;
+      var r2 = G.pnlCatDeleteAll(getTour(id) || t, key);
+      if (!r2) { closeSheet(); toast('That category isn’t here anymore.'); render(true); return; }
+      busy = true;
+      btn.disabled = true; cancel.disabled = true;
+      var todo = r2.cards.filter(function (cid) { return !sentAll[cid]; }), sent = Object.keys(sentAll).length;
+      for (var i = 0; i < todo.length; i++) {
+        if (todo.length > 1) btn.textContent = WORDS.pnlCatDelGoing(i + 1, todo.length);
+        if (!(await unfileCharge(id, todo[i]))) {
+          busy = false;
+          toastAfter(WORDS.pnlCatDelStopped(sent));
+          render(true);
+          ask();
+          return;
+        }
+        sentAll[todo[i]] = true;
+        sent += 1;
+      }
+      var ok = await api.update(id, r2.patch);
+      busy = false;
+      if (!ok) { if (sent) toastAfter(WORDS.pnlCatDelStopped(sent)); render(true); ask(); return; }
+      delete S.drafts['exp:' + id];
+      toast(WORDS.pnlCatDeleted(r2.label, sent));
+      render(true);
+      after();
+    };
+    var ask = function () {
+      var v = view(), n = v.counts, logged = n.hand + n.part + n.cards + n.whole + n.statements + n.owed > 0;
+      var canCards = !v.cards.length || (S.mode === 'db' && bookLead(id) && serverLead(id));
+      openSheet(function () {
+        var cancel = h('button', { class: 'btn ghost block' + cfCls(false), type: 'button', autofocus: true, onclick: function () { if (!busy) after(); } }, 'Cancel');
+        return [
+          h('h2', { class: 'sh-title' }, WORDS.pnlCatDelTitle(v.label)),
+          logged ? h('p', { class: 'sh-sub' }, WORDS.pnlCatDelLogged(v.label)) : null,
+          WORDS.pnlCatDelLines(n).map(function (w) { return h('p', { class: 'note' }, w); }),
+          canCards ? null : h('p', { class: 'note' }, WORDS.pnlCatDelCardsWho),
+          h('div', { class: 'stack' },
+            canCards ? h('button', { class: 'btn block danger-solid', type: 'button', onclick: function (e) { go(e.currentTarget, cancel); } }, 'Delete') : null,
+            cancel)
+        ];
+      }, { label: WORDS.pnlCatDelTitle(v.label), leaving: function () { return busy; } });
+    };
+    ask();
+  }
   function openPnlCats(id, o) {
-    var st = { adding: !!(o && o.adding), name: '', people: false, busy: false, said: (o && o.said) || null };
-    var again = function () { openPnlCats(id, { adding: st.adding, said: st.said }); };
+    var st = { adding: !!(o && o.adding), name: '', people: false, busy: false };
+    var again = function () { openPnlCats(id, { adding: st.adding }); };
     var save = async function (patch, words) {
       if (st.busy) return false;
       st.busy = true;
@@ -21128,17 +23146,10 @@
       var edit = canEditTour(id) && canWrite();
       var list = G.pnlCatsNow(t);
       var rowOf = function (c) {
-        var held = st.said === c.key ? G.pnlCatHolds(t, c.key) : null;
         var minus = edit ? h('button', { class: 'iconbtn sm pk-cat-off', type: 'button', 'aria-label': 'Take ' + c.label + ' off this P&L',
-          onclick: async function () {
-            var patch = G.pnlCatDelete(getTour(id), c.key);
-            if (!patch) { st.said = c.key; again(); return; }
-            st.said = null;
-            if (await save(patch, WORDS.pnlCatsOff(c.label))) again();
-          } }, icon('minus', 18)) : null;
-        return [h('div', { class: 'row pk-cat' + (held ? ' held' : '') },
-          h('div', { class: 'row-label' }, c.label, c.people ? h('span', { class: 'hint' }, WORDS.pnlCatsList) : null), minus),
-          held ? h('p', { class: 'note pk-cat-held' }, pnlHeldWords(c.label, held)) : null];
+          onclick: function () { if (!st.busy) pnlCatDeleteAsk(id, c.key, again); } }, icon('minus', 18)) : null;
+        return h('div', { class: 'row pk-cat' },
+          h('div', { class: 'row-label' }, c.label, c.people ? h('span', { class: 'hint' }, WORDS.pnlCatsList) : null), minus);
       };
       var addForm = null;
       if (edit && st.adding) {
@@ -21169,30 +23180,18 @@
                 if (await save(r.patch, WORDS.pnlCatsMade(r.label, r.people))) again();
               } }, c.name || c.label);
             }))] : null);
-        setTimeout(function () { if (nameIn.isConnected && !st.name) nameIn.focus(); }, 30);
+        setTimeout(function () { if (nameIn.isConnected && !st.name) { try { nameIn.focus({ preventScroll: true }); } catch (e) {   } } }, 30);
       }
       return [
         h('h2', { class: 'sh-title' }, WORDS.pnlCatsHead),
         h('p', { class: 'sh-sub' }, edit ? WORDS.pnlCatsSub : tourNameOf(t)),
-        list.length ? h('div', { class: 'ledger pk-cat-list' }, list.map(rowOf)) : h('p', { class: 'note' }, WORDS.pnlCatsNoneRead),
         addForm,
+        list.length ? h('div', { class: 'ledger pk-cat-list' }, list.map(rowOf)) : h('p', { class: 'note' }, WORDS.pnlCatsNoneRead),
         h('div', { class: 'stack' },
           edit && !st.adding ? h('button', { class: 'btn primary block' + cfCls(true) + ' pk-cats-add', type: 'button', onclick: function () { st.adding = true; again(); } }, WORDS.pnlCatsAdd) : null,
           h('button', { class: 'btn ghost block' + cfCls(false), type: 'button', onclick: function () { closeSheet(); } }, 'Done'))
       ];
     }, { label: WORDS.pnlCatsHead });
-  }
-  function pnlHeldWords(label, held) {
-    var bits = [], todo = [];
-    if (held.entries) bits.push(held.entries === 1 ? '1 entry' : held.entries + ' entries');
-    if (held.plan > 0.004) bits.push('a plan of ' + money(held.plan));
-    if (held.people) bits.push(held.people === 1 ? '1 person' : held.people + ' people');
-    if (held.people) todo.push('take its people off');
-    if (held.entries) todo.push('move its entries to another category or take them off');
-    if (held.plan > 0.004) todo.push('clear its plan');
-    var much = Math.max(Math.abs(held.amount), Math.abs(held.paid), held.plan), first = todo.join(', and ') || 'take what is in it off';
-    return label + (much > 0.004 ? ' holds ' + money(much) : held.people ? ' has someone on it' : ' holds money') + (bits.length ? ' (' + bits.join(', ') + ')' : '') + '. ' +
-      first.charAt(0).toUpperCase() + first.slice(1) + ' first, then take it off.';
   }
   function pnlBudsNode(id, t, c, tot) {
     if (!G.isPnlBook(t) || !canSeeMoney(id)) return null;
@@ -21249,10 +23248,19 @@
         return h('div', { class: 'row pk-bud-person' }, h('div', { class: 'row-label' }, p.name,
           h('span', { class: 'hint' }, budLine([p.title].concat(pay).filter(Boolean).join(' · ')))));
       };
+      var owedAll = [];
+      b.groups.forEach(function (g) { (g.owed || []).forEach(function (x) { owedAll.push({ x: x, label: g.label }); }); });
+      var owedShown = G.footTo(owedAll.map(function (r) { return r.x.amount; }), b.owed, 1);
+      var owedRow = function (r, i) {
+        var inner = [h('div', { class: 'row-label' }, r.x.name, h('span', { class: 'hint' }, r.label + ' \u00b7 ' + WORDS.pnlOwed)), h('span', { class: 'amt num' }, money(owedShown[i]))];
+        return edit ? h('button', { class: 'row rowbtn pk-bud-entry', type: 'button', onclick: function () { openPnlOwed(id, r.x.id, here); } }, inner, icon('chevron', 18))
+          : h('div', { class: 'row pk-bud-entry' }, inner);
+      };
       var body = b.groups.length ? h('div', { class: 'ledger pk-bud-groups' }, b.groups.map(function (g) {
-        return [h('div', { class: 'row head pk-bud-gh' }, h('span', { class: 'pk-bud-gn' }, g.label), h('span', { class: 'amt num' }, money(g.shown)))]
+        return (g.people.length || g.rows.length ? [h('div', { class: 'row head pk-bud-gh' }, h('span', { class: 'pk-bud-gn' }, g.label), h('span', { class: 'amt num' }, money(g.shown)))] : [])
           .concat(g.people.map(personRow), g.rows.map(entryRow));
-      })) : h('p', { class: 'note pk-bud-empty' }, WORDS.pnlBudsEmpty);
+      }), owedAll.length ? [h('div', { class: 'row head pk-bud-gh' }, h('span', { class: 'pk-bud-gn' }, WORDS.pnlOwed), h('span', { class: 'amt num' }, money(b.owed)))]
+        .concat(owedAll.map(owedRow)) : null) : h('p', { class: 'note pk-bud-empty' }, WORDS.pnlBudsEmpty);
       var form = null, ask = null;
       if (edit && st.changing) {
         if (st.name == null) st.name = b.name;
@@ -21318,7 +23326,7 @@
     }, { label: WORDS.pnlBudsHead });
   }
   function openPnlBudNew(id) {
-    var st = { name: '', plan: 0, busy: false };
+    var st = { name: '', busy: false };
     openSheet(function (panel) {
       panel.classList.add('iv-sheet', 'pnl-sheet', 'pk-sheet', 'pk-bud-sheet');
       var t = getTour(id);
@@ -21326,7 +23334,7 @@
       var add = async function (e) {
         var btn = e && e.currentTarget;
         if (st.busy) return;
-        var r = G.pnlBudNew(getTour(id), st.name, st.plan, newId());
+        var r = G.pnlBudNew(getTour(id), st.name, null, newId());
         if (!r.patch) { toast(r.why); return; }
         blurActive();
         st.busy = true; if (btn) btn.disabled = true;
@@ -21337,25 +23345,24 @@
         render(true);
         openPnlBud(id, r.key);
       };
-      var nameIn = h('input', { class: 'input', type: 'text', maxlength: G.PNL_BUD_NAME_MAX, autocomplete: 'off', enterkeyhint: 'next',
-        placeholder: WORDS.pnlBudsName, 'aria-label': 'Budget name', value: st.name, oninput: function (e) { st.name = e.target.value; } });
-      setTimeout(function () { if (nameIn.isConnected && !st.name) nameIn.focus(); }, 30);
+      var nameIn = h('input', { class: 'input', type: 'text', maxlength: G.PNL_BUD_NAME_MAX, autocomplete: 'off', enterkeyhint: 'done',
+        placeholder: WORDS.pnlBudsName, 'aria-label': 'Budget name', value: st.name, oninput: function (e) { st.name = e.target.value; },
+        onkeydown: function (e) { if (e.key === 'Enter') { e.preventDefault(); add(); } } });
+      setTimeout(function () { if (nameIn.isConnected && !st.name) { try { nameIn.focus({ preventScroll: true }); } catch (e) {   } } }, 30);
       return [
         h('h2', { class: 'sh-title' }, WORDS.pnlBudsNew),
         h('p', { class: 'sh-sub' }, WORDS.pnlBudsNewSub),
         h('div', { class: 'ledger lf-card pnl-card' },
-          rowField('Name', nameIn, 'pnl-row'),
-          rowField(WORDS.pnlBudsAmount, moneyInput({ id: 'pk-bud-new-amt', key: 'pk-bud-new-amt', label: WORDS.pnlBudsAmount, value: 0, last: true,
-            onValue: function (v) { st.plan = v; } }), 'pnl-row')),
-        h('p', { class: 'note' }, WORDS.pnlBudsAmountSub),
+          rowField('Name', nameIn, 'pnl-row')),
         h('div', { class: 'stack' },
           h('button', { class: 'btn primary block' + cfCls(true) + ' pk-bud-make', type: 'button', onclick: add }, 'Add'),
           h('button', { class: 'btn ghost block' + cfCls(false), type: 'button', onclick: function () { closeSheet(); } }, 'Cancel'))
       ];
-    }, { label: WORDS.pnlBudsNew });
+    }, { label: WORDS.pnlBudsNew, cls: 'rw-sheet' });
   }
   function openPnlBudAdd(id, key, o) {
-    var st = { cat: (o && o.cat) || '', how: (o && o.how) || '' };
+    var st = { cat: (o && o.cat) || '', how: (o && o.how) || '', owe: !!(o && o.owe) };
+    var carry = { amount: 0, what: '', date: '' };
     var hows = [['spent', 'Credit'], ['paid', 'Debit'], ['cash', 'Cash']];
     openSheet(function () {
       var t = getTour(id), b = G.pnlBudList(t).filter(function (x) { return x.key === key; })[0];
@@ -21370,22 +23377,34 @@
       var draw = function () {
         var cat = cats.filter(function (c) { return c.key === st.cat; })[0];
         var list = cat && cat.key !== 'crew' && G.isPeopleCat(t, cat.key) ? cat.key : null;
-        fillEl(box, cat ? [h('div', { class: 'field' }, h('span', { class: 'field-label' }, WORDS.pnlBudsHow),
-            segmented(hows.map(function (x) { return x[1]; }), hows.map(function (x) { return x[0]; }).indexOf(st.how), function (i) { st.how = hows[i][0]; draw(); }, WORDS.pnlBudsHow)),
-          st.how ? paidLogForm(id, cat.key, cat.label, function () { openPnlBud(id, key); }, st.how, { bud: key, list: list }) : null] : null);
+        var people = !!cat && G.isPeopleCat(t, cat.key), owe = st.owe && !people;
+        fillEl(box, cat ? [people ? null : h('div', { class: 'field' }, segmented([WORDS.pnlPaid, WORDS.pnlOwed], owe ? 1 : 0, function (i) { st.owe = i === 1; draw(); }, WORDS.pnlOwedAsk)),
+          owe ? owedForm(id, cat.key, cat.label, function () { openPnlBud(id, key); }, { bud: key, carry: carry })
+            : [h('div', { class: 'field' }, h('span', { class: 'field-label' }, WORDS.pnlBudsHow),
+              segmented(hows.map(function (x) { return x[1]; }), hows.map(function (x) { return x[0]; }).indexOf(st.how), function (i) { st.how = hows[i][0]; draw(); }, WORDS.pnlBudsHow)),
+            st.how ? paidLogForm(id, cat.key, cat.label, function () { openPnlBud(id, key); }, st.how, { bud: key, list: list, carry: carry }) : null]] : null);
       };
       draw();
+      var catHost = h('div');
+      var drawCats = function () {
+        var cat = cats.filter(function (c) { return c.key === st.cat; })[0];
+        fillEl(catHost, !cats.length ? h('p', { class: 'note' }, WORDS.pnlCatsNoneNoUp)
+          : h('div', { class: 'field' }, h('span', { class: 'field-label' }, WORDS.pnlBudsWhich),
+            cat ? h('div', { class: 'pk-bud-catnow' }, chipRow([cat.label], cat.label, function () {}),
+              h('button', { class: 'linkbtn', type: 'button', 'aria-label': 'Change the category', onclick: function () { st.cat = ''; st.how = ''; st.owe = false; drawCats(); draw(); } }, 'Change'))
+              : chipRow(cats.map(function (c) { return c.label; }), null, function (v) {
+                st.cat = (cats.filter(function (c) { return c.label === v; })[0] || {}).key || ''; st.how = ''; st.owe = false; drawCats(); draw();
+              })));
+      };
+      drawCats();
       return [
         h('h2', { class: 'sh-title' }, WORDS.pnlBudsAddExp),
         h('p', { class: 'sh-sub' }, WORDS.pnlBudsIn(b.name)),
-        cats.length ? h('div', { class: 'field' }, h('span', { class: 'field-label' }, WORDS.pnlBudsWhich),
-          chipRow(cats.map(function (c) { return c.label; }), (cats.filter(function (c) { return c.key === st.cat; })[0] || {}).label || null, function (v) {
-            st.cat = (cats.filter(function (c) { return c.label === v; })[0] || {}).key || ''; st.how = ''; draw();
-          })) : h('p', { class: 'note' }, WORDS.pnlCatsNoneNoUp),
+        catHost,
         box,
         h('div', { class: 'stack' }, back)
       ];
-    }, { label: WORDS.pnlBudsAddExp, cls: 'cat-sheet' });
+    }, { label: WORDS.pnlBudsAddExp, cls: 'cat-sheet rw-sheet' });
   }
   function budPick(id, o) {
     var t = getTour(id), list = G.pnlBudList(t), via = o.via || [], host = h('div', { class: 'field pk-bud-pick' }), st = { naming: false, made: null };
@@ -21412,7 +23431,7 @@
         kids.push(h('div', { class: 'pk-bud-namer' }, inp,
           h('button', { class: 'btn primary sm' + cfCls(true) + ' pk-bud-name-add', type: 'button', onclick: named }, 'Add'),
           h('button', { class: 'iconbtn sm', type: 'button', 'aria-label': 'Cancel', onclick: function () { st.naming = false; draw(); } }, icon('close', 16))));
-        setTimeout(function () { if (inp.isConnected) inp.focus(); }, 30);
+        setTimeout(function () { if (inp.isConnected) { try { inp.focus({ preventScroll: true }); } catch (e) {   } } }, 30);
       } else {
         var now = st.made ? st.made.name : o.now ? labelOf(o.now) : via.length === 1 ? labelOf(via[0].key) : via.length ? '' : WORDS.pnlBudsNo;
         kids.push(chipRow([WORDS.pnlBudsNo].concat(chips.map(function (c) { return c.label; }), st.made ? [st.made.name] : [], [WORDS.pnlBudsNew]), now, function (v) {
@@ -23249,7 +25268,7 @@
         confirmSheet({
           title: 'Sign out of Greenroom?',
           body: (who ? 'You’re signed in as ' + who + '. ' : '') +
-            'Your tours stay safe in your account.',
+            'Your tours stay safe in your account.' + mrSignOutWords(),
           action: 'Sign out',
           onConfirm: function () { toast('Signing out…'); B.signOut(); return false; }
         });
@@ -25358,7 +27377,7 @@
       return l.left > 0.004 ? { text: G.moneyCents(l.left) + ' to pay back', cls: ' over' } : { text: 'All paid back', cls: ' done' };
     }
     if (G.isDerived(l.key)) return { text: l.key === 'merchTips' ? 'Owed to the merch person' : l.key === 'commission' && G.num(l.offTop) > 0 ? money(l.offTop) + ' taken off the top' : '', cls: '' };
-    if (l.projected == null) return { text: cardBit(l).replace(/^ · /, ''), cls: '' };
+    if (l.projected == null && !(G.num(l.owed) > 0.004)) return { text: cardBit(l).replace(/^ · /, ''), cls: '' };
     if (l.left === 0) return { text: 'All spent' + cardBit(l), cls: ' done' };
     return { text: money(l.left) + ' left to pay' + cardBit(l), cls: '' };
   }
@@ -25897,6 +27916,12 @@
     var figured = function (k) { return G.isDerived(k) && !((off || studio) && k === 'commission'); };
     var edit = canEditTour(id) && !readOnly;
     var chev = edit ? h('span', { class: 'ex-chev', 'aria-hidden': 'true' }) : null;
+    var swipeKeys = null;
+    if (!off && !partsOnly && edit && G.isPnlBook(t) && canWrite()) {
+      swipeKeys = {};
+      G.pnlCatsNow(t).forEach(function (cc) { if (pnlCatEditOk(id, cc.key)) swipeKeys[cc.key] = true; });
+    }
+    var swiped = 0;
     var head = h('div', { class: 'row ex-head', 'aria-hidden': 'true' },
       h('span', null, ''), h('span', { class: 'ex-proj' }, 'Projected'), h('span', { class: 'ex-paid' }, 'Credit'),
       h('span', { class: 'ex-done' }, 'Debit'), h('span', { class: 'ex-cash' }, 'Cash'), chev ? chev.cloneNode() : null);
@@ -25944,7 +27969,7 @@
       ];
       if (!unset) keep('proj', 'Projected', G.num(l.projected), inner[1].children[0]);
       if (!edit) return h('div', { class: 'row ex-row ex-fit' }, inner);
-      return h('button', {
+      var rowBtn = h('button', {
         class: 'row rowbtn ex-row ex-fit', type: 'button',
         onclick: function () {
           if (l.key === 'crew' || l.key === 'members') openCrewSheet(id, true);
@@ -25954,6 +27979,12 @@
           else openCategorySheet(id, l.key);
         }
       }, inner);
+      if (!swipeKeys || !swipeKeys[l.key]) return rowBtn;
+      swiped += 1;
+      return swipeRow(rowBtn, [
+        h('button', { class: 'sw-edit', type: 'button', 'aria-label': 'Edit ' + l.label, onclick: function () { openPnlCatRename(id, l.key); } }, icon('edit', 16), 'Edit'),
+        h('button', { class: 'sw-undo', type: 'button', 'aria-label': 'Delete ' + l.label, onclick: function () { pnlCatDeleteAsk(id, l.key); } }, icon('trash', 16), 'Delete')
+      ], { noTapOpen: true, tapOnlyCloses: true });
     };
     var owedOn = function (l) {
       return figured(l.key) ? 0 : Math.max(0, l.creditOut != null ? l.creditOut : l.paid - paidPart(t, l.key));
@@ -26046,6 +28077,7 @@
     return [
       off && readOnly ? expenseSummary(c, expParts, off) : null,
       baselineOffer,
+      swiped ? h('p', { class: 'note sw-hint' }, WORDS.pnlCatsSwipe) : null,
       h('div', { class: 'ledger' }, rows)
     ];
   }
@@ -26142,8 +28174,10 @@
     var typed = G.num((G.normExpenses(t && t.expenses)[key] || {}).paid);
     if (typed > 0) out.push({ date: '', label: 'Paid (typed in)', amount: typed, detail: 'One total, typed in by hand',
       source: 'MANUAL', typed: true, counts: true });
+    var pnl = G.isPnlBook(t);
+    var place = function (r) { return r.date ? 1 : pnl && (r.chargeId || r.cashId) ? 2 : 0; };
     return out.sort(function (a, b) {
-      var ua = a.date ? 1 : 0, ub = b.date ? 1 : 0;
+      var ua = place(a), ub = place(b);
       if (ua !== ub) return ua - ub;
       return String(b.date).localeCompare(String(a.date)) || (G.num(b.createdAt) - G.num(a.createdAt));
     });
@@ -26363,9 +28397,13 @@
       category: ch && typeof ch.category === 'string' ? ch.category : cl && typeof cl.category === 'string' ? cl.category : key
     };
     var filed = f.category;
+    var pnl = G.isPnlBook(t);
     var budRef = !r.typed && G.isPnlBook(t) ? (ch ? 'c:' + r.chargeId : 'k:' + r.cashId) : '';
     var budNow = budRef ? G.pnlBudEntry(t, ch ? 'c' : 'k', ch ? r.chargeId : r.cashId) : null;
     if (budNow) { f.bud = budNow.own; f.budMade = null; f.budPicked = false; }
+    var people = G.isPeopleCat(t, f.category);
+    var canOwe = pnl && !r.typed && !people && (!!cl || !!(ch && ch.manual));
+    f.owe = false;
     openSheet(function () {
       var sel = h('select', { class: 'input', 'aria-label': 'Category', onchange: function (e) { f.category = e.target.value; } },
         cats.map(function (c) { return h('option', { value: c.key }, c.label); }));
@@ -26374,19 +28412,34 @@
         e.preventDefault();
         blurActive();
         if (!(f.amount > 0)) { toast('Enter how much it was'); return; }
+        if (canOwe && f.owe) {
+          var rr = G.pnlOwedFromEntry(getTour(id) || t, ch ? 'c' : 'k', ch ? r.chargeId : r.cashId, { id: newId(), category: f.category, amount: f.amount,
+            what: f.what.trim() || String(ch ? ch.merchant || '' : cl.label || cl.note || ''), by: myName() || '', at: Date.now(),
+            bud: f.budPicked && !f.budMade ? f.bud : undefined, made: f.budPicked && f.budMade ? f.budMade.name : null, madeId: newId() });
+          if (!rr.patch) { toast(rr.why); return; }
+          if (!(await catOnBook(id, f.category, true))) return;
+          if (await api.update(id, rr.patch)) {
+            delete S.drafts['exp:' + id];
+            toast(WORDS.pnlOwedSaved(money(f.amount), catName(t, f.category)));
+            render(true);
+            again();
+          }
+          return;
+        }
         var patch;
         if (r.typed) { patch = { expenses: {} }; patch.expenses[key] = { paid: f.amount }; }
         else {
-          if (!G.parseDay(f.date)) { toast('Pick the day'); return; }
+          var day = G.parseDay(f.date) ? f.date : '';
+          if (!day && !pnl) { toast('Pick the day'); return; }
           if (ch) {
             patch = { charges: {} };
-            patch.charges[r.chargeId] = { amount: f.amount, merchant: f.what.trim() || ch.merchant || 'Charge', date: f.date,
+            patch.charges[r.chargeId] = { amount: f.amount, merchant: f.what.trim() || ch.merchant || 'Charge', date: day || null,
               category: f.category, paid: f.how !== 'spent', cash: f.how === 'cash' };
             if (f.category !== 'crew' && ch.crewId) patch.charges[r.chargeId].crewId = null;
             splitAfterEdit(ch, f, patch.charges[r.chargeId]);
           } else {
             patch = { cashLog: {} };
-            patch.cashLog[r.cashId] = { amount: f.amount, label: f.what.trim() || cl.label || 'Cash', date: f.date, category: f.category };
+            patch.cashLog[r.cashId] = { amount: f.amount, label: f.what.trim() || cl.label || 'Cash', date: day || null, category: f.category };
             if (f.category !== 'crew' && cl.crewId) patch.cashLog[r.cashId].crewId = null;
             splitAfterEdit(cl, f, patch.cashLog[r.cashId]);
           }
@@ -26404,20 +28457,25 @@
           if (f.category !== filed && !ret) { closeSheet(); } else again();
         }
       };
+      var howSeg = ch ? segmented(['Credit', 'Debit', 'Cash'], ['spent', 'paid', 'cash'].indexOf(f.how), function (i) {
+        f.how = ['spent', 'paid', 'cash'][i];
+      }, 'Credit, debit or cash') : null;
+      var dayField = r.typed ? null : field(pnl ? 'Day (optional)' : 'Day', h('input', { class: 'input', type: 'date', value: f.date, 'aria-label': pnl ? 'Day (optional)' : 'Day',
+        onchange: function (e) { f.date = e.target.value; } }));
+      var oweShow = function () { if (howSeg) howSeg.hidden = !!f.owe; if (dayField) dayField.hidden = !!f.owe; };
       return [
         h('h2', { class: 'sh-title' }, 'Edit this entry'),
         h('p', { class: 'sh-sub' }, r.typed ? 'A total typed in by hand.' : cl ? 'From the merch cash log.' : 'Logged by hand.'),
+        pnl && !r.typed && people ? h('p', { class: 'note' }, WORDS.pnlOwedPeople) : null,
         h('form', { class: 'sh-form', novalidate: true, onsubmit: submit },
-          ch ? segmented(['Credit', 'Debit', 'Cash'], ['spent', 'paid', 'cash'].indexOf(f.how), function (i) {
-            f.how = ['spent', 'paid', 'cash'][i];
-          }, 'Credit, debit or cash') : null,
+          canOwe ? h('div', { class: 'field' }, segmented([WORDS.pnlPaid, WORDS.pnlOwed], f.owe ? 1 : 0, function (i) { f.owe = i === 1; oweShow(); }, WORDS.pnlOwedAsk)) : null,
+          howSeg,
           field('How much', moneyInput({ id: 'me-amt', value: f.amount, label: 'Amount', nextId: r.typed ? null : 'me-what',
             onValue: function (v) { f.amount = v; } })),
           r.typed ? null : [
             field('Expense details', h('input', { class: 'input', type: 'text', id: 'me-what', maxlength: 60, autocomplete: 'off',
               value: f.what, oninput: function (e) { f.what = e.target.value; } })),
-            field('Day', h('input', { class: 'input', type: 'date', value: f.date, 'aria-label': 'Day',
-              onchange: function (e) { f.date = e.target.value; } })),
+            dayField,
             field('Category', h('div', { class: 'sel-wrap' }, sel, icon('chevron', 16)))],
           budNow ? budPick(id, { now: budNow.own, via: budNow.via, edit: true, onPick: function (k, made) { f.bud = k; f.budMade = made || null; f.budPicked = true; } }) : null,
           h('div', { class: 'stack' },
@@ -26520,7 +28578,18 @@
                 setTimeout(function () { reopen(); }, 700);
               } }, icon('back', 16), 'Undo')])));
       };
-      var body = !list.length ? (away.length ? null : emptyState('Nothing logged yet', 'Charges from your linked cards, statements you import and payments you log by hand all show up here.'))
+      var owedHere = G.isPnlBook(whole) && !person && !only ? G.pnlOwedOn(whole, key) : [];
+      var owedTags = owedHere.length ? G.pnlBudTags(whole) : {}, owedNames = {};
+      if (owedHere.length) G.pnlBudList(whole).forEach(function (b) { owedNames[b.key] = b.name; });
+      var owedRow = function (x) {
+        var bn = owedTags['o:' + x.id] ? owedNames[owedTags['o:' + x.id]] : '';
+        return h('button', { class: 'row rowbtn', type: 'button', 'aria-label': [x.what || cat.label, WORDS.pnlOwed, money(x.amount)].join(', '),
+          onclick: function () { openPnlOwed(id, x.id, function () { reopen(); }); } },
+          h('div', { class: 'row-label' }, x.what || cat.label, h('span', { class: 'hint' }, [WORDS.pnlOwed, bn ? WORDS.pnlBudsIn(bn) : ''].filter(Boolean).join(' \u00b7 '))),
+          h('span', { class: 'amt num' }, money(x.amount)), icon('chevron', 18));
+      };
+      var owedSum = owedHere.reduce(function (n, x) { return n + x.amount; }, 0);
+      var body = !list.length ? (away.length || owedHere.length ? null : emptyState('Nothing logged yet', 'Charges from your linked cards, statements you import and payments you log by hand all show up here.'))
         : (groups && !only) ? h('div', { class: 'ledger logged' }, groups.map(function (g) {
             return [h('button', { class: 'row head lg-head', type: 'button', 'aria-label': g.label + ', ' + money(g.total) + '. Show only this group.',
                 onclick: function () { reopen(g.key); } },
@@ -26530,7 +28599,9 @@
         : h('div', { class: 'ledger logged' }, list.map(entryNode));
       return [
         h('h2', { class: 'sh-title' }, person ? 'Logged transactions' : only ? only.label : 'Logged Card Transactions'),
-        h('p', { class: 'sh-sub' }, (person ? (person.name || 'This person') : cat.label) + ' \u00b7 ' + entryCount(list.length) + ' \u00b7 ' + money(total)),
+        h('p', { class: 'sh-sub' }, (person ? (person.name || 'This person') : cat.label) + ' \u00b7 ' +
+          [list.length || !owedHere.length ? entryCount(list.length) + ' \u00b7 ' + money(total) : '', owedHere.length ? owedHere.length + ' ' + WORDS.pnlOwed.toLowerCase() : '']
+            .filter(Boolean).join(' \u00b7 ')),
         sheetLeftOut(id, key, person ? person.id : null, away),
         loose ? h('p', { class: 'note' }, plural(loose, 'entry').replace('entrys', 'entries') + ' under Crew ' + (loose === 1 ? 'isn\u2019t' : 'aren\u2019t') + ' anyone\u2019s yet.' +
           (anyWho ? ' Swipe one left and tap Who.' : '')) : null,
@@ -26544,6 +28615,7 @@
           : anyMove ? h('p', { class: 'note sw-hint' }, 'Yours, not the band’s? Swipe it left and tap Move to MY PAY.' + pastSay + budSay)
           : anyPast || anyBud ? h('p', { class: 'note sw-hint' }, (pastSay + budSay).trim()) : null,
         body,
+        owedHere.length ? [h('h3', { class: 'sh-h3' }, WORDS.pnlOwed + ' \u00b7 ' + money(owedSum)), h('div', { class: 'ledger logged' }, owedHere.map(owedRow))] : null,
         away.length ? [h('h3', { class: 'sh-h3' }, 'During a tour \u00b7 not counted here'),
           h('div', { class: 'ledger logged' }, away.map(entryNode))] : null,
         h('div', { class: 'stack' },
@@ -27145,7 +29217,7 @@
     ids.forEach(function (k) { pe.crewSplit[k] = out[k] / 100; });
   }
   function loggedButton(id, key, back) {
-    var n = categoryEntries(sheetBook(id), key).length;
+    var n = categoryEntries(sheetBook(id), key).length + G.pnlOwedOn(getTour(id), key).length;
     return h('button', { class: 'btn quiet block', type: 'button', style: 'margin-top:14px',
       onclick: function () { openLoggedSheet(id, key, back); } },
       icon('card', 18), 'Logged Card Transactions' + (n ? ' (' + n + ')' : ''));
@@ -27156,8 +29228,11 @@
     var kindWord = cash ? 'cash' : paid ? 'debit' : 'credit';
     var word = paid ? 'paid' : 'charged';
     var t0 = getTour(id);
-    var asks = cash && !(t0 && t0.kind === 'offtour');
-    var f = { amount: 0, date: G.tourToday(), what: '', merch: null, crewId: null };
+    var asks = cash && !(t0 && t0.kind === 'offtour') && !G.pnlNoMerchLog(t0);
+    var pnl = G.isPnlBook(t0);
+    var carry = o && o.carry && typeof o.carry === 'object' ? o.carry : null;
+    var f = { amount: carry ? G.num(carry.amount) : 0, date: carry && carry.date ? String(carry.date) : pnl ? '' : G.tourToday(),
+      what: carry ? String(carry.what || '') : '', merch: null, crewId: null };
     var yes = null, no = null;
     var list = o && o.list && o.list === key && key !== 'crew' && G.isPeopleCat(t0, key) ? key : null, asksWho = key === 'crew' || !!list;
     var whoHost = h('div');
@@ -27171,7 +29246,8 @@
       e.preventDefault();
       blurActive();
       if (!(f.amount > 0)) { toast('Enter how much was ' + word); return; }
-      if (!G.parseDay(f.date)) { toast('Pick the day it was ' + word); return; }
+      var day = G.parseDay(f.date) ? f.date : '';
+      if (!day && !pnl) { toast('Pick the day it was ' + word); return; }
       if (asks && f.merch == null) { toast('Deduct from the Merch Cash Log? Tick Yes or No'); return; }
       var who = asksWho && f.crewId ? crewPick(id, null, f.crewId) : null, whoId = null;
       if (who) {
@@ -27182,10 +29258,10 @@
       var patch, lid = newId();
       if (asks && f.merch) {
         patch = { cashLog: {} };
-        patch.cashLog[lid] = Object.assign({ date: f.date, amount: f.amount, label: named, category: key, createdAt: Date.now() }, whoId ? { crewId: whoId } : {});
+        patch.cashLog[lid] = Object.assign(day ? { date: day } : {}, { amount: f.amount, label: named, category: key, createdAt: Date.now() }, whoId ? { crewId: whoId } : {});
       } else {
         patch = { charges: {} };
-        patch.charges[lid] = Object.assign({ date: f.date, merchant: named, amount: f.amount, category: key,
+        patch.charges[lid] = Object.assign(day ? { date: day } : {}, { merchant: named, amount: f.amount, category: key,
           accounted: false, manual: true, paid: paid, cash: cash || undefined, createdAt: Date.now() }, whoId ? { crewId: whoId } : {}, offByOf(id));
       }
       var bud = o && o.bud ? G.pnlBudList(getTour(id)).filter(function (b) { return b.key === o.bud; })[0] : null;
@@ -27211,19 +29287,173 @@
       h('p', { class: 'note' }, cash ? 'Cash: paid in cash. The money\u2019s already gone.'
         : paid ? 'Debit: a debit card or a check. The money\u2019s already gone.'
         : 'Credit: put on a credit card. It counts now and stays owed until the card is paid off.'),
-      field('How much was ' + word, moneyInput({ id: 'log-paid', value: 0, label: label + ' ' + word, nextId: 'log-what',
-        onValue: function (v) { f.amount = v; } })),
+      pnl && asksWho ? h('p', { class: 'note' }, WORDS.pnlOwedPeople) : null,
+      field('How much was ' + word, moneyInput({ id: 'log-paid', value: f.amount, label: label + ' ' + word, nextId: 'log-what',
+        onValue: function (v) { f.amount = v; if (carry) carry.amount = v; } })),
       asksWho ? whoHost : null,
-      field('Expense details', h('input', { class: 'input', type: 'text', id: 'log-what', maxlength: 60, autocomplete: 'off',
-        placeholder: 'Optional, e.g. per diems', oninput: function (e) { f.what = e.target.value; } })),
-      field('Day it was ' + word, h('input', { class: 'input', type: 'date', value: f.date, 'aria-label': 'Day it was ' + word,
-        onchange: function (e) { f.date = e.target.value; } })),
+      field('Expense details', h('input', { class: 'input', type: 'text', id: 'log-what', maxlength: 60, autocomplete: 'off', value: f.what,
+        placeholder: pnl ? WORDS.pnlOwedWhat : 'Optional, e.g. per diems', oninput: function (e) { f.what = e.target.value; if (carry) carry.what = f.what; } })),
+      field(pnl ? WORDS.pnlDayOptional(word) : 'Day it was ' + word, h('input', { class: 'input', type: 'date', value: f.date, 'aria-label': pnl ? WORDS.pnlDayOptional(word) : 'Day it was ' + word,
+        onchange: function (e) { f.date = e.target.value; if (carry) carry.date = f.date; } })),
       asks ? h('fieldset', { class: 'yn-ask' },
         h('legend', null, 'Deduct from Merch Cash Log?'),
         h('label', { class: 'yn-opt' }, yes, h('span', null, 'Yes')),
         h('label', { class: 'yn-opt' }, no, h('span', null, 'No'))) : null,
       h('div', { class: 'stack' },
         h('button', { class: 'btn primary block', type: 'submit' }, 'Log it as ' + kindWord)));
+  }
+  function owedForm(id, key, label, after, o) {
+    var carry = o && o.carry && typeof o.carry === 'object' ? o.carry : null;
+    var f = { amount: carry ? G.num(carry.amount) : 0, what: carry ? String(carry.what || '') : '', bud: '', made: null }, busy = false, fixed = o && o.bud ? o.bud : '';
+    var submit = async function (e) {
+      e.preventDefault();
+      blurActive();
+      if (busy) return;
+      var now = getTour(id);
+      var r = G.pnlOwedNew(now, { id: newId(), category: key, amount: f.amount, what: f.what, by: myName() || '', at: Date.now(),
+        bud: fixed || f.bud, made: !fixed && f.made ? f.made.name : null, madeId: newId() });
+      if (!r.patch) { toast(r.why); return; }
+      if (!(await catOnBook(id, key, true))) return;
+      busy = true;
+      var ok = await api.update(id, r.patch);
+      busy = false;
+      if (!ok) return;
+      delete S.drafts['exp:' + id];
+      var after1 = G.pnlMerge(now, r.patch), b = G.pnlBudEntry(after1, 'o', r.id).own, bn = b ? (G.pnlBudList(after1).filter(function (x) { return x.key === b; })[0] || {}).name : '';
+      toast(WORDS.pnlOwedSaved(money(G.num(f.amount)), label) + (bn ? ' · in ' + bn : ''));
+      render(true);
+      if (after) after(); else closeSheet();
+    };
+    return h('form', { class: 'sh-form', onsubmit: submit, novalidate: true },
+      h('p', { class: 'note' }, WORDS.pnlOwedNote),
+      field('How much is owed', moneyInput({ id: 'owe-amt', value: f.amount, label: label + ' not paid yet', nextId: 'owe-what',
+        onValue: function (v) { f.amount = v; if (carry) carry.amount = v; } })),
+      field('Expense details', h('input', { class: 'input', type: 'text', id: 'owe-what', maxlength: G.PNL_OWED_WHAT_MAX, autocomplete: 'off', value: f.what,
+        placeholder: WORDS.pnlOwedWhat, 'aria-label': 'Expense details', oninput: function (e) { f.what = e.target.value; if (carry) carry.what = f.what; } })),
+      fixed ? null : budPick(id, { now: '', via: [], edit: true, onPick: function (k, made) { f.bud = k; f.made = made || null; } }),
+      h('div', { class: 'stack' }, h('button', { class: 'btn primary block', type: 'submit' }, WORDS.pnlOwedSave)));
+  }
+  function openPnlOwed(id, oid, back, keep) {
+    var st = keep || { how: '', date: '', merch: null }, busy = false;
+    var again = function () { openPnlOwed(id, oid, back, st); };
+    openSheet(function (panel) {
+      panel.classList.add('pnl-sheet', 'pk-sheet');
+      var t = getTour(id), x = G.isPnlBook(t) && canSeeMoney(id) ? G.pnlOwedOne(t, oid) : null;
+      var done = h('button', { class: 'btn ghost block' + cfCls(false), type: 'button', onclick: function () { if (back) back(); else closeSheet(); } }, back ? 'Back' : 'Close');
+      if (!x) return [h('h2', { class: 'sh-title' }, WORDS.pnlOwed), h('p', { class: 'note' }, WORDS.pnlOwedGone), h('div', { class: 'stack' }, done)];
+      var edit = canEditTour(id) && canWrite(), label = catName(t, x.category), name = x.what || label, ref = 'o:' + oid;
+      var pickBud = async function (k, made) {
+        if (busy) return;
+        var now = getTour(id) || t, r = made ? G.pnlBudNewTag(now, made.name, null, newId(), ref) : G.pnlBudTag(now, ref, k);
+        if (r && !r.patch) { toast(r.why); again(); return; }
+        if (!r) return;
+        busy = true;
+        var ok = await api.update(id, r.patch);
+        busy = false;
+        if (ok) {
+          var after = G.pnlMerge(now, r.patch), own = G.pnlBudEntry(after, 'o', oid).own;
+          toast(own ? WORDS.pnlBudsIn((G.pnlBudList(after).filter(function (b) { return b.key === own; })[0] || {}).name) : WORDS.pnlBudsOutSaid);
+          render(true);
+        }
+        again();
+      };
+      var mark = null, del = null, fix = null;
+      if (edit) {
+        var noLog = G.pnlNoMerchLog(t);
+        var choose = function (v) { st.merch = v; yes.checked = v === true; no.checked = v === false; };
+        var yes = h('input', { type: 'checkbox', class: 'rv-check', checked: st.merch === true, onchange: function (e) { choose(e.target.checked ? true : null); } });
+        var no = h('input', { type: 'checkbox', class: 'rv-check', checked: st.merch === false, onchange: function (e) { choose(e.target.checked ? false : null); } });
+        var cashAsk = h('fieldset', { class: 'yn-ask', hidden: st.how !== 'cash' || noLog },
+          h('legend', null, 'Deduct from Merch Cash Log?'),
+          h('label', { class: 'yn-opt' }, yes, h('span', null, 'Yes')),
+          h('label', { class: 'yn-opt' }, no, h('span', null, 'No')));
+        mark = h('form', { class: 'sh-form', novalidate: true, onsubmit: async function (e) {
+          e.preventDefault();
+          blurActive();
+          if (busy) return;
+          if (!st.how) { toast('Pick credit, debit or cash'); return; }
+          var asks = st.how === 'cash' && !noLog;
+          if (asks && st.merch == null) { toast('Deduct from the Merch Cash Log? Tick Yes or No'); return; }
+          var r = G.pnlOwedPaid(getTour(id) || t, oid, { how: st.how, date: st.date, merch: asks && st.merch === true, label: label, newId: newId(), now: Date.now() });
+          if (!r.patch) { toast(r.why); return; }
+          busy = true;
+          var ok = await api.update(id, r.patch);
+          busy = false;
+          if (!ok) return;
+          delete S.drafts['exp:' + id];
+          toast(WORDS.pnlOwedMarked(money(x.amount), st.how === 'cash' ? 'cash' : st.how === 'paid' ? 'debit' : 'credit') + (r.kind === 'k' ? ' · taken from the merch cash log' : ''));
+          render(true);
+          if (back) back(); else closeSheet();
+        } },
+          h('div', { class: 'field' }, h('span', { class: 'field-label' }, WORDS.pnlOwedMarkSub),
+            segmented(['Credit', 'Debit', 'Cash'], ['spent', 'paid', 'cash'].indexOf(st.how), function (i) {
+              st.how = ['spent', 'paid', 'cash'][i]; cashAsk.hidden = st.how !== 'cash' || noLog;
+            }, WORDS.pnlOwedMarkSub)),
+          field(WORDS.pnlDayOptional('paid'), h('input', { class: 'input', type: 'date', value: st.date, 'aria-label': WORDS.pnlDayOptional('paid'),
+            onchange: function (e) { st.date = e.target.value; } })),
+          cashAsk,
+          h('div', { class: 'stack' }, h('button', { class: 'btn primary block', type: 'submit' }, WORDS.pnlOwedMark)));
+        fix = h('button', { class: 'btn ghost block' + cfCls(false), type: 'button', onclick: function () { openPnlOwedEdit(id, oid, again); } }, WORDS.pnlOwedEdit);
+        del = h('button', { class: 'btn block danger', type: 'button', onclick: function () {
+          confirmSheet({ title: 'Delete this?', body: WORDS.pnlOwedDelBody(money(x.amount), label), action: 'Delete', danger: true,
+            onConfirm: async function () {
+              var d = G.pnlOwedDelete(getTour(id) || t, oid);
+              if (!d) return true;
+              var ok = await api.update(id, d.patch);
+              if (ok) { delete S.drafts['exp:' + id]; toast('Deleted'); if (back) setTimeout(back, 250); }
+              return ok;
+            } });
+        } }, 'Delete');
+      }
+      var sub = [x.what ? label : '', x.by ? 'added by ' + x.by : ''].filter(Boolean).join(' · ');
+      return [
+        h('h2', { class: 'sh-title' }, name),
+        sub ? h('p', { class: 'sh-sub' }, sub) : null,
+        h('div', { class: 'ledger' }, h('div', { class: 'row' }, h('div', { class: 'row-label' }, WORDS.pnlOwed),
+          h('span', { class: 'amt num' }, money(x.amount)))),
+        budPick(id, { now: G.pnlBudEntry(t, 'o', oid).own, via: [], edit: edit, onPick: pickBud }),
+        mark,
+        h('div', { class: 'stack' }, fix, del, done)
+      ];
+    }, { label: WORDS.pnlOwed, cls: 'cat-sheet' });
+  }
+  function openPnlOwedEdit(id, oid, back) {
+    var t0 = getTour(id), x0 = G.isPnlBook(t0) && canSeeMoney(id) ? G.pnlOwedOne(t0, oid) : null;
+    var home = function () { if (back) back(); else closeSheet(); };
+    if (!x0 || !canEditTour(id) || !canWrite()) { toast(WORDS.pnlOwedGone); home(); return; }
+    var f = { amount: x0.amount, what: x0.what }, busy = false;
+    var save = async function (e) {
+      if (e && e.preventDefault) e.preventDefault();
+      blurActive();
+      if (busy) return;
+      var r = G.pnlOwedEdit(getTour(id) || t0, oid, f);
+      if (!r.patch) { toast(r.why); return; }
+      if (!Object.keys(r.patch).length) { home(); return; }
+      busy = true;
+      var ok = await api.update(id, r.patch);
+      busy = false;
+      if (!ok) return;
+      delete S.drafts['exp:' + id];
+      toast('Saved');
+      render(true);
+      home();
+    };
+    openSheet(function (panel) {
+      panel.classList.add('pnl-sheet', 'pk-sheet');
+      var label = catName(getTour(id) || t0, x0.category);
+      return [
+        h('h2', { class: 'sh-title' }, 'Edit this entry'),
+        h('p', { class: 'sh-sub' }, label + ' · ' + WORDS.pnlOwed),
+        h('form', { class: 'sh-form', novalidate: true, onsubmit: save },
+          field('How much is owed', moneyInput({ id: 'owe-fix-amt', value: f.amount, label: label + ' not paid yet', nextId: 'owe-fix-what',
+            onValue: function (v) { f.amount = v; } })),
+          field('Expense details', h('input', { class: 'input', type: 'text', id: 'owe-fix-what', maxlength: G.PNL_OWED_WHAT_MAX, autocomplete: 'off',
+            value: f.what, placeholder: WORDS.pnlOwedWhat, 'aria-label': 'Expense details', oninput: function (e) { f.what = e.target.value; } })),
+          h('div', { class: 'stack' },
+            h('button', { class: 'btn primary block', type: 'submit' }, 'Save'),
+            h('button', { class: 'btn ghost block' + cfCls(false), type: 'button', onclick: home }, 'Cancel')))
+      ];
+    }, { label: 'Edit this entry', cls: 'cat-sheet rw-sheet' });
   }
   function canMarkDone(id) { return canWrite() && canEditTour(id) && bookLead(id); }
   async function markDone(id, key, on) {
@@ -27243,20 +29473,22 @@
         } }, 'Not done paying' + name + ' (count the plan again)');
     }
     var plan = G.num(line.projected), paid = G.num(line.paid);
-    if (line.projected == null || !(plan > paid + 0.004)) return null;
+    var owed = G.num(line.owed) > 0.004 ? G.num(line.owed) : 0, counts = Math.round((paid + owed) * 100) / 100;
+    if (line.projected == null || !(plan > counts + 0.004)) return null;
     return h('button', { class: 'btn quiet block', type: 'button', style: 'margin-top:10px',
       onclick: function () {
         confirmSheet({ title: 'Done paying' + name + '?',
-          body: 'It counts the ' + money(paid) + ' paid instead of the ' + money(plan) + ' planned. The plan is kept, and you can undo this here.',
+          body: 'It counts the ' + money(paid) + ' paid' + (owed ? ' and the ' + money(owed) + ' not paid yet' : '') + ' instead of the ' +
+            money(plan) + ' planned. The plan is kept, and you can undo this here.',
           action: 'Done paying',
           onConfirm: async function () {
             var ok = await markDone(id, key, true);
-            if (ok) { toast('Done paying' + name + ': counts ' + money(paid)); setTimeout(again, 260); }
+            if (ok) { toast('Done paying' + name + ': counts ' + money(counts)); setTimeout(again, 260); }
             return ok;
           } });
       } }, 'Done paying' + name);
   }
-  function openCategorySheet(id, key) {
+  function openCategorySheet(id, key, o) {
     var t = sheetBook(id);
     var cat = typedCats(t).filter(function (c) { return c.key === key; })[0] || { key: key, label: catName(t, key) };
     var rec = G.normExpenses(t && t.expenses)[key] || { projected: null, paid: 0 };
@@ -27264,20 +29496,27 @@
     var f = { projected: rec.projected };
     var kind = null;
     var pmode = 'add';
+    var pnlAdd = G.isPnlBook(t) && !!(o && o.add);
+    var toCat = function () { openCategorySheet(id, key); };
+    if (pnlAdd) kind = o.add;
+    var owe = false;
+    var carry = { amount: 0, what: '', date: '' };
     openSheet(function () {
       var readout = h('div', { class: 'preview' });
       var paid = G.num(line.paid);
       var settled = paidPart(t, key);
       var p = rec.projected;
+      var owed = G.num(line.owed);
       fillEl(readout, [
         h('div', null, h('span', null, 'Projected'), h('strong', { class: 'num' }, p == null ? 'Not set' : money(p))),
         h('div', null, h('span', null, 'Spent so far'), h('strong', { class: 'num' }, money(paid))),
         paid > 0 ? h('div', null, h('span', null, '\u21b3 Credit'), h('strong', { class: 'num' }, money(paid - settled))) : null,
         paid > 0 ? h('div', null, h('span', null, '\u21b3 Debit'), h('strong', { class: 'num' }, money(debitPart(t, key)))) : null,
         cashPart(t, key) > 0 ? h('div', null, h('span', null, '\u21b3 Cash'), h('strong', { class: 'num' }, money(cashPart(t, key)))) : null,
-        p == null ? h('div', null, h('span', null, 'Counts as'), h('strong', { class: 'num' }, money(paid)))
-          : paid > p ? h('div', null, h('span', null, 'Over by'), h('strong', { class: 'num neg' }, money(paid - p)))
-          : line.done ? h('div', null, h('span', null, 'Done paying \u00b7 counts as'), h('strong', { class: 'num' }, money(paid)))
+        owed > 0 ? h('div', null, h('span', null, WORDS.pnlOwed), h('strong', { class: 'num' }, money(owed))) : null,
+        p == null ? h('div', null, h('span', null, 'Counts as'), h('strong', { class: 'num' }, money(paid + owed)))
+          : paid + owed > p ? h('div', null, h('span', null, 'Over by'), h('strong', { class: 'num neg' }, money(paid + owed - p)))
+          : line.done ? h('div', null, h('span', null, 'Done paying \u00b7 counts as'), h('strong', { class: 'num' }, money(paid + owed)))
           : h('div', null, h('span', null, 'Left to pay'), h('strong', { class: 'num' }, money(p - paid)))]);
       var box = h('div');
       function draw() {
@@ -27310,7 +29549,7 @@
               if (pmode === 'add' && !(amt > 0)) { toast('Type how much to add'); return; }
               var nowRec = G.normExpenses((getTour(id) || t || {}).expenses)[key];
               var hadNow = nowRec && nowRec.projected != null ? G.num(nowRec.projected) : 0;
-              if (pmode === 'set' && had > 0 && amt === had) { closeSheet(); return; }
+              if (pmode === 'set' && had > 0 && amt === had) { if (pnlAdd) toCat(); else closeSheet(); return; }
               var next = pmode === 'add' ? Math.round((hadNow + amt) * 100) / 100 : (amt > 0 ? amt : null);
               var patch = { expenses: {}, projLog: {} };
               patch.expenses[key] = { projected: next };
@@ -27319,10 +29558,11 @@
               if (!(await catOnBook(id, key, true))) return;
               if (await api.update(id, patch)) {
                 delete S.drafts['exp:' + id];
-                closeSheet();
+                if (!pnlAdd) closeSheet();
                 toast(pmode === 'add' ? '+' + money(amt) + ' \u00b7 ' + cat.label + ' now projected at ' + money(next)
                   : cat.label + ' projection ' + (next ? 'set to ' + money(next) : 'cleared'));
                 render(true);
+                if (pnlAdd) toCat();
               }
             } },
               field(pmode === 'add' ? 'Amount to add' : 'New total', input,
@@ -27339,29 +29579,45 @@
                     h('span', { class: 'hint' }, [when, x.by].filter(Boolean).join(' \u00b7 '))),
                   h('span', { class: 'amt num' }, x.total ? money(G.num(x.total)) : '\u2014'));
               }))) : null]);
+        } else if (pnlAdd && (kind === 'spent' || kind === 'paid' || kind === 'cash')) {
+          fillEl(box, [h('div', { class: 'field' }, segmented([WORDS.pnlPaid, WORDS.pnlOwed], owe ? 1 : 0, function (i) { owe = i === 1; draw(); }, WORDS.pnlOwedAsk)),
+            owe ? owedForm(id, key, cat.label, toCat, { carry: carry })
+              : [h('div', { class: 'field' }, h('span', { class: 'field-label' }, WORDS.pnlBudsHow), segmented(['Credit', 'Debit', 'Cash'], ['spent', 'paid', 'cash'].indexOf(kind), function (i) {
+                kind = ['spent', 'paid', 'cash'][i]; draw();
+              }, 'Credit, debit or cash')), paidLogForm(id, key, cat.label, toCat, kind, { carry: carry })]]);
         } else if (kind === 'spent' || kind === 'paid' || kind === 'cash') {
           box.replaceChildren(paidLogForm(id, key, cat.label, null, kind));
         } else box.replaceChildren();
       }
       draw();
+      if (pnlAdd) return [
+        h('h2', { class: 'sh-title' }, cat.label),
+        h('p', { class: 'sh-sub' }, kind === 'projected' ? 'Projection' : 'Add an expense'),
+        box,
+        h('div', { class: 'stack' }, h('button', { class: 'btn ghost block' + cfCls(false), type: 'button', onclick: toCat }, 'Back'))
+      ];
       return [
         h('h2', { class: 'sh-title' }, cat.label),
         cat.note ? h('p', { class: 'sh-sub' }, cat.note) : null,
-        catRenameOk(id, key) ? h('button', { class: 'linkbtn', type: 'button',
+        G.isPnlBook(t) ? (pnlCatEditOk(id, key) ? h('button', { class: 'linkbtn', type: 'button',
+          onclick: function () { openPnlCatRename(id, key, toCat); } }, 'Rename') : null)
+        : catRenameOk(id, key) ? h('button', { class: 'linkbtn', type: 'button',
           onclick: function () { closeSheet(); setTimeout(function () { openCatRename(id, key); }, 320); } }, 'Rename') : null,
         readout,
         sheetLeftOut(id, key),
         doneButton(id, key, line, function () { openCategorySheet(id, key); }),
         canWrite() ? [
           segmented(['Projection', 'Credit', 'Debit', 'Cash'], -1, function (i) {
-            kind = ['projected', 'spent', 'paid', 'cash'][i]; draw();
+            kind = ['projected', 'spent', 'paid', 'cash'][i];
+            if (G.isPnlBook(t)) { openCategorySheet(id, key, { add: kind }); return; }
+            draw();
             requestAnimationFrame(function () { try { box.scrollIntoView({ block: 'nearest', behavior: 'smooth' }); } catch (e) {   } });
           }, 'Projection, credit, debit or cash'),
           box
         ] : null,
         loggedButton(id, key, function () { openCategorySheet(id, key); })
       ];
-    }, { label: cat.label, cls: 'cat-sheet' });
+    }, { label: cat.label, cls: 'cat-sheet' + (pnlAdd ? ' rw-sheet' : '') });
   }
   function catRenameOk(id, key) {
     return typeof key === 'string' && key.indexOf('x-') === 0 && canWrite() && canEditTour(id);
@@ -28097,7 +30353,8 @@
     var a = runStart(t), b = G.tourEnd(t);
     var today = G.tourToday();
     var year = String((a || today).slice(0, 4));
-    var pays = crewPayments(t, p).filter(function (r) { return G.parseDay(r.date); });
+    var all = crewPayments(t, p), pays = all.filter(function (r) { return G.parseDay(r.date); });
+    var undated = G.isPnlBook(t) ? Math.round(all.reduce(function (n, r) { return G.parseDay(r.date) ? n : n + G.num(r.amount); }, 0) * 100) : 0;
     var inMonth = {};
     pays.forEach(function (r) { var k = r.date.slice(0, 7); inMonth[k] = (inMonth[k] || 0) + Math.round(r.amount * 100); });
     var months = [];
@@ -28134,7 +30391,7 @@
       wrap.__drawn = function () { placeTourHit(box, wrap, hit); };
     }
     requestAnimationFrame(function () { if (wrap.isConnected) drawMonths(wrap); });
-    return [wrap, hit, note];
+    return [wrap, hit, note, undated ? h('p', { class: 'mc-off cwp-note', style: CWP_NOTE }, crewPayOffWords({ undated: undated })) : null];
   }
   var CWP_NOTE = 'margin: -6px 0 12px; min-height: 17px; color: var(--ink-2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis';
   function paidAmt(v) {
@@ -28453,7 +30710,8 @@
     }, { label: 'Edit crew', cls: 'cat-sheet', onClose: function () { openCrewSheet(id, false, G.pnlListOf(getTour(id), pid)); } });
   }
   function openCrewPayments(id, pid, keep) {
-    var st = keep || { per: null, rate: null, how: 'paid', amount: null, date: G.tourToday(), merch: null };
+    var pnl = G.isPnlBook(getTour(id));
+    var st = keep || { per: null, rate: null, how: 'paid', amount: null, date: pnl ? '' : G.tourToday(), merch: null };
     openSheet(function () {
       var t = getTour(id);
       var p = G.rows(t && t.crew).filter(function (x) { return x.id === pid; })[0];
@@ -28495,25 +30753,27 @@
       if (st.amount == null) st.amount = G.num(p.rate) > 0 && p.per !== 'other' ? G.num(p.rate) : left;
       saveBtn.onclick = savePlan;
       var pick = function (v) { st.merch = v; yes.checked = v === true; no.checked = v === false; };
+      var noLog = G.pnlNoMerchLog(t);
       var yes = h('input', { type: 'checkbox', class: 'rv-check', checked: st.merch === true, onchange: function (e) { pick(e.target.checked ? true : null); } });
       var no = h('input', { type: 'checkbox', class: 'rv-check', checked: st.merch === false, onchange: function (e) { pick(e.target.checked ? false : null); } });
-      var cashAsk = h('fieldset', { class: 'yn-ask', hidden: st.how !== 'cash' },
+      var cashAsk = h('fieldset', { class: 'yn-ask', hidden: st.how !== 'cash' || noLog },
         h('legend', null, 'Deduct from Merch Cash Log?'),
         h('label', { class: 'yn-opt' }, yes, h('span', null, 'Yes')),
         h('label', { class: 'yn-opt' }, no, h('span', null, 'No')));
       var logIt = async function (e) {
         e.preventDefault(); blurActive();
         if (!(st.amount > 0)) { toast('Enter how much you paid'); return; }
-        if (!G.parseDay(st.date)) { toast('Pick the day it was paid'); return; }
-        if (st.how === 'cash' && st.merch == null) { toast('Deduct from the Merch Cash Log? Tick Yes or No'); return; }
+        var day = G.parseDay(st.date) ? st.date : '';
+        if (!day && !pnl) { toast('Pick the day it was paid'); return; }
+        if (st.how === 'cash' && !noLog && st.merch == null) { toast('Deduct from the Merch Cash Log? Tick Yes or No'); return; }
         var label = (p.name || 'Crew') + ' \u2014 pay', patch, line = newId();
-        if (st.how === 'cash' && st.merch) {
+        if (st.how === 'cash' && !noLog && st.merch) {
           patch = { cashLog: {} };
-          patch.cashLog[line] = { date: st.date, amount: st.amount, label: label, category: 'crew', crewId: pid, createdAt: Date.now() };
+          patch.cashLog[line] = Object.assign(day ? { date: day } : {}, { amount: st.amount, label: label, category: 'crew', crewId: pid, createdAt: Date.now() });
         } else {
           patch = { charges: {} };
-          patch.charges[line] = { date: st.date, merchant: label, amount: st.amount, category: 'crew', accounted: false,
-            manual: true, paid: st.how !== 'spent', cash: st.how === 'cash', crewId: pid, createdAt: Date.now() };
+          patch.charges[line] = Object.assign(day ? { date: day } : {}, { merchant: label, amount: st.amount, category: 'crew', accounted: false,
+            manual: true, paid: st.how !== 'spent', cash: st.how === 'cash', crewId: pid, createdAt: Date.now() });
           Object.assign(patch.charges[line], offByOf(id));
         }
         if (await api.update(id, patch)) {
@@ -28571,13 +30831,14 @@
         planLine,
         saveBtn,
         h('h3', { class: 'sh-h3 cw-h' }, 'Log a payment'),
+        pnl ? h('p', { class: 'note' }, WORDS.pnlOwedPay) : null,
         h('form', { class: 'sh-form', novalidate: true, onsubmit: logIt },
           segmented(['Credit', 'Debit', 'Cash'], ['spent', 'paid', 'cash'].indexOf(st.how), function (i) {
-            st.how = ['spent', 'paid', 'cash'][i]; cashAsk.hidden = st.how !== 'cash';
+            st.how = ['spent', 'paid', 'cash'][i]; cashAsk.hidden = st.how !== 'cash' || noLog;
           }, 'Credit, debit or cash'),
           field('How much', moneyInput({ id: 'cw-amt', value: st.amount, label: 'Amount paid', last: true,
             onValue: function (v) { st.amount = v; } })),
-          field('Day paid', h('input', { class: 'input', type: 'date', value: st.date, 'aria-label': 'Day paid',
+          field(pnl ? 'Day paid (optional)' : 'Day paid', h('input', { class: 'input', type: 'date', value: st.date, 'aria-label': pnl ? 'Day paid (optional)' : 'Day paid',
             onchange: function (e) { st.date = e.target.value; } })),
           cashAsk,
           h('div', { class: 'stack' }, h('button', { class: 'btn primary block', type: 'submit' }, 'Log payment'))),
@@ -31064,7 +33325,7 @@
   }
   function reimbFromMerchOk(tourId, r) {
     var t = getTour(tourId);
-    if (!t || isOffTour(t) || !canEditTour(tourId)) return false;
+    if (!t || isOffTour(t) || G.pnlNoMerchLog(t) || !canEditTour(tourId)) return false;
     return reimbHandoffIds(t, r.id).length > 0 || G.cashSummary(t).left + 0.004 >= G.num(r.amount);
   }
   async function reimbLogHandoff(tourId, r) {
@@ -46845,6 +49106,12 @@
   }
   function twinUsedMap() { try { return JSON.parse(lsGet('gr-twin-used') || '{}') || {}; } catch (e) { return {}; } }
   function twinUsed(tourId, tw) { var m = twinUsedMap(); m[tourId + ':' + tw.kind + ':' + tw.id] = 1; lsSet('gr-twin-used', JSON.stringify(m)); }
+  function twinDay(t, x) {
+    var d = String(x && x.date || '');
+    if (G.parseDay(d)) return d;
+    var at = G.num(x && x.createdAt);
+    return G.isPnlBook(t) && at > 0 ? G.ymd(new Date(at)) : '';
+  }
   function feedTwins(tourId, waiting) {
     var t = getTour(tourId), out = {}, used = twinUsedMap();
     if (!t || !waiting || !waiting.length) return out;
@@ -46861,17 +49128,17 @@
     G.rows(t.charges).forEach(function (ch) {
       if (chargeSource(t, ch) === 'PLAID') return;
       var who = ch.category === 'crew' ? crewPerson(t, ch.crewId) : null;
-      add({ kind: 'charge', id: ch.id, label: ch.merchant || 'Charge', date: ch.date, amount: G.num(ch.amount), at: G.num(ch.createdAt),
+      add({ kind: 'charge', id: ch.id, label: ch.merchant || 'Charge', date: twinDay(t, ch), amount: G.num(ch.amount), at: G.num(ch.createdAt),
         who: who && who.name ? String(who.name).trim().toLowerCase().split(/\s+/)[0] : '',
         where: (catLabel[ch.category] || 'Expenses') + (who && who.name ? ' · ' + who.name : '') });
     });
     G.rows(t.extras).forEach(function (x) {
-      add({ kind: 'extra', id: x.id, label: x.label || 'Cost', date: x.date, amount: G.num(x.amount), at: G.num(x.createdAt),
+      add({ kind: 'extra', id: x.id, label: x.label || 'Cost', date: twinDay(t, x), amount: G.num(x.amount), at: G.num(x.createdAt),
         where: catLabel[G.DAY_BY_DAY] || 'Day by day' });
     });
     G.rows(t.cashLog).forEach(function (x) {
       if (G.CASH_MOVES[x.category]) return;
-      add({ kind: 'cash', id: x.id, label: x.note || x.label || 'Merch cash', date: x.date, amount: G.num(x.amount), at: G.num(x.createdAt),
+      add({ kind: 'cash', id: x.id, label: x.note || x.label || 'Merch cash', date: twinDay(t, x), amount: G.num(x.amount), at: G.num(x.createdAt),
         where: 'Merch cash log' });
     });
     var pairs = [];
@@ -46907,7 +49174,8 @@
     if (!G.isObj(x) || Math.round(G.num(x.amount) * 100) !== Math.round(G.num(r.amount) * 100)) return false;
     if (tw.kind === 'charge' && chargeSource(t, Object.assign({ id: tw.id }, x)) === 'PLAID') return false;
     if (tw.kind === 'cash' && G.CASH_MOVES[x.category]) return false;
-    return !!G.parseDay(String(x.date || '')) && Math.abs(G.daysBetween(String(x.date), String(r.date))) <= 3;
+    var day = twinDay(t, x);
+    return !!day && Math.abs(G.daysBetween(day, String(r.date))) <= 3;
   }
   var feedGoing = {};
   var feedBack = {}, feedBackTell = null;

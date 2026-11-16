@@ -223,6 +223,7 @@
     Object.keys(exp).forEach(function (k) {
       if (isObj(exp[k]) && (num(exp[k].projected) > 0 || num(exp[k].paid) > 0)) note(k);
     });
+    pnlOwedRows(tour).forEach(function (x) { note(x.category); });
     return out;
   }
   function extraCatLabel(key) {
@@ -398,6 +399,10 @@
   function byDate(a, b) {
     return String(a.date || '').localeCompare(String(b.date || '')) ||
       (a.createdAt || 0) - (b.createdAt || 0);
+  }
+  function byDateUndatedLast(a, b) {
+    var x = parseDay(a.date) ? 0 : 1, y = parseDay(b.date) ? 0 : 1;
+    return x - y || byDate(a, b);
   }
   function showsNear(tour, date, days) {
     if (!parseDay(date)) return [];
@@ -2467,6 +2472,7 @@
     return PNL_TYPES.some(function (x) { return x[0] === k; }) ? k : '';
   }
   function isPnlBook(t) { return !!pnlType(t); }
+  function pnlNoMerchLog(t) { var k = pnlType(t); return k === 'studio' || k === 'other'; }
   function pnlTypeLabel(k) { var hit = PNL_TYPES.filter(function (x) { return x[0] === k; })[0]; return hit ? hit[1] : ''; }
   function pnlDatesClean(list) {
     var seen = {};
@@ -2644,6 +2650,7 @@
       var k = pnlListOf(t, p.id);
       if (k !== 'crew' || crewPay(t, p) > 0) mark(k);
     });
+    pnlOwedRows(t).forEach(function (x) { mark(chargeLine(t, x)); });
     return out;
   }
   function pnlCatsOf(t, list) {
@@ -2735,6 +2742,7 @@
     });
     if (key === DAY_BY_DAY) out.entries += rows(t.extras).length;
     cardDebts(t).forEach(function (card) { var bd = isObj(card.breakdown) ? card.breakdown : {}; if (num(bd[key]) !== 0) out.entries += 1; });
+    pnlOwedRows(t).forEach(function (x) { var k = chargeLine(t, x); if ((k === 'members' ? 'crew' : k) === key) out.entries += 1; });
     ['amount', 'paid', 'plan'].forEach(function (k) { out[k] = cents(out[k]); });
     out.any = Math.abs(out.amount) > 0.004 || Math.abs(out.paid) > 0.004 || out.plan > 0.004 || out.entries > 0 || out.people > 0;
     return out;
@@ -2767,6 +2775,115 @@
     var shown = back ? back.label : nm;
     if (key.indexOf('x-') === 0) { patch.extraCats = {}; patch.extraCats[key] = shown; }
     return { patch: patch, key: key, label: back && back.name ? back.name : shown, people: !!list };
+  }
+  function pnlCatRename(t, key, name) {
+    if (!isPnlBook(t)) return { why: 'This isn’t a P&L.' };
+    var now = pnlCatsNow(t), me = now.filter(function (c) { return c.key === key; })[0];
+    if (!me) return { why: 'That category isn’t here anymore.' };
+    if (key === 'crew' || key === 'commission') return { why: '“' + me.label + '” keeps its name.' };
+    var nm = pnlWord(name, PNL_CAT_NAME_MAX), plain = pnlCatPlain(nm);
+    if (!nm) return { why: 'Name it first' };
+    if (!plain) return { why: 'Use a letter or a number in its name' };
+    var same = now.filter(function (c) {
+      return c.key !== key && (pnlCatPlain(c.label) === plain || (c.key.indexOf('x-') !== 0 && pnlCatPlain(pnlBuiltInLabel(c.key)) === plain));
+    })[0];
+    if (same) return { why: '“' + same.label + '” is already a category here' };
+    var back = pnlCatsBack(t).filter(function (c) {
+      return pnlCatPlain(c.label) === plain || (c.key.indexOf('x-') !== 0 && pnlCatPlain(pnlBuiltInLabel(c.key)) === plain);
+    })[0];
+    if (back) return { why: '“' + back.label + '” is one Categories + offers. Add it from there, or pick another name.' };
+    if (nm === me.label) return { patch: {}, label: nm };
+    var patch = pnlCatBase(t), e = isObj(patch.pnl.cats[key]) ? patch.pnl.cats[key] : (patch.pnl.cats[key] = {});
+    var own = key.indexOf('x-') === 0;
+    e.name = !own && nm === pnlBuiltInLabel(key) ? null : nm;
+    if (own) { patch.extraCats = {}; patch.extraCats[key] = nm; }
+    return { patch: patch, label: nm };
+  }
+  function pnlCatDeleteAll(t, key) {
+    if (!isPnlBook(t)) return null;
+    var me = pnlCatsNow(t).filter(function (c) { return c.key === key; })[0];
+    if (!me) return null;
+    var line = function (l) { return l === 'members' ? 'crew' : l; };
+    var counts = { hand: 0, part: 0, cards: 0, whole: 0, statements: 0, owed: 0, people: 0, cardParts: 0, projection: 0 };
+    var patch = pnlCatBase(t), cards = [], gone = {}, more = false;
+    patch.pnl.cats[key] = null;
+    var raw = pnlBudsOf(t), kept = raw && isObj(raw.tags) ? raw.tags : null, tags = {};
+    var untag = function (ref) { if (kept && pnlHas(kept, ref) && kept[ref] != null) tags[ref] = null; };
+    var put = function (coll, id, v, quiet) { patch[coll] = patch[coll] || {}; patch[coll][id] = v; if (!quiet) more = true; };
+    var people = isPeopleCat(t, key);
+    if (people) {
+      var paidTo = {};
+      [t.charges, t.cashLog].forEach(function (map) {
+        rows(map).forEach(function (x) { if (isPeopleCat(t, x.category)) crewShares(t, x).shares.forEach(function (s) { paidTo[s.crewId] = true; }); });
+      });
+      rows(t.crew).forEach(function (p) {
+        if (pnlListOf(t, p.id) !== key) return;
+        if (key === 'crew' && !(crewPay(t, p) > 0) && !paidTo[p.id]) return;
+        gone[p.id] = true;
+      });
+    }
+    var imports = isObj(t.imports) ? t.imports : {};
+    [['charges', 'c'], ['cashLog', 'k']].forEach(function (pair) {
+      var coll = pair[0], kind = pair[1];
+      rows(t[coll]).forEach(function (x) {
+        if (coll === 'cashLog' && CASH_MOVES[x.category]) return;
+        var parts = chargeLineParts(t, x), mine = 0, here = false, elsewhere = false, filed = x.category === key;
+        parts.forEach(function (q) { if (line(q.line) === key) { mine += num(q.amount); here = true; } else elsewhere = true; });
+        if (!filed && !here) return;
+        var ref = kind + ':' + x.id;
+        if (coll === 'charges' && !x.manual) {
+          if (!here) { if (filed && key !== 'crew') put('charges', x.id, { category: 'crew' }, true); return; }
+          var imp = x.importId && isObj(imports[x.importId]) ? imports[x.importId] : null;
+          var feed = /^p/.test(String(x.id)) && (imp ? String(imp.source || '') === 'Card feed' : /^cards-/.test(String(x.importId || '')));
+          if (feed) { cards.push(x.id); if (elsewhere) counts.whole += 1; else counts.cards += 1; }
+          else { put('charges', x.id, null); counts.statements += 1; }
+          untag(ref);
+          return;
+        }
+        if (!elsewhere) { put(coll, x.id, null); counts.hand += 1; untag(ref); return; }
+        var keep = {}, sp = crewSplitOf(x), drop = {};
+        if (sp) Object.keys(sp).forEach(function (cid) {
+          var p = isObj(t.crew) && isObj(t.crew[cid]) ? t.crew[cid] : null;
+          if (p && line(personLine(t, cid, p)) === key) drop[cid] = null;
+        });
+        if (Object.keys(drop).length) keep.crewSplit = drop;
+        if (mine > 0.004) keep.amount = round((num(x.amount) - mine) * 100) / 100;
+        if (filed && key !== 'crew') keep.category = 'crew';
+        if (Object.keys(keep).length) put(coll, x.id, keep, !(mine > 0.004));
+        if (mine > 0.004) counts.part += 1;
+      });
+    });
+    pnlOwedRows(t).forEach(function (x) {
+      if (line(chargeLine(t, x)) !== key && x.category !== key) return;
+      put('pnlOwed', x.id, null); counts.owed += 1; untag('o:' + x.id);
+    });
+    var exp = isObj(t.expenses) && isObj(t.expenses[key]) ? t.expenses[key] : null;
+    if (exp) {
+      var typed = num(exp.paid) !== 0, plan = !people && num(exp.projected) > 0;
+      if (typed) counts.hand += 1;
+      if (plan) counts.projection = cents(exp.projected);
+      if (typed || exp.projected != null) put('expenses', key, null, !typed && !plan);
+    }
+    if (isObj(t.projLog) && t.projLog[key] != null) put('projLog', key, null, true);
+    var dl = isObj(t.doneLines) ? t.doneLines : {};
+    (key === 'crew' ? ['crew', 'members'] : [key]).forEach(function (k) { if (dl[k] != null) put('doneLines', k, null, true); });
+    if (key === DAY_BY_DAY) rows(t.extras).forEach(function (x) { put('extras', x.id, null); counts.hand += 1; });
+    cardDebts(t).forEach(function (card) {
+      var bd = isObj(card.breakdown) ? card.breakdown : {};
+      if (num(bd[key]) === 0 || !isObj(t.debts) || !isObj(t.debts[card.id])) return;
+      var b = {};
+      b[key] = null;
+      put('debts', card.id, { breakdown: b });
+      counts.cardParts += 1;
+    });
+    Object.keys(gone).forEach(function (cid) {
+      put('crew', cid, null);
+      counts.people += 1;
+      untag('p:' + cid);
+      if (isObj(t.pnl.who) && t.pnl.who[cid] != null) { patch.pnl.who = patch.pnl.who || {}; patch.pnl.who[cid] = null; }
+    });
+    if (Object.keys(tags).length) patch.pnlBuds = { tags: tags };
+    return { patch: patch, cards: cards, counts: counts, label: me.label, empty: !more && !cards.length };
   }
   function pnlMerge(a, b) {
     if (!isObj(a) || !isObj(b)) return isObj(b) ? JSON.parse(JSON.stringify(b)) : b;
@@ -2804,7 +2921,8 @@
     return out.sort(function (a, b) { return a.at - b.at || a.key.localeCompare(b.key); });
   }
   function pnlBudRefLive(t, ref) {
-    var m = /^([ckp]):(.+)$/.exec(typeof ref === 'string' ? ref : '');
+    var m = /^([ckpo]):(.+)$/.exec(typeof ref === 'string' ? ref : '');
+    if (m && m[1] === 'o') return pnlOwedRows(t).some(function (x) { return x.id === m[2]; });
     var map = m && isObj(t) ? (m[1] === 'c' ? t.charges : m[1] === 'k' ? t.cashLog : t.crew) : null;
     return isObj(map) && Object.prototype.hasOwnProperty.call(map, m[2]) && isObj(map[m[2]]);
   }
@@ -2862,7 +2980,7 @@
     var onLine = function (line) { return pnlHas(L.label, line); };
     var paidTo = Object.create(null);
     list.forEach(function (b) {
-      by[b.key] = { key: b.key, name: b.name, at: b.at, plan: b.plan, spent: 0, planned: 0, toPay: 0, n: 0, people: 0, groups: [], refs: {} };
+      by[b.key] = { key: b.key, name: b.name, at: b.at, plan: b.plan, spent: 0, planned: 0, toPay: 0, owed: 0, n: 0, people: 0, groups: [], refs: {} };
       out.list.push(by[b.key]);
     });
     var labelOf = function (line) {
@@ -2872,7 +2990,7 @@
     };
     var groupOf = function (m, line) {
       var g = m.groups.filter(function (x) { return x.key === line; })[0];
-      if (!g) { g = { key: line, label: labelOf(line), amount: 0, rows: [], people: [], at: pnlHas(L.order, line) ? L.order[line] : 9999 }; m.groups.push(g); }
+      if (!g) { g = { key: line, label: labelOf(line), amount: 0, rows: [], people: [], owed: [], at: pnlHas(L.order, line) ? L.order[line] : 9999 }; m.groups.push(g); }
       return g;
     };
     var put = function (m, line, x, kind, amount, crewId) {
@@ -2907,9 +3025,17 @@
       groupOf(m, line).people.push({ id: p.id, name: String(p.name || '').trim() || 'No name', title: String(p.title || '').trim(), planned: planned, paid: paid, toPay: toPay });
       m.planned += planned; m.toPay += toPay; m.people += 1;
     });
+    pnlOwedRows(t).forEach(function (x) {
+      var b = tags['o:' + x.id];
+      if (!b) return;
+      var m = by[b], line = chargeLine(t, x);
+      if (!onLine(line) && onLine(x.category)) line = x.category;
+      groupOf(m, line).owed.push({ ref: 'o:' + x.id, kind: 'o', id: x.id, name: x.what || labelOf(line), amount: x.amount, at: x.at });
+      m.toPay += x.amount; m.owed += x.amount; m.refs['o:' + x.id] = true;
+    });
     out.total = spent && typeof spent === 'object' ? cents(num(spent.credit) + num(spent.debit) + num(spent.cash)) : pnlSpentTotal(t, cc);
     out.list.forEach(function (m) {
-      m.spent = cents(m.spent); m.planned = cents(m.planned); m.toPay = cents(m.toPay); m.n = Object.keys(m.refs).length; delete m.refs;
+      m.spent = cents(m.spent); m.planned = cents(m.planned); m.toPay = cents(m.toPay); m.owed = cents(m.owed); m.n = Object.keys(m.refs).length; delete m.refs;
       m.left = m.plan != null ? cents(m.plan - m.spent - m.toPay) : null;
       m.over = m.plan != null && cents(m.spent + m.toPay - m.plan) > 0 ? cents(m.spent + m.toPay - m.plan) : 0;
       m.groups.sort(function (a, b) { return a.at - b.at || String(a.label).localeCompare(String(b.label)); });
@@ -2917,6 +3043,7 @@
         g.amount = cents(g.amount);
         g.rows.sort(function (a, b) { return String(b.date).localeCompare(String(a.date)) || b.at - a.at; });
         g.people.sort(function (a, b) { return a.name.localeCompare(b.name); });
+        g.owed.sort(function (a, b) { return b.at - a.at || a.id.localeCompare(b.id); });
       });
     });
     out.none = cents(out.total - out.list.reduce(function (n, m) { return n + m.spent; }, 0));
@@ -3037,17 +3164,135 @@
   }
   function pnlBudEntry(t, kind, id) {
     var out = { own: '', via: [] }, list = pnlBudList(t);
-    var map = kind === 'k' ? (isObj(t) ? t.cashLog : null) : (isObj(t) ? t.charges : null), x = isObj(map) && isObj(map[id]) ? map[id] : null;
+    var map = kind === 'k' ? (isObj(t) ? t.cashLog : null) : kind === 'o' ? (isObj(t) ? t.pnlOwed : null) : (isObj(t) ? t.charges : null), x = isObj(map) && isObj(map[id]) ? map[id] : null;
     if (!x || !list.length) return out;
     var tags = pnlBudTags(t, list), names = {};
     list.forEach(function (b) { names[b.key] = b.name; });
     out.own = tags[kind + ':' + id] || '';
-    if (out.own || !isPeopleCat(t, x.category)) return out;
+    if (out.own || kind === 'o' || !isPeopleCat(t, x.category)) return out;
     crewShares(t, Object.assign({ id: id }, x)).shares.forEach(function (s) {
       var b = tags['p:' + s.crewId], who = String(s.person.name || '').trim() || 'them';
       if (b && !out.via.some(function (v) { return v.key === b && v.who === who; })) out.via.push({ key: b, name: names[b], who: who });
     });
     return out;
+  }
+  var PNL_OWED_WHAT_MAX = 60;
+  function pnlOwedOk(k) { return typeof k === 'string' && k !== 'commission' && pnlCatKeyOk(k); }
+  function pnlOwedRows(t) {
+    if (!isPnlBook(t) || !isObj(t.pnlOwed)) return [];
+    var src = t.pnlOwed, out = [];
+    Object.keys(src).forEach(function (id) {
+      var x = src[id];
+      if (!isObj(x) || !pnlOwedOk(x.category)) return;
+      var amt = cents(num(x.amount));
+      if (!(amt > 0)) return;
+      out.push({ id: id, category: x.category, amount: amt, what: pnlWord(x.what, PNL_OWED_WHAT_MAX), at: typeof x.at === 'number' && isFinite(x.at) ? x.at : 0,
+        by: pnlWord(x.by, 60), crewId: typeof x.crewId === 'string' && x.crewId ? x.crewId : null });
+    });
+    return out.sort(function (a, b) { return b.at - a.at || a.id.localeCompare(b.id); });
+  }
+  function pnlOwedOn(t, key) {
+    return pnlOwedRows(t).filter(function (x) { var k = chargeLine(t, x); return (k === 'members' ? 'crew' : k) === key; });
+  }
+  function pnlOwedOne(t, id) { return pnlOwedRows(t).filter(function (x) { return x.id === id; })[0] || null; }
+  function pnlOwedBudPatch(t, ref, key, made, madeId) {
+    if (made) {
+      var r = pnlBudNew(t, made, null, madeId);
+      if (!r.patch) return { why: r.why };
+      r.patch.pnlBuds.tags = {};
+      r.patch.pnlBuds.tags[ref] = r.key;
+      return { patch: r.patch };
+    }
+    if (!key || !pnlBudList(t).some(function (b) { return b.key === key; })) return { patch: null };
+    var patch = { pnlBuds: { tags: {} } };
+    patch.pnlBuds.tags[ref] = key;
+    return { patch: patch };
+  }
+  function pnlOwedNew(t, o) {
+    o = isObj(o) ? o : {};
+    if (!isPnlBook(t)) return { why: 'This isn’t a P&L.' };
+    var amt = cents(num(o.amount));
+    if (!(amt > 0)) return { why: 'Enter how much it is' };
+    if (!pnlOwedOk(o.category)) return { why: 'Pick a category' };
+    if (isPeopleCat(t, o.category)) return { why: 'A list of people has no Not paid yet: what is still owed is on each person’s page.' };
+    var id = String(o.id == null ? '' : o.id);
+    if (!id || (isObj(t.pnlOwed) && pnlHas(t.pnlOwed, id))) return { why: 'Couldn’t save it. Try again.' };
+    var e = { category: o.category, amount: amt, at: typeof o.at === 'number' && isFinite(o.at) ? o.at : Date.now() };
+    var what = pnlWord(o.what, PNL_OWED_WHAT_MAX), by = pnlWord(o.by, 60);
+    if (what) e.what = what;
+    if (by) e.by = by;
+    var patch = { pnlOwed: {} };
+    patch.pnlOwed[id] = e;
+    var bp = pnlOwedBudPatch(t, 'o:' + id, o.bud, o.made, o.madeId);
+    if (bp.why) return { why: bp.why };
+    return { patch: bp.patch ? pnlMerge(patch, bp.patch) : patch, id: id };
+  }
+  function pnlOwedPaid(t, id, o) {
+    var x = pnlOwedOne(t, id);
+    if (!x) return { why: 'That isn’t here anymore.' };
+    o = isObj(o) ? o : {};
+    if (['spent', 'paid', 'cash'].indexOf(o.how) < 0) return { why: 'Pick credit, debit or cash' };
+    var nid = String(o.newId == null ? '' : o.newId);
+    if (!nid || (isObj(t.charges) && pnlHas(t.charges, nid)) || (isObj(t.cashLog) && pnlHas(t.cashLog, nid))) return { why: 'Couldn’t save it. Try again.' };
+    var now = typeof o.now === 'number' && isFinite(o.now) ? o.now : Date.now(), day = parseDay(o.date) ? o.date : '';
+    var label = x.what || pnlWord(o.label, PNL_OWED_WHAT_MAX) || bookCatLabels(t)[x.category] || 'Charge';
+    var toLog = o.how === 'cash' && o.merch === true && !pnlNoMerchLog(t);
+    var patch = { pnlOwed: {} }, e;
+    patch.pnlOwed[id] = null;
+    if (toLog) {
+      e = { amount: x.amount, label: label, category: x.category, createdAt: now };
+      patch.cashLog = {};
+      patch.cashLog[nid] = e;
+    } else {
+      e = { merchant: label, amount: x.amount, category: x.category, accounted: false, manual: true, paid: o.how !== 'spent', createdAt: now };
+      if (o.how === 'cash') e.cash = true;
+      patch.charges = {};
+      patch.charges[nid] = e;
+    }
+    if (day) e.date = day;
+    if (x.crewId) e.crewId = x.crewId;
+    var tag = pnlBudTags(t)['o:' + id] || '';
+    if (tag || pnlBudTagKept(t, 'o:' + id)) {
+      patch.pnlBuds = { tags: {} };
+      patch.pnlBuds.tags['o:' + id] = null;
+      if (tag) patch.pnlBuds.tags[(toLog ? 'k:' : 'c:') + nid] = tag;
+    }
+    return { patch: patch, kind: toLog ? 'k' : 'c', id: nid };
+  }
+  function pnlOwedEdit(t, id, o) {
+    var x = pnlOwedOne(t, id);
+    if (!x) return { why: 'That isn’t here anymore.' };
+    o = isObj(o) ? o : {};
+    var amt = cents(num(o.amount));
+    if (!(amt > 0)) return { why: 'Enter how much it is' };
+    var what = o.what === undefined ? x.what : pnlWord(o.what, PNL_OWED_WHAT_MAX), e = {};
+    if (amt !== x.amount) e.amount = amt;
+    if (what !== x.what) e.what = what || null;
+    if (!Object.keys(e).length) return { patch: {} };
+    var patch = { pnlOwed: {} };
+    patch.pnlOwed[id] = e;
+    return { patch: patch };
+  }
+  function pnlOwedDelete(t, id) {
+    if (!pnlOwedOne(t, id)) return null;
+    var patch = { pnlOwed: {} };
+    patch.pnlOwed[id] = null;
+    if (pnlBudTagKept(t, 'o:' + id)) { patch.pnlBuds = { tags: {} }; patch.pnlBuds.tags['o:' + id] = null; }
+    return { patch: patch };
+  }
+  function pnlOwedFromEntry(t, kind, eid, o) {
+    o = isObj(o) ? o : {};
+    var map = kind === 'k' ? (isObj(t) ? t.cashLog : null) : (isObj(t) ? t.charges : null), x = isObj(map) && isObj(map[eid]) ? map[eid] : null;
+    if (!x) return { why: 'That entry isn’t there anymore.' };
+    if (kind === 'c' && !x.manual) return { why: 'Only an entry logged by hand can be Not paid yet.' };
+    var ref = kind + ':' + eid, kept = pnlBudTags(t)[ref] || '';
+    var r = pnlOwedNew(t, { id: o.id, category: o.category, amount: o.amount, what: o.what, by: o.by, at: o.at,
+      bud: o.bud === undefined ? kept : o.bud, made: o.made, madeId: o.madeId });
+    if (!r.patch) return r;
+    var patch = r.patch;
+    if (kind === 'k') { patch.cashLog = {}; patch.cashLog[eid] = null; } else { patch.charges = {}; patch.charges[eid] = null; }
+    if (pnlBudTagKept(t, ref)) { patch.pnlBuds = patch.pnlBuds || {}; patch.pnlBuds.tags = patch.pnlBuds.tags || {}; patch.pnlBuds.tags[ref] = null; }
+    return { patch: patch, id: r.id };
   }
   var PNL_UPLOAD_MAX = 120;
   function pnlUploadCat(t, name) {
@@ -3454,6 +3699,7 @@
       Object.keys(bd).forEach(function (k) { if (num(bd[k]) !== 0) out[k] = true; });
     });
     if (rows(tour.extras).length) out[DAY_BY_DAY] = true;
+    pnlOwedRows(tour).forEach(function (x) { out[x.category] = true; });
     return out;
   }
   function studioCategories(tour, list) {
@@ -3712,6 +3958,27 @@
         over: projected == null ? 0 : Math.max(0, paid - projected), done: done
       });
     });
+    var owedRows = pnlOwedRows(tour), owedAll = 0;
+    if (owedRows.length) {
+      var owedTo = {}, lineAt = {};
+      lines.forEach(function (l) { lineAt[l.key] = l; });
+      owedRows.forEach(function (x) {
+        var k = chargeLine(tour, x);
+        if (!lineAt[k]) k = k === 'members' ? 'crew' : x.category;
+        if (lineAt[k]) owedTo[k] = (owedTo[k] || 0) + x.amount;
+      });
+      lines.forEach(function (l) {
+        var o = round(num(owedTo[l.key]) * 100) / 100;
+        if (!(o > 0)) return;
+        var eff = l.done ? num(l.paid) + o : Math.max(num(l.effective), num(l.paid) + o);
+        fixed += eff - num(l.effective);
+        owedAll += o;
+        l.effective = eff;
+        l.owed = o;
+        l.left = Math.max(0, round((eff - num(l.paid)) * 100) / 100);
+        if (l.projected != null) l.over = Math.max(0, round((num(l.paid) + o - num(l.projected)) * 100) / 100);
+      });
+    }
     var commissionProjected = commissionTotal(tour && tour.commission, commissionShowIncome, guarantees, commissionBy);
     var agentOwed = commissionLine(COMMISSION_LINES.filter(function (l) { return l.key === 'agent'; })[0],
       normCommission(tour && tour.commission).agent, commissionShowIncome, guarantees, commissionBy);
@@ -3763,6 +4030,7 @@
       commissionBy: commissionBy, commissionShowIncome: commissionShowIncome,
       agencyShows: agencyShows, agencyAdvance: advance, agentOwed: agentOwed, commissionKept: kept, agentWhole: agentWhole,
       reimbursements: askAll, reimbursementsOwed: askOwed, reimbursementsPaid: askPaid, reimbursementsCash: askCash,
+      owed: round(owedAll * 100) / 100,
       debt: debt, dayByDay: dayByDay, out: out, net: income - out,
       coverage: out > 0 ? income / out : (income > 0 ? 1 : 0)
     };
@@ -5301,6 +5569,7 @@
       if (l.key === 'commission' && num(l.owesBack) > 0) note.push('the booking agent owes ' + money(l.owesBack) + ' back');
       if (l.key === 'reimbursements' && num(l.left) > 0.004) note.push(money(l.left) + ' still to pay back');
       if (l.key === 'merchTips') note.push('owed to the merch person');
+      if (num(l.owed) > 0.004) note.push(money(l.owed) + ' not paid yet');
       expRows.push([l.label,
         l.projected == null ? '' : r2(l.projected),
         r2(l.paid),
@@ -5317,7 +5586,8 @@
     var catLabel = bookCatLabels(tour);
     var nameOf = function (id) { var p = tour && isObj(tour.crew) && isObj(tour.crew[id]) ? tour.crew[id] : null; return p ? String(p.name || 'No name') : 'someone no longer listed'; };
     var chargeRows = [['Date', 'Merchant', 'Amount', 'Category', 'For', 'Counted']];
-    rows(tour && tour.charges).sort(byDate).forEach(function (ch) {
+    var inOrder = isPnlBook(tour) ? byDateUndatedLast : byDate;
+    rows(tour && tour.charges).sort(inOrder).forEach(function (ch) {
       var lines = chargeLineParts(tour, ch).map(function (q) { return q.line; }), ln = chargeLine(tour, ch);
       var lineName = function (l) { return l === 'members' ? 'Members' : catLabel[l] || l; };
       var label = isPeopleCat(tour, ch.category) && lines.length > 1
@@ -5333,7 +5603,7 @@
       dayRows.push([x.date || '', x.label || '', num(x.amount), 'Logged',
         /food|meal|catering/i.test(String(x.label)) ? 'MEAL (50% rule)' : '']);
     });
-    rows(tour && tour.charges).sort(byDate).forEach(function (ch) {
+    rows(tour && tour.charges).sort(inOrder).forEach(function (ch) {
       if (ch.category !== DAY_BY_DAY) return;
       dayRows.push([ch.date || '', ch.merchant || '', num(ch.amount), 'Card', '']);
     });
@@ -5383,7 +5653,7 @@
       askRows.push([r.date || '', r.name || '', r.what || '', r2(r.amount), r.status === 'paid' ? 'yes' : 'not yet',
         r.status === 'paid' ? (r.how || '') : '', r.status === 'paid' && r.paidAt ? String(r.paidAt).slice(0, 10) : '']);
     });
-    return [
+    var out = [
       { name: 'Shows', file: 'shows.csv', rows: showRows },
       { name: 'Budget vs actual', file: 'expenses-budget-vs-actual.csv', rows: expRows },
       { name: 'Members and Crew pay', file: 'pay-members-and-crew.csv', rows: payRows },
@@ -5392,6 +5662,17 @@
       { name: 'Day by day', file: 'day-by-day.csv', rows: dayRows },
       { name: 'Commissions', file: 'commissions.csv', rows: commRows }
     ];
+    var owedList = pnlOwedRows(tour);
+    if (owedList.length) {
+      var owedRows = [['Category', 'What', 'Amount']];
+      owedList.slice().sort(function (a, b) { return a.at - b.at || a.id.localeCompare(b.id); }).forEach(function (x) {
+        var ln = chargeLine(tour, x);
+        owedRows.push([ln === 'members' ? 'Members' : catLabel[ln] || catLabel[x.category] || x.category, x.what || '', x.amount]);
+      });
+      owedRows.push(['TOTAL NOT PAID YET', '', r2(c.owed)]);
+      out.push({ name: 'Not paid yet', file: 'not-paid-yet.csv', rows: owedRows });
+    }
+    return out;
   }
   var SUM_MON = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
   function cents(n) { return Math.round(num(n) * 100) / 100; }
@@ -5517,9 +5798,11 @@
     var wentOut = [];
     c.lines.forEach(function (l) {
       if (!(Math.abs(num(l.effective)) > 0.004)) return;
-      var hint = l.done ? 'Done paying'
+      var owed = num(l.owed) > 0.004 ? money(l.owed) + ' not paid yet' : '';
+      var hint = l.done ? ['Done paying', owed].filter(Boolean).join(' · ')
         : l.key === 'reimbursements' ? (num(l.left) > 0.004 ? money(l.left) + ' still to pay back' : 'All paid back')
         : isDerived(l.key) || num(l.paid) + 0.004 >= num(l.effective) ? ''
+        : owed ? [num(l.paid) > 0.004 ? money(l.paid) + ' paid so far' : '', owed].filter(Boolean).join(' · ')
         : num(l.paid) > 0.004 ? money(l.paid) + ' paid so far' : 'Nothing paid yet';
       wentOut.push(sumLine(l.label, l.effective, hint));
     });
@@ -5551,6 +5834,7 @@
     var paid = paidSoFar(c);
     var outNotes = [
       paid + 0.004 < cents(c.out) ? 'Counted as the Budget counts it: a line not paid yet counts its projection. Paid so far: ' + money(paid) + '.' : '',
+      num(c.owed) > 0.004 ? 'Marked not paid yet: ' + money(c.owed) + ', counted in Total out.' : '',
       num(c.out) > 0 ? 'Costs covered: ' + Math.floor(c.coverage * 100) + '%.' : ''].filter(Boolean);
     var sections = [
       { key: 'in', title: 'What came in', lines: cameIn, total: { label: 'Total in', amount: cents(c.income) }, notes: inNotes },
@@ -5578,6 +5862,8 @@
       tableOf('Commissions', sheet('Commissions'), [170, 60, 170, 70], [3])];
     var asks = sheet('Reimbursements');
     if (asks.length > 1) details.push(tableOf('Reimbursements', asks.map(function (r) { return [r[0], r[1], r[2], r[3], r[4]]; }), [66, 100, 160, 70, 70], [3]));
+    var owedTab = sheets.filter(function (s) { return s.name === 'Not paid yet'; })[0];
+    if (owedTab) details.push(tableOf('Not paid yet', owedTab.rows, [130, 230, 80], [2]));
     var cardNotes = cardDebts(t).map(function (card) {
       var sm = cardSummary(card, t);
       var bd = isObj(card.breakdown) ? card.breakdown : {};
@@ -5793,7 +6079,7 @@
     var incName = {}, catName = {};
     MY_PAY_INCOME.forEach(function (x) { incName[x.key] = x.label; });
     bk.lines.forEach(function (x) { catName[x.key] = x.label; });
-    var payRows = [['Date', 'What', 'How', 'Amount']].concat(pays.slice().sort(byDate).map(function (p) { return [p.date || '', p.label || 'Pay', p.how || '', cents(p.amount)]; }));
+    var payRows = [['Date', 'What', 'How', 'Amount']].concat(pays.slice().sort(byDateUndatedLast).map(function (p) { return [p.date || '', p.label || 'Pay', p.how || '', cents(p.amount)]; }));
     var incRows = [['Date', 'Kind', 'Note', 'Amount']].concat(rows(book.income).sort(byDate).map(function (e) {
       return [e.date || '', incName[e.category] || 'Other', e.note || '', cents(e.amount)];
     }));
@@ -6756,6 +7042,15 @@
       usedOrig[hit] = true;
       return oc[hit];
     }
+    var firstDayOf = function (book) {
+      if (book.kind === 'tour') {
+        var a = bookStart(book.doc), r = parseDay(book.doc.rehearsalStart) ? book.doc.rehearsalStart : '';
+        return a && r ? (r < a ? r : a) : a || r || cpaDay(book.doc.createdAt);
+      }
+      var y0 = bookYears(book.doc)[0] || '';
+      var from = book.doc.offFrom == null ? cpaDay(book.doc.createdAt) : book.doc.offFrom;
+      return parseDay(from) && String(from).slice(0, 4) === y0 ? from : y0 ? y0 + '-01-01' : '';
+    };
     books.forEach(function (book) {
       ['charges', 'cashLog'].forEach(function (coll) {
         var map = isObj(book.doc[coll]) ? book.doc[coll] : {};
@@ -6763,6 +7058,8 @@
           var x = map[k];
           if (!isObj(x)) return;
           var d = cpaDay(x.date);
+          var noDay = !d && isPnlBook(book.doc) && (coll === 'cashLog' || x.manual === true);
+          if (noDay) d = firstDayOf(book);
           if (!inY(d)) return;
           var amt = C(x.amount), m = marks[coll + ':' + k] || {}, cat = typeof x.category === 'string' ? x.category : '';
           var bank = coll === 'charges' && k.charAt(0) === 'p' && !x.manual && /^(review|cards)-/.test(String(x.importId || '')) ? k.slice(1) : '';
@@ -6771,9 +7068,11 @@
           var note = String(x.note || '').replace(/\s+/g, ' ').trim();
           var base = Object.assign({ date: d, who: who || nm, what: coll === 'cashLog' ? 'Merch cash' + (note && note !== who ? ': ' + note : '') : note !== who ? note : '',
             bankId: bank, account: coll === 'cashLog' ? 'Merch cash' : String(x.account || '').trim() || (x.cash ? 'Cash' : 'Logged by hand'),
-            catKey: cat, category: nm, book: lab.book, note: lab.note || '', during: lab.during || null, src: book.id + ':' + coll + ':' + k,
+            catKey: cat, category: nm, book: lab.book, note: noDay ? 'logged with no date' : lab.note || '', during: lab.during || null, src: book.id + ':' + coll + ':' + k,
             bookId: book.id, coll: coll, use: m.use || '' }, cpaShowOf(book, d));
           var as = function (o) { return Object.assign({}, base, o); };
+          if (noDay) cpaPut({ at: 'open', what: 'an expense logged with no date (' + nm + ')', date: d, cents: amt, book: lab.book,
+            todo: 'Tell your CPA when it was paid, or give it its day in Greenroom', src: base.src });
           if (cat === 'offdebt') {
             var orig = cpaOriginalOf(x, k);
             tally(d, { A: amt, B: amt });
@@ -6873,15 +7172,6 @@
           during: lab.during || null, src: book.id + ':extras:' + k, bookId: book.id, coll: 'extras' }, cpaShowOf(book, d)));
       });
     });
-    var firstDayOf = function (book) {
-      if (book.kind === 'tour') {
-        var a = bookStart(book.doc), r = parseDay(book.doc.rehearsalStart) ? book.doc.rehearsalStart : '';
-        return a && r ? (r < a ? r : a) : a || r || cpaDay(book.doc.createdAt);
-      }
-      var y0 = bookYears(book.doc)[0] || '';
-      var from = book.doc.offFrom == null ? cpaDay(book.doc.createdAt) : book.doc.offFrom;
-      return parseDay(from) && String(from).slice(0, 4) === y0 ? from : y0 ? y0 + '-01-01' : '';
-    };
     books.forEach(function (book) {
       var exp = isObj(book.doc.expenses) ? book.doc.expenses : {};
       var first = firstDayOf(book);
@@ -10136,6 +10426,9 @@
     pnlBudWords: pnlBudWords, pnlBudNameWhy: pnlBudNameWhy, pnlBudAmount: pnlBudAmount, pnlBudNew: pnlBudNew, pnlBudNewTag: pnlBudNewTag,
     pnlBudChange: pnlBudChange, pnlBudTag: pnlBudTag, pnlBudDelete: pnlBudDelete, pnlBudEntry: pnlBudEntry,
     pnlBudTagOf: pnlBudTagOf, pnlBudTagKept: pnlBudTagKept, pnlBudChips: pnlBudChips, pnlBudLeft: pnlBudLeft, pnlBudSay: pnlBudSay,
+    pnlCatRename: pnlCatRename, pnlCatDeleteAll: pnlCatDeleteAll, pnlNoMerchLog: pnlNoMerchLog,
+    PNL_OWED_WHAT_MAX: PNL_OWED_WHAT_MAX, pnlOwedOk: pnlOwedOk, pnlOwedRows: pnlOwedRows, pnlOwedOn: pnlOwedOn, pnlOwedOne: pnlOwedOne,
+    pnlOwedNew: pnlOwedNew, pnlOwedPaid: pnlOwedPaid, pnlOwedDelete: pnlOwedDelete, pnlOwedEdit: pnlOwedEdit, pnlOwedFromEntry: pnlOwedFromEntry,
     PNL_UPLOAD_MAX: PNL_UPLOAD_MAX, pnlUploadCat: pnlUploadCat, pnlUploadList: pnlUploadList, pnlUploadModel: pnlUploadModel, pnlUploadPatch: pnlUploadPatch,
     pnlUploadAfter: pnlUploadAfter, pnlUploadDay: pnlUploadDay, pnlUploadPay: pnlUploadPay, crewTwoLines: crewTwoLines, pnlOneCrew: pnlOneCrew,
     SHOW_DAYS_REACH: SHOW_DAYS_REACH, isShowDoc: isShowDoc, showDocName: showDocName, showDocDays: showDocDays, showDoc: showDoc, showDocLogged: showDocLogged, showDaysPatch: showDaysPatch,
