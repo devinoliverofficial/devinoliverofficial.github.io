@@ -8570,6 +8570,46 @@
     pnlAdvanceGone: 'Advance taken off',
     pnlAdvanceNote: 'Typed by hand, never a bank deposit. It counts in this P&L’s income. Spent is what the big number counts as out.',
     pnlAdvancePlanned: function (paid) { return 'Spent counts each category’s plan until it is paid, as the big number does. Paid so far: ' + paid + '.'; },
+    pnlBudsHead: 'Budgets',
+    pnlBudsPlus: 'Add a budget',
+    pnlBudsAdd: 'Add a budget',
+    pnlBudsNone: 'Group expenses from any category, like everything for one song.',
+    pnlBudsOut: 'Not in a budget',
+    pnlBudsPick: 'Budget',
+    pnlBudsNo: 'None',
+    pnlBudsNew: 'New budget',
+    pnlBudsName: 'A song title',
+    pnlBudsAmount: 'Amount',
+    pnlBudsAmountSub: 'Optional. With an amount it shows what is left, or how much it is over.',
+    pnlBudsNewSub: 'Its expenses keep their own categories. Nothing in this P&L’s totals changes.',
+    pnlBudsEmpty: 'Nothing in it yet.',
+    pnlBudsAddExp: 'Add an expense',
+    pnlBudsWhich: 'Which category?',
+    pnlBudsHow: 'How was it paid?',
+    pnlBudsChange: 'Change',
+    pnlBudsDrop: 'Delete budget',
+    pnlBudsKeep: 'Keep it',
+    pnlBudsGoneOne: 'That budget isn’t here anymore.',
+    pnlBudsSwipe: 'Part of a budget? Swipe it left and tap Budget.',
+    pnlBudsPlanned: function (m) { return 'Planned ' + m; },
+    pnlBudsLeftToPay: function (m) { return m + ' left to pay'; },
+    pnlBudsPaidAll: 'Paid in full',
+    pnlBudsPaidOver: function (m) { return 'Paid ' + m + ' over'; },
+    pnlBudsNoPay: 'No pay planned',
+    pnlBudsDropSay: function (n, people) {
+      var said = n === 1 ? 'Its 1 expense stays in this P&L and in its category.' : n ? 'Its ' + n + ' expenses stay in this P&L and in their categories.' : 'It has no expenses in it.';
+      return said + (people === 1 ? ' Its 1 person stays on their list.' : people ? ' Its ' + people + ' people stay on their lists.' : '');
+    },
+    pnlBudsMade: function (name) { return '“' + name + '” is a budget now.'; },
+    pnlBudsGone: function (name) { return '“' + name + '” is off this P&L. Its expenses stay in their categories.'; },
+    pnlBudsIn: function (name) { return 'In ' + name; },
+    pnlBudsOutSaid: 'Not in a budget now',
+    pnlBudsVia: function (via) {
+      return via.length === 1 ? 'Counts in ' + via[0].name + ' with ' + via[0].who + '. Pick another budget to move it alone.'
+        : 'Counts with ' + via.map(function (v) { return v.who; }).join(' and ') + ' in their budgets. Pick a budget to move all of it.';
+    },
+    pnlBudsViaNone: function (via) { return 'It counts with ' + via[0].who + '’s budget. Change that on their page.'; },
+    pnlBudsLost: 'its budget didn’t save: pick it again under Logged Card Transactions',
     thisPnl: 'This P&L',
     notPnlIncome: 'Not P&L income: clear it',
     addStudio: 'Add studio time',
@@ -21025,10 +21065,10 @@
     var wanted = view === 'costs' ? bookWanted(id) : null;
     if (wanted) { S.route.view = wanted; view = wanted; }
     if (view === 'mypay') return viewMyPay(id, t);
-    var c = G.calc(t);
+    var c = G.calc(t), tot = { credit: 0, debit: 0, cash: 0 };
     var body = view === 'cards' ? tabCards(id, t)
       : view === 'money' ? pnlBookIncome(id, t, c)
-      : [pnlBookLine(id, t), pnlOldNode(t, 'out'), heroNode(t, id), pnlCatsBar(id, t), tabExpenses(id, t, c)];
+      : [pnlBookLine(id, t), pnlOldNode(t, 'out'), heroNode(t, id), pnlCatsBar(id, t), tabExpenses(id, t, c, { totals: tot }), pnlBudsNode(id, t, c, tot)];
     return h('div', { class: 'page tour has-tabs ' + (view === 'money' ? 'budget-page' : 'exp-page') },
       tourBar(id, payTabs(id, t, 'costs')),
       bookStrip(id, view),
@@ -21153,6 +21193,283 @@
     var much = Math.max(Math.abs(held.amount), Math.abs(held.paid), held.plan), first = todo.join(', and ') || 'take what is in it off';
     return label + (much > 0.004 ? ' holds ' + money(much) : held.people ? ' has someone on it' : ' holds money') + (bits.length ? ' (' + bits.join(', ') + ')' : '') + '. ' +
       first.charAt(0).toUpperCase() + first.slice(1) + ' first, then take it off.';
+  }
+  function pnlBudsNode(id, t, c, tot) {
+    if (!G.isPnlBook(t) || !canSeeMoney(id)) return null;
+    var edit = canEditTour(id) && canWrite(), m = G.pnlBuds(t, c, tot);
+    if (!m.list.length && !edit) return null;
+    var head = h('div', { class: 'pk-cats pk-buds' },
+      h('span', { class: 'pk-cats-t' }, WORDS.pnlBudsHead),
+      edit ? h('button', { class: 'iconbtn sm pk-bud-plus', type: 'button', 'aria-label': WORDS.pnlBudsPlus, onclick: function () { openPnlBudNew(id); } }, icon('plus', 18)) : null);
+    if (!m.list.length) {
+      return h('div', { class: 'pk-buds-sec' }, head,
+        h('p', { class: 'note pk-buds-none' }, WORDS.pnlBudsNone),
+        h('button', { class: 'btn primary block' + cfCls(true) + ' pk-bud-add', type: 'button', onclick: function () { openPnlBudNew(id); } }, WORDS.pnlBudsAdd));
+    }
+    var rowOf = function (b) {
+      var w = G.pnlBudRowWords(b);
+      return h('button', { class: 'row rowbtn pk-bud', type: 'button', 'aria-label': [b.name, money(b.shown), w.text].filter(Boolean).join(', '),
+        onclick: function () { openPnlBud(id, b.key); } },
+        h('div', { class: 'row-label' }, b.name, w.text ? h('span', { class: 'hint' + (w.over ? ' over' : '') }, budLine(w.text)) : null),
+        h('span', { class: 'amt num' }, money(b.shown)), icon('chevron', 18));
+    };
+    return h('div', { class: 'pk-buds-sec' }, head,
+      h('div', { class: 'ledger pk-bud-list' }, m.list.map(rowOf),
+        h('div', { class: 'row pk-bud-out' }, h('div', { class: 'row-label' }, WORDS.pnlBudsOut), h('span', { class: 'amt num' }, money(m.noneShown)))));
+  }
+  function openPnlBud(id, key, o) {
+    var st = { changing: !!(o && o.changing), dropping: !!(o && o.dropping), name: null, plan: null, busy: false };
+    var again = function () { openPnlBud(id, key, { changing: st.changing, dropping: st.dropping }); };
+    var here = function () { openPnlBud(id, key); };
+    openSheet(function (panel) {
+      panel.classList.add('iv-sheet', 'pnl-sheet', 'pk-sheet', 'pk-bud-sheet');
+      var t = getTour(id);
+      var b = G.isPnlBook(t) && canSeeMoney(id) ? G.pnlBudOne(G.pnlBuds(t, G.calc(t)), key) : null;
+      var shut = h('button', { class: 'btn ghost block' + cfCls(false), type: 'button', onclick: function () { closeSheet(); } }, 'Close');
+      if (!b) return [h('h2', { class: 'sh-title' }, WORDS.pnlBudsHead), h('p', { class: 'note' }, WORDS.pnlBudsGoneOne), h('div', { class: 'stack' }, shut)];
+      var edit = canEditTour(id) && canWrite(), w = G.pnlBudWords(b);
+      var opener = function (r) {
+        var x = r.kind === 'k' ? (t.cashLog || {})[r.id] : (t.charges || {})[r.id];
+        if (!edit || !G.isObj(x)) return null;
+        if (r.kind === 'k' || x.manual) return function () { openManualEdit(id, x.category, r.kind === 'k' ? { cashId: r.id } : { chargeId: r.id, source: 'MANUAL' }, null, here); };
+        return function () { openPnlBudEntry(id, r.ref, here); };
+      };
+      var entryRow = function (r) {
+        var who = r.crewId ? crewPerson(t, r.crewId) : null;
+        var hint = [r.date ? dayMD(r.date) : '', who ? 'for ' + (who.name || 'them') : '', Math.abs(r.amount - r.whole) > 0.004 ? 'part of ' + money(r.whole) : '']
+          .filter(Boolean).join(' · ');
+        var inner = [h('div', { class: 'row-label' }, r.name, hint ? h('span', { class: 'hint' }, hint) : null), h('span', { class: 'amt num' }, money(r.shown))];
+        var open = opener(r);
+        return open ? h('button', { class: 'row rowbtn pk-bud-entry', type: 'button', onclick: open }, inner, icon('chevron', 18))
+          : h('div', { class: 'row pk-bud-entry' }, inner);
+      };
+      var personRow = function (p) {
+        var pay = p.planned > 0.004 ? [WORDS.pnlBudsPlanned(money(p.planned)), p.paid > p.planned + 0.004 ? WORDS.pnlBudsPaidOver(G.pnlBudSay(p.paid - p.planned))
+          : p.toPay > 0.004 ? WORDS.pnlBudsLeftToPay(G.pnlBudSay(p.toPay)) : WORDS.pnlBudsPaidAll] : [WORDS.pnlBudsNoPay];
+        return h('div', { class: 'row pk-bud-person' }, h('div', { class: 'row-label' }, p.name,
+          h('span', { class: 'hint' }, budLine([p.title].concat(pay).filter(Boolean).join(' · ')))));
+      };
+      var body = b.groups.length ? h('div', { class: 'ledger pk-bud-groups' }, b.groups.map(function (g) {
+        return [h('div', { class: 'row head pk-bud-gh' }, h('span', { class: 'pk-bud-gn' }, g.label), h('span', { class: 'amt num' }, money(g.shown)))]
+          .concat(g.people.map(personRow), g.rows.map(entryRow));
+      })) : h('p', { class: 'note pk-bud-empty' }, WORDS.pnlBudsEmpty);
+      var form = null, ask = null;
+      if (edit && st.changing) {
+        if (st.name == null) st.name = b.name;
+        if (st.plan == null) st.plan = b.plan || 0;
+        var nameIn = h('input', { class: 'input', type: 'text', maxlength: G.PNL_BUD_NAME_MAX, autocomplete: 'off', enterkeyhint: 'next',
+          'aria-label': 'Budget name', value: st.name, oninput: function (e) { st.name = e.target.value; } });
+        var saveIt = async function (e) {
+          var btn = e.currentTarget;
+          if (st.busy) return;
+          var r = G.pnlBudChange(getTour(id), key, { name: st.name, plan: st.plan });
+          if (!r.patch) { toast(r.why); return; }
+          blurActive();
+          if (Object.keys(r.patch).length) {
+            st.busy = true; btn.disabled = true;
+            var ok = await api.update(id, r.patch);
+            st.busy = false;
+            if (!ok) { btn.disabled = false; return; }
+            toast('Saved');
+            render(true);
+          }
+          here();
+        };
+        form = h('div', { class: 'pk-bud-form' },
+          h('div', { class: 'ledger lf-card pnl-card' },
+            rowField('Name', nameIn, 'pnl-row'),
+            rowField(WORDS.pnlBudsAmount, moneyInput({ id: 'pk-bud-amt', key: 'pk-bud-amt', label: WORDS.pnlBudsAmount, value: st.plan || 0, last: true,
+              onValue: function (v) { st.plan = v; } }), 'pnl-row')),
+          h('p', { class: 'note' }, WORDS.pnlBudsAmountSub),
+          h('div', { class: 'pk-add-acts' },
+            h('button', { class: 'btn primary sm' + cfCls(true) + ' pk-bud-save', type: 'button', onclick: saveIt }, 'Save'),
+            h('button', { class: 'btn ghost sm' + cfCls(false), type: 'button', onclick: here }, 'Cancel')));
+      }
+      if (edit && st.dropping) {
+        ask = h('div', { class: 'pk-bud-ask' },
+          h('p', { class: 'note pk-bud-ask-t' }, WORDS.pnlBudsDropSay(b.n, b.people)),
+          h('div', { class: 'stack' },
+            h('button', { class: 'btn block danger-solid pk-bud-dropyes', type: 'button', onclick: async function (e) {
+              var btn = e.currentTarget;
+              if (st.busy) return;
+              var dd = G.pnlBudDelete(getTour(id), key);
+              if (!dd) { closeSheet(); render(true); return; }
+              st.busy = true; btn.disabled = true;
+              var ok = await api.update(id, dd.patch);
+              st.busy = false;
+              if (!ok) { btn.disabled = false; return; }
+              closeSheet();
+              toast(WORDS.pnlBudsGone(dd.name));
+              render(true);
+            } }, WORDS.pnlBudsDrop),
+            h('button', { class: 'btn ghost block' + cfCls(false), type: 'button', onclick: here }, WORDS.pnlBudsKeep)));
+      }
+      var acts = edit && !st.changing && !st.dropping ? [
+        h('button', { class: 'btn primary block' + cfCls(true) + ' pk-bud-addexp', type: 'button', onclick: function () { openPnlBudAdd(id, key); } }, WORDS.pnlBudsAddExp),
+        h('button', { class: 'btn ghost block' + cfCls(false) + ' pk-bud-change', type: 'button', onclick: function () { st.changing = true; again(); } }, WORDS.pnlBudsChange),
+        h('button', { class: 'btn block danger pk-bud-drop', type: 'button', onclick: function () { st.dropping = true; again(); } }, WORDS.pnlBudsDrop)] : [];
+      return [
+        h('h2', { class: 'sh-title' }, b.name),
+        h('p', { class: 'sh-sub' }, tourNameOf(t)),
+        h('p', { class: 'pk-bud-sum num' + (w.over ? ' over' : ''), role: 'status' }, budLine(w.text)),
+        form, body, ask,
+        st.dropping ? null : h('div', { class: 'stack' }, acts, st.changing ? null : shut)
+      ];
+    }, { label: WORDS.pnlBudsHead });
+  }
+  function openPnlBudNew(id) {
+    var st = { name: '', plan: 0, busy: false };
+    openSheet(function (panel) {
+      panel.classList.add('iv-sheet', 'pnl-sheet', 'pk-sheet', 'pk-bud-sheet');
+      var t = getTour(id);
+      if (!G.isPnlBook(t) || !canEditTour(id) || !canWrite()) return [h('h2', { class: 'sh-title' }, WORDS.pnlBudsNew)];
+      var add = async function (e) {
+        var btn = e && e.currentTarget;
+        if (st.busy) return;
+        var r = G.pnlBudNew(getTour(id), st.name, st.plan, newId());
+        if (!r.patch) { toast(r.why); return; }
+        blurActive();
+        st.busy = true; if (btn) btn.disabled = true;
+        var ok = await api.update(id, r.patch);
+        st.busy = false;
+        if (!ok) { if (btn) btn.disabled = false; return; }
+        toast(WORDS.pnlBudsMade(r.name));
+        render(true);
+        openPnlBud(id, r.key);
+      };
+      var nameIn = h('input', { class: 'input', type: 'text', maxlength: G.PNL_BUD_NAME_MAX, autocomplete: 'off', enterkeyhint: 'next',
+        placeholder: WORDS.pnlBudsName, 'aria-label': 'Budget name', value: st.name, oninput: function (e) { st.name = e.target.value; } });
+      setTimeout(function () { if (nameIn.isConnected && !st.name) nameIn.focus(); }, 30);
+      return [
+        h('h2', { class: 'sh-title' }, WORDS.pnlBudsNew),
+        h('p', { class: 'sh-sub' }, WORDS.pnlBudsNewSub),
+        h('div', { class: 'ledger lf-card pnl-card' },
+          rowField('Name', nameIn, 'pnl-row'),
+          rowField(WORDS.pnlBudsAmount, moneyInput({ id: 'pk-bud-new-amt', key: 'pk-bud-new-amt', label: WORDS.pnlBudsAmount, value: 0, last: true,
+            onValue: function (v) { st.plan = v; } }), 'pnl-row')),
+        h('p', { class: 'note' }, WORDS.pnlBudsAmountSub),
+        h('div', { class: 'stack' },
+          h('button', { class: 'btn primary block' + cfCls(true) + ' pk-bud-make', type: 'button', onclick: add }, 'Add'),
+          h('button', { class: 'btn ghost block' + cfCls(false), type: 'button', onclick: function () { closeSheet(); } }, 'Cancel'))
+      ];
+    }, { label: WORDS.pnlBudsNew });
+  }
+  function openPnlBudAdd(id, key, o) {
+    var st = { cat: (o && o.cat) || '', how: (o && o.how) || '' };
+    var hows = [['spent', 'Credit'], ['paid', 'Debit'], ['cash', 'Cash']];
+    openSheet(function () {
+      var t = getTour(id), b = G.pnlBudList(t).filter(function (x) { return x.key === key; })[0];
+      var back = h('button', { class: 'btn ghost block' + cfCls(false), type: 'button', onclick: function () { openPnlBud(id, key); } }, 'Back');
+      if (!G.isPnlBook(t) || !b || !canEditTour(id) || !canWrite()) return [h('h2', { class: 'sh-title' }, WORDS.pnlBudsAddExp), h('p', { class: 'note' }, WORDS.pnlBudsGoneOne), h('div', { class: 'stack' }, back)];
+      var seen = Object.create(null), cats = typedCats(t).filter(function (c) {
+        if (G.isDerived(c.key) || c.key === 'offdebt' || seen[c.label]) return false;
+        seen[c.label] = true;
+        return true;
+      });
+      var box = h('div', { class: 'pk-bud-log' });
+      var draw = function () {
+        var cat = cats.filter(function (c) { return c.key === st.cat; })[0];
+        var list = cat && cat.key !== 'crew' && G.isPeopleCat(t, cat.key) ? cat.key : null;
+        fillEl(box, cat ? [h('div', { class: 'field' }, h('span', { class: 'field-label' }, WORDS.pnlBudsHow),
+            segmented(hows.map(function (x) { return x[1]; }), hows.map(function (x) { return x[0]; }).indexOf(st.how), function (i) { st.how = hows[i][0]; draw(); }, WORDS.pnlBudsHow)),
+          st.how ? paidLogForm(id, cat.key, cat.label, function () { openPnlBud(id, key); }, st.how, { bud: key, list: list }) : null] : null);
+      };
+      draw();
+      return [
+        h('h2', { class: 'sh-title' }, WORDS.pnlBudsAddExp),
+        h('p', { class: 'sh-sub' }, WORDS.pnlBudsIn(b.name)),
+        cats.length ? h('div', { class: 'field' }, h('span', { class: 'field-label' }, WORDS.pnlBudsWhich),
+          chipRow(cats.map(function (c) { return c.label; }), (cats.filter(function (c) { return c.key === st.cat; })[0] || {}).label || null, function (v) {
+            st.cat = (cats.filter(function (c) { return c.label === v; })[0] || {}).key || ''; st.how = ''; draw();
+          })) : h('p', { class: 'note' }, WORDS.pnlCatsNoneNoUp),
+        box,
+        h('div', { class: 'stack' }, back)
+      ];
+    }, { label: WORDS.pnlBudsAddExp, cls: 'cat-sheet' });
+  }
+  function budPick(id, o) {
+    var t = getTour(id), list = G.pnlBudList(t), via = o.via || [], host = h('div', { class: 'field pk-bud-pick' }), st = { naming: false, made: null };
+    var chips = G.pnlBudChips(list);
+    var nameOf = function (k) { var b = list.filter(function (x) { return x.key === k; })[0]; return b ? b.name : ''; };
+    var labelOf = function (k) { var c = chips.filter(function (x) { return x.key === k; })[0]; return c ? c.label : ''; };
+    var keyOf = function (v) { var c = chips.filter(function (x) { return x.label === v; })[0]; return c ? c.key : ''; };
+    if (!o.edit) {
+      var said = o.now ? nameOf(o.now) : via.map(function (v) { return v.name; }).join(', ');
+      return said ? h('div', { class: 'field pk-bud-pick' }, h('span', { class: 'field-label' }, WORDS.pnlBudsPick), h('p', { class: 'note' }, said)) : null;
+    }
+    var draw = function () {
+      var kids = [h('span', { class: 'field-label' }, WORDS.pnlBudsPick)];
+      if (st.naming) {
+        var inp = h('input', { class: 'input', type: 'text', maxlength: G.PNL_BUD_NAME_MAX, autocomplete: 'off', enterkeyhint: 'done',
+          placeholder: WORDS.pnlBudsName, 'aria-label': 'New budget name', onkeydown: function (e) { if (e.key === 'Enter') { e.preventDefault(); named(); } } });
+        var named = function () {
+          var why = G.pnlBudNameWhy(getTour(id) || t, inp.value, null);
+          if (why) { toast(why); return; }
+          st.naming = false; st.made = { name: G.pnlWord(inp.value, G.PNL_BUD_NAME_MAX) };
+          draw();
+          o.onPick('', st.made);
+        };
+        kids.push(h('div', { class: 'pk-bud-namer' }, inp,
+          h('button', { class: 'btn primary sm' + cfCls(true) + ' pk-bud-name-add', type: 'button', onclick: named }, 'Add'),
+          h('button', { class: 'iconbtn sm', type: 'button', 'aria-label': 'Cancel', onclick: function () { st.naming = false; draw(); } }, icon('close', 16))));
+        setTimeout(function () { if (inp.isConnected) inp.focus(); }, 30);
+      } else {
+        var now = st.made ? st.made.name : o.now ? labelOf(o.now) : via.length === 1 ? labelOf(via[0].key) : via.length ? '' : WORDS.pnlBudsNo;
+        kids.push(chipRow([WORDS.pnlBudsNo].concat(chips.map(function (c) { return c.label; }), st.made ? [st.made.name] : [], [WORDS.pnlBudsNew]), now, function (v) {
+          if (v === WORDS.pnlBudsNew) { st.naming = true; draw(); return; }
+          if (st.made && v === st.made.name) return;
+          st.made = null;
+          var k = v === WORDS.pnlBudsNo ? '' : keyOf(v);
+          if (!k && via.length) toast(WORDS.pnlBudsViaNone(via));
+          o.onPick(k, null);
+          if (!k && via.length) draw();
+        }));
+        if (!o.now && !st.made && via.length) kids.push(h('span', { class: 'hint' }, WORDS.pnlBudsVia(via)));
+      }
+      fillEl(host, kids);
+    };
+    draw();
+    return host;
+  }
+  function budLine(text) {
+    return String(text || '').split(' · ').map(function (part, i) { return [i ? ' · ' : null, h('span', { class: 'pk-nw' }, part)]; });
+  }
+  function openPnlBudEntry(id, ref, back) {
+    var busy = false;
+    openSheet(function (panel) {
+      panel.classList.add('iv-sheet', 'pnl-sheet', 'pk-sheet', 'pk-bud-sheet');
+      var t = getTour(id), m = /^([ck]):(.+)$/.exec(String(ref || '')), kind = m ? m[1] : '', eid = m ? m[2] : '';
+      var map = t && m ? (kind === 'k' ? t.cashLog : t.charges) : null, x = G.isObj(map) && G.isObj(map[eid]) ? map[eid] : null;
+      var done = h('button', { class: 'btn ghost block' + cfCls(false), type: 'button', onclick: function () { if (back) back(); else closeSheet(); } }, back ? 'Back' : 'Done');
+      if (!G.isPnlBook(t) || !x || !canSeeMoney(id)) return [h('h2', { class: 'sh-title' }, WORDS.pnlBudsPick), h('p', { class: 'note' }, 'That entry isn’t there anymore.'), h('div', { class: 'stack' }, done)];
+      var e = G.pnlBudEntry(t, kind, eid);
+      var pick = async function (k, made) {
+        if (busy) return;
+        var now = getTour(id) || t, r = made ? G.pnlBudNewTag(now, made.name, null, newId(), ref) : G.pnlBudTag(now, ref, k);
+        if (r && !r.patch) { toast(r.why); openPnlBudEntry(id, ref, back); return; }
+        if (!r) return;
+        busy = true;
+        var ok = await api.update(id, r.patch);
+        busy = false;
+        if (ok) {
+          var after = G.pnlMerge(now, r.patch), is = G.pnlBudEntry(after, kind, eid), names = {};
+          G.pnlBudList(after).forEach(function (bb) { names[bb.key] = bb.name; });
+          toast(is.own ? WORDS.pnlBudsIn(names[is.own]) : is.via.length ? WORDS.pnlBudsIn(is.via[0].name) : WORDS.pnlBudsOutSaid);
+          render(true);
+        }
+        openPnlBudEntry(id, ref, back);
+      };
+      var name = kind === 'k' ? String(x.note || x.label || 'Merch cash') : String(x.merchant || 'Charge');
+      var how = kind === 'k' ? 'Merch cash' : x.cash ? 'Cash' : x.paid ? 'Debit' : 'Credit';
+      return [
+        h('h2', { class: 'sh-title' }, name),
+        h('p', { class: 'sh-sub' }, [x.date ? dayMD(x.date) : '', catName(t, x.category), how, kind === 'c' ? cardLabelFor(t, x.account) : ''].filter(Boolean).join(' · ')),
+        h('div', { class: 'ledger' }, h('div', { class: 'row' }, h('div', { class: 'row-label' }, name, x.accounted ? h('span', { class: 'hint' }, 'Already accounted for') : null),
+          h('span', { class: 'amt num' }, G.moneyCents(G.num(x.amount))))),
+        budPick(id, { now: e.own, via: e.via, edit: canEditTour(id) && canWrite(), onPick: pick }),
+        h('div', { class: 'stack' }, done)
+      ];
+    }, { label: WORDS.pnlBudsPick });
   }
   var PNL_UPLOAD_ACCEPT = 'application/pdf,.pdf,.csv,text/csv,.xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,';
   function pnlUploadPrompt(t, body, isImage) {
@@ -25704,6 +26021,7 @@
     rows.unshift(head);
     var toCent = function (v) { return Math.round(v * 100) / 100; };
     projTotal = toCent(projTotal); creditTotal = toCent(creditTotal); paidOutTotal = toCent(paidOutTotal); cashTotal = toCent(cashTotal);
+    if (o && o.totals) { o.totals.credit = creditTotal; o.totals.debit = paidOutTotal; o.totals.cash = cashTotal; }
     [['proj', projTotal], ['credit', creditTotal], ['debit', paidOutTotal], ['cash', cashTotal]].forEach(function (col) {
       var list = shown[col[0]], whole = G.footTo(list.map(function (x) { return x.v; }), col[1], 1);
       list.forEach(function (x, i) {
@@ -26045,6 +26363,9 @@
       category: ch && typeof ch.category === 'string' ? ch.category : cl && typeof cl.category === 'string' ? cl.category : key
     };
     var filed = f.category;
+    var budRef = !r.typed && G.isPnlBook(t) ? (ch ? 'c:' + r.chargeId : 'k:' + r.cashId) : '';
+    var budNow = budRef ? G.pnlBudEntry(t, ch ? 'c' : 'k', ch ? r.chargeId : r.cashId) : null;
+    if (budNow) { f.bud = budNow.own; f.budMade = null; f.budPicked = false; }
     openSheet(function () {
       var sel = h('select', { class: 'input', 'aria-label': 'Category', onchange: function (e) { f.category = e.target.value; } },
         cats.map(function (c) { return h('option', { value: c.key }, c.label); }));
@@ -26070,6 +26391,11 @@
             splitAfterEdit(cl, f, patch.cashLog[r.cashId]);
           }
         }
+        if (budRef && f.budPicked) {
+          var bp = f.budMade ? G.pnlBudNewTag(getTour(id) || t, f.budMade.name, null, newId(), budRef) : G.pnlBudTag(getTour(id) || t, budRef, f.bud);
+          if (bp && !bp.patch) { toast(bp.why); return; }
+          if (bp) patch.pnlBuds = bp.patch.pnlBuds;
+        }
         if (!(await catOnBook(id, r.typed ? key : f.category, true))) return;
         if (await api.update(id, patch)) {
           delete S.drafts['exp:' + id];
@@ -26093,6 +26419,7 @@
             field('Day', h('input', { class: 'input', type: 'date', value: f.date, 'aria-label': 'Day',
               onchange: function (e) { f.date = e.target.value; } })),
             field('Category', h('div', { class: 'sel-wrap' }, sel, icon('chevron', 16)))],
+          budNow ? budPick(id, { now: budNow.own, via: budNow.via, edit: true, onPick: function (k, made) { f.bud = k; f.budMade = made || null; f.budPicked = true; } }) : null,
           h('div', { class: 'stack' },
             h('button', { class: 'btn primary block', type: 'submit' }, 'Save'),
             h('button', { class: 'btn ghost block', type: 'button', onclick: function () { closeSheet(); again(); } }, 'Cancel')))
@@ -26149,6 +26476,13 @@
         return h('button', { class: 'sw-edit sw-group', type: 'button', 'aria-label': 'Mark ' + r.label + ' for your CPA',
           onclick: function () { openCpaMarks(id, r, function () { reopen(); }); } }, icon('tabsheet', 16), 'For CPA');
       };
+      var budOk = G.isPnlBook(whole) && canWrite() && canEditTour(id);
+      var canBud = function (r) { return budOk && !!(r.chargeId || r.cashId); };
+      var budBtn = function (r) {
+        return h('button', { class: 'sw-edit sw-group', type: 'button', 'aria-label': 'Budget for ' + r.label,
+          onclick: function () { openPnlBudEntry(id, r.chargeId ? 'c:' + r.chargeId : 'k:' + r.cashId, function () { reopen(); }); } }, icon('tabmoney', 16), WORDS.pnlBudsPick);
+      };
+      var anyBud = all.some(canBud) && G.pnlBudList(whole).length > 0, budSay = anyBud ? ' ' + WORDS.pnlBudsSwipe : '';
       var anyMove = all.some(function (r) { return offMoveOk(id, r); });
       var pastList = pastMoveTo(id), anyPast = pastList.length > 0 && all.some(function (r) { return pastMoveOk(id, r, pastList); });
       var pastSay = anyPast ? ' Came in after a tour? Swipe it left and tap Past tour.' : '';
@@ -26157,7 +26491,7 @@
       var fit = function (acts) { if (acts.length >= 5) acts.forEach(function (b) { b.style.width = '64px'; }); return acts; };
       var entryNode = function (r) {
           var line = logRow(r);
-          var first = (canGroup(r) ? [groupBtn(r)] : canWho(r) ? [whoBtn(r)] : []).concat(canCpa(r) ? [cpaBtn(r)] : [], canInfo(r) ? [infoBtn(r)] : [])
+          var first = (canGroup(r) ? [groupBtn(r)] : canWho(r) ? [whoBtn(r)] : []).concat(canBud(r) ? [budBtn(r)] : [], canCpa(r) ? [cpaBtn(r)] : [], canInfo(r) ? [infoBtn(r)] : [])
             .concat(offMoveOk(id, r) ? [offMoveBtn(id, r, function () { reopen(); })] : [])
             .concat(pastMoveOk(id, r, pastList) ? [pastMoveBtn(id, r, function () { reopen(); })] : []);
           if (mine(r)) {
@@ -26201,14 +26535,14 @@
         loose ? h('p', { class: 'note' }, plural(loose, 'entry').replace('entrys', 'entries') + ' under Crew ' + (loose === 1 ? 'isn\u2019t' : 'aren\u2019t') + ' anyone\u2019s yet.' +
           (anyWho ? ' Swipe one left and tap Who.' : '')) : null,
         anyCpa ? h('p', { class: 'note sw-hint' }, cpaSwipeWords(anyGroup, anyWho, anySlide, anyInfo),
-          anyMove ? ' Yours, not the band’s? Swipe it left and tap Move to MY PAY.' : '', pastSay)
+          anyMove ? ' Yours, not the band’s? Swipe it left and tap Move to MY PAY.' : '', pastSay, budSay)
         : anySlide || anyGroup || anyWho ? h('p', { class: 'note sw-hint' }, anyGroup
           ? 'Swipe one left to move it to another group' + (anySlide ? ', or to fix it.' : '.')
           : anyWho ? 'Swipe one left to say who it was for' + (anySlide ? ', or to fix it.' : '.')
-          : 'Logged one wrong? Swipe it left to fix it.', anyMove ? ' Yours, not the band’s? Swipe it left and tap Move to MY PAY.' : '', pastSay)
-          : anyInfo ? h('p', { class: 'note sw-hint' }, 'Swipe a charge left for More info.' + (anyMove ? ' Yours, not the band’s? Swipe it left and tap Move to MY PAY.' : '') + pastSay)
-          : anyMove ? h('p', { class: 'note sw-hint' }, 'Yours, not the band’s? Swipe it left and tap Move to MY PAY.' + pastSay)
-          : anyPast ? h('p', { class: 'note sw-hint' }, pastSay.trim()) : null,
+          : 'Logged one wrong? Swipe it left to fix it.', anyMove ? ' Yours, not the band’s? Swipe it left and tap Move to MY PAY.' : '', pastSay, budSay)
+          : anyInfo ? h('p', { class: 'note sw-hint' }, 'Swipe a charge left for More info.' + (anyMove ? ' Yours, not the band’s? Swipe it left and tap Move to MY PAY.' : '') + pastSay + budSay)
+          : anyMove ? h('p', { class: 'note sw-hint' }, 'Yours, not the band’s? Swipe it left and tap Move to MY PAY.' + pastSay + budSay)
+          : anyPast || anyBud ? h('p', { class: 'note sw-hint' }, (pastSay + budSay).trim()) : null,
         body,
         away.length ? [h('h3', { class: 'sh-h3' }, 'During a tour \u00b7 not counted here'),
           h('div', { class: 'ledger logged' }, away.map(entryNode))] : null,
@@ -26816,7 +27150,7 @@
       onclick: function () { openLoggedSheet(id, key, back); } },
       icon('card', 18), 'Logged Card Transactions' + (n ? ' (' + n + ')' : ''));
   }
-  function paidLogForm(id, key, label, after, how) {
+  function paidLogForm(id, key, label, after, how, o) {
     var cash = how === 'cash';
     var paid = how === 'paid' || cash;
     var kindWord = cash ? 'cash' : paid ? 'debit' : 'credit';
@@ -26825,11 +27159,12 @@
     var asks = cash && !(t0 && t0.kind === 'offtour');
     var f = { amount: 0, date: G.tourToday(), what: '', merch: null, crewId: null };
     var yes = null, no = null;
+    var list = o && o.list && o.list === key && key !== 'crew' && G.isPeopleCat(t0, key) ? key : null, asksWho = key === 'crew' || !!list;
     var whoHost = h('div');
     var drawWho = function () {
-      var pickWho = key === 'crew' ? crewSelect(id, { cls: 'input', value: f.crewId, onRefresh: drawWho, onPick: function (v) { f.crewId = v; } }) : null;
+      var pickWho = asksWho ? crewSelect(id, Object.assign({ cls: 'input', value: f.crewId, onRefresh: drawWho, onPick: function (v) { f.crewId = v; } }, list ? { list: list } : {})) : null;
       whoHost.replaceChildren.apply(whoHost, pickWho ? [field('Who was it for?', h('div', { class: 'sel-wrap' }, pickWho, icon('chevron', 16)),
-        'Leave it and it sits under Crew with no name on it.')] : []);
+        'Leave it and it sits under ' + (list ? label : 'Crew') + ' with no name on it.')] : []);
     };
     drawWho();
     var submit = async function (e) {
@@ -26838,25 +27173,28 @@
       if (!(f.amount > 0)) { toast('Enter how much was ' + word); return; }
       if (!G.parseDay(f.date)) { toast('Pick the day it was ' + word); return; }
       if (asks && f.merch == null) { toast('Deduct from the Merch Cash Log? Tick Yes or No'); return; }
-      var who = key === 'crew' && f.crewId ? crewPick(id, null, f.crewId) : null, whoId = null;
+      var who = asksWho && f.crewId ? crewPick(id, null, f.crewId) : null, whoId = null;
       if (who) {
         whoId = await crewOnBook(id, who);
         if (!whoId) { toast('That didn\u2019t save. Try again.'); return; }
       }
       var named = f.what.trim() || (who ? (who.name || 'Crew') + ' \u2014 pay' : label);
-      var patch;
+      var patch, lid = newId();
       if (asks && f.merch) {
         patch = { cashLog: {} };
-        patch.cashLog[newId()] = Object.assign({ date: f.date, amount: f.amount, label: named, category: key, createdAt: Date.now() }, whoId ? { crewId: whoId } : {});
+        patch.cashLog[lid] = Object.assign({ date: f.date, amount: f.amount, label: named, category: key, createdAt: Date.now() }, whoId ? { crewId: whoId } : {});
       } else {
         patch = { charges: {} };
-        patch.charges[newId()] = Object.assign({ date: f.date, merchant: named, amount: f.amount, category: key,
+        patch.charges[lid] = Object.assign({ date: f.date, merchant: named, amount: f.amount, category: key,
           accounted: false, manual: true, paid: paid, cash: cash || undefined, createdAt: Date.now() }, whoId ? { crewId: whoId } : {}, offByOf(id));
       }
+      var bud = o && o.bud ? G.pnlBudList(getTour(id)).filter(function (b) { return b.key === o.bud; })[0] : null;
+      if (bud) { patch.pnlBuds = { tags: {} }; patch.pnlBuds.tags[(patch.cashLog ? 'k:' : 'c:') + lid] = bud.key; }
       if (!(await catOnBook(id, key, true))) return;
       if (await api.update(id, patch)) {
         delete S.drafts['exp:' + id];
-        toast(money(f.amount) + ' logged as ' + kindWord + (who ? ' \u00b7 paid to ' + (who.name || 'crew') : '') + (asks && f.merch ? ' \u00b7 taken from the merch cash log' : ''));
+        toast(money(f.amount) + ' logged as ' + kindWord + (who ? ' \u00b7 paid to ' + (who.name || 'crew') : '') + (asks && f.merch ? ' \u00b7 taken from the merch cash log' : '') +
+          (bud ? ' \u00b7 in ' + bud.name : ''));
         render(true);
         if (after) after(); else closeSheet();
       }
@@ -26875,7 +27213,7 @@
         : 'Credit: put on a credit card. It counts now and stays owed until the card is paid off.'),
       field('How much was ' + word, moneyInput({ id: 'log-paid', value: 0, label: label + ' ' + word, nextId: 'log-what',
         onValue: function (v) { f.amount = v; } })),
-      key === 'crew' ? whoHost : null,
+      asksWho ? whoHost : null,
       field('Expense details', h('input', { class: 'input', type: 'text', id: 'log-what', maxlength: 60, autocomplete: 'off',
         placeholder: 'Optional, e.g. per diems', oninput: function (e) { f.what = e.target.value; } })),
       field('Day it was ' + word, h('input', { class: 'input', type: 'date', value: f.date, 'aria-label': 'Day it was ' + word,
@@ -28067,6 +28405,20 @@
           h('span', null, over ? 'Paid ' + money(got - pay) + ' over the projection'
             : pay > 0 ? (pct >= 100 ? 'Paid in full' : money(Math.max(0, pay - got)) + ' left to pay') : 'No projection set yet'),
           h('span', { class: 'num' }, pay > 0 ? money(got) + ' of ' + money(pay) : money(got) + ' paid')));
+      var budRef = 'p:' + pid;
+      var budNode = G.isPnlBook(t) && canSeeMoney(id) ? budPick(id, { now: G.pnlBudTags(t)[budRef] || '', via: [], edit: canEditTour(id) && canWrite(),
+        onPick: async function (k, made) {
+          var now = getTour(id) || t, r = made ? G.pnlBudNewTag(now, made.name, null, newId(), budRef) : G.pnlBudTag(now, budRef, k);
+          if (r && !r.patch) { toast(r.why); openCrewPayEdit(id, pid); return; }
+          if (!r) return;
+          if (await api.update(id, r.patch)) {
+            var names = {};
+            G.pnlBudList(G.pnlMerge(now, r.patch)).forEach(function (b) { names[b.key] = b.name; });
+            toast(made ? WORDS.pnlBudsIn(r.name) : k ? WORDS.pnlBudsIn(names[k]) : WORDS.pnlBudsOutSaid);
+            render(true);
+          }
+          openCrewPayEdit(id, pid);
+        } }) : null;
       return [
         h('h2', { class: 'sh-title' }, p.name || 'Crew'),
         h('p', { class: 'sh-sub' }, p.title || 'No title'),
@@ -28095,6 +28447,7 @@
             h('div', { class: 'row-label' }, 'Logged transactions',
               h('span', { class: 'hint' }, paidN ? plural(paidN, 'entry').replace('entrys', 'entries') : 'Nothing logged yet')),
             icon('chevron', 18))),
+        budNode,
         bar
       ];
     }, { label: 'Edit crew', cls: 'cat-sheet', onClose: function () { openCrewSheet(id, false, G.pnlListOf(getTour(id), pid)); } });
@@ -42306,6 +42659,7 @@
     rows.forEach(function (r) {
       r.pick = false; r.dest = baseOff ? 'off' : 'cur'; r.upTo = ups.length ? ups[0].id : null; r.pastTo = pasts.length ? pasts[0].id : null;
       r.studioTo = studios.length ? studios[0].id : null;
+      if (pnlBase && feed && r.feedId != null && r.bud == null) r.bud = G.pnlBudTagOf(base, 'c:p' + r.feedId);
     });
     var landsOn = function (r) {
       if (r.dest === 'off') return null;
@@ -42315,6 +42669,17 @@
       return curTour ? curTour.id : tourId;
     };
     var nameOf = function (id2) { var x = getTour(id2); return (x && x.name) || 'the tour'; };
+    var budTagsOf = function (xs, refOf) {
+      if (!pnlBase) return null;
+      var now = getTour(tourId) || base, live = {}, out = null;
+      G.pnlBudList(now).forEach(function (b) { live[b.key] = true; });
+      xs.forEach(function (x) {
+        var ref = refOf(x), want = x.dest !== 'off' && landsOn(x) === tourId && x.bud && live[x.bud] === true ? x.bud : '';
+        if (want) { if (G.pnlBudTagOf(now, ref) !== want) (out = out || {})[ref] = want; }
+        else if (G.pnlBudTagKept(now, ref)) (out = out || {})[ref] = null;
+      });
+      return out;
+    };
     var offered = {};
     chargeCats(base).forEach(function (c) { offered[c.key] = true; });
     var NOT_PICKED = { offdebt: true };
@@ -42668,6 +43033,8 @@
           var again = Math.min(r.already, list.filter(function (x) { return x.sentOnce && stuck.indexOf(x) < 0; }).length);
           r.already -= again;
           list.forEach(function (x) { if (stuck.indexOf(x) < 0) x.sentOnce = false; });
+          var budLost = false, budTags = keep ? budTagsOf(list.filter(function (x) { return stuck.indexOf(x) < 0; }), function (x) { return 'c:p' + x.feedId; }) : null;
+          if (budTags) budLost = (await within(api.update(tourId, { pnlBuds: { tags: budTags } }), GIVE_UP_MS)) !== true;
           var bits = [];
           if (r.retried && keep && !r.filed && r.already) {
             r.filed = r.already; r.already = 0;
@@ -42679,7 +43046,7 @@
           if (r.skipped) bits.push(plural(r.skipped, 'charge') + ' set aside');
           if (r.already) tell(plural(r.already, 'charge') + ' already sorted by someone else');
           if (again) tell(plural(again, 'charge') + ' had already gone through the first time');
-          if (stuck.length || whoMissed) wrong = true;
+          if (stuck.length || whoMissed || budLost) wrong = true;
           if (stuck.length) {
             var orphanOf = stuck.filter(function (x) { return x.waitsOn && feedTourGone(x.waitsOn); });
             var orphans = orphanOf.length, lostTour = orphanOf.filter(function (x) { return !getTour(x.waitsOn); }).length;
@@ -42693,6 +43060,7 @@
           if (r.offTour) tell(r.offTour + ' to Off Tour');
           if (r.upcoming) tell(r.upcoming + ' to ' + (list.length === 1 && landsOn(list[0]) ? nameOf(landsOn(list[0])) : 'another tour'));
           if (whoMissed) tell('the crew member didn\u2019t save: set it under Crew, Logged Card Transactions');
+          if (budLost) tell(WORDS.pnlBudsLost);
           said = bits.join(' \u00b7 ');
           if (say && !keep && r.skipped === list.length && !r.already) said = reason === 'set_aside' && say === asideSay ? asideWords(list.length) : say;
           if (keep && !hadOff && r.offTour && list.some(function (x) { return x.dest === 'off' && String(x.category).indexOf('x-') === 0; })) healOffBookSoon(band);
@@ -42705,9 +43073,11 @@
           var total = 0;
           var put = async function (where, xs, extra) {
             if (!where || !xs.length) return true;
-            var patch = {}, sum = 0;
+            var patch = {}, sum = 0, cids = [];
             xs.forEach(function (x, k) {
-              patch[newId() + k] = Object.assign({ date: x.date, merchant: x.merchant, amount: G.num(x.amount), category: extra ? x.category : fileCat(x),
+              var cid = newId() + k;
+              cids.push(cid);
+              patch[cid] = Object.assign({ date: x.date, merchant: x.merchant, amount: G.num(x.amount), category: extra ? x.category : fileCat(x),
                 accounted: false, importId: importId, createdAt: Date.now() + k },
                 !extra && fileCat(x) === 'crew' && x.crewId && (where === offId && x.dest === 'off' ? x.offWho : crewPerson(getTour(where), x.crewId))
                   ? { crewId: where === offId && x.dest === 'off' ? x.offWho : x.crewId } : {},
@@ -42720,7 +43090,8 @@
             var imports = {};
             imports[importId] = { createdAt: had ? had.createdAt : Date.now(), count: (had ? G.num(had.count) : 0) + xs.length,
               total: (had ? G.num(had.total) : 0) + sum, source: source };
-            return api.update(where, { charges: patch, imports: imports });
+            var budTags = !extra && where === tourId ? budTagsOf(xs, function (x) { return 'c:' + cids[xs.indexOf(x)]; }) : null;
+            return api.update(where, budTags ? { charges: patch, imports: imports, pnlBuds: { tags: budTags } } : { charges: patch, imports: imports });
           };
           var offId = offs.length ? (baseOff ? tourId : await ensureOffTour(band)) : null;
           if (offs.length && !offId) {
@@ -43110,7 +43481,19 @@
         whoHost.replaceChildren.apply(whoHost, who ? [who, could, note].filter(Boolean) : []);
         whoHost.hidden = !who;
       };
-      r.drawWho = drawWho;
+      var budHost = h('div', { class: 'rv-bud pk-rv-bud' });
+      var drawBud = function () {
+        var list = pnlBase ? G.pnlBudList(getTour(tourId) || base) : [];
+        if (r.bud && !list.some(function (b) { return b.key === r.bud; })) r.bud = '';
+        var on = list.length > 0 && r.dest !== 'off' && landsOn(r) === tourId;
+        var chips = G.pnlBudChips(list);
+        budHost.hidden = !on;
+        fillEl(budHost, on ? [h('span', { class: 'rv-dlabel' }, WORDS.pnlBudsPick),
+          chipRow([WORDS.pnlBudsNo].concat(chips.map(function (c) { return c.label; })), (chips.filter(function (c) { return c.key === r.bud; })[0] || {}).label || WORDS.pnlBudsNo,
+            function (v) { if (here(r)) r.bud = (chips.filter(function (c) { return c.label === v; })[0] || {}).key || ''; })] : null);
+      };
+      drawBud();
+      r.drawWho = function () { drawWho(); drawBud(); };
       var info = chargeInfo({ key: lineKey(r),
         kind: 'charge', name: r.merchant, amount: r.amount, date: r.date, account: ciAccount(r.account),
         refund: G.num(r.amount) < 0 || r.why === 'Refund' }, {
@@ -43189,6 +43572,7 @@
             });
           })()),
         whoHost,
+        budHost,
         destRow(r),
         feed ? h('button', { class: 'linkbtn rv-aside', type: 'button', onclick: function () { file([r], false, asideSay, 'set_aside'); } },
           'Not a ' + bookWord + ' charge: set it aside') : null,

@@ -2786,6 +2786,269 @@
     return 'Advance ' + money(a.total) + ' · Spent ' + money(a.out) + ' · ' +
       (a.over > 0 ? 'Over by ' + money(round(a.out) - round(a.total)) : money(Math.max(0, round(a.total) - round(a.out))) + ' left');
   }
+  var PNL_BUD_KEY = /^b-[a-z0-9]{1,30}$/;
+  var PNL_BUD_NAME_MAX = PNL_CAT_NAME_MAX;
+  var PNL_BUD_SAID = ['None', 'New budget', 'Not in a budget'];
+  function pnlBudsOf(t) { return isPnlBook(t) && isObj(t.pnlBuds) ? t.pnlBuds : null; }
+  function pnlBudList(t) {
+    var b = pnlBudsOf(t), src = b && isObj(b.list) ? b.list : null, out = [];
+    if (!src) return out;
+    Object.keys(src).forEach(function (k) {
+      var x = src[k];
+      if (!PNL_BUD_KEY.test(k) || !isObj(x) || typeof x.name !== 'string') return;
+      var name = pnlWord(x.name, PNL_BUD_NAME_MAX);
+      if (!name) return;
+      var plan = typeof x.plan === 'number' ? cents(x.plan) : 0;
+      out.push({ key: k, name: name, at: typeof x.at === 'number' && isFinite(x.at) ? x.at : 9999, plan: plan > 0 ? plan : null });
+    });
+    return out.sort(function (a, b) { return a.at - b.at || a.key.localeCompare(b.key); });
+  }
+  function pnlBudRefLive(t, ref) {
+    var m = /^([ckp]):(.+)$/.exec(typeof ref === 'string' ? ref : '');
+    var map = m && isObj(t) ? (m[1] === 'c' ? t.charges : m[1] === 'k' ? t.cashLog : t.crew) : null;
+    return isObj(map) && Object.prototype.hasOwnProperty.call(map, m[2]) && isObj(map[m[2]]);
+  }
+  function pnlBudTags(t, list) {
+    var b = pnlBudsOf(t), src = b && isObj(b.tags) ? b.tags : null, out = {}, live = {};
+    if (!src) return out;
+    (list || pnlBudList(t)).forEach(function (x) { live[x.key] = true; });
+    Object.keys(src).forEach(function (ref) {
+      var k = src[ref];
+      if (typeof k === 'string' && live[k] === true && pnlBudRefLive(t, ref)) out[ref] = k;
+    });
+    return out;
+  }
+  function pnlBudTagOf(t, ref) {
+    var b = pnlBudsOf(t), src = b && isObj(b.tags) ? b.tags : null;
+    var k = src && typeof ref === 'string' && pnlHas(src, ref) ? src[ref] : null;
+    return typeof k === 'string' && pnlBudList(t).some(function (x) { return x.key === k; }) ? k : '';
+  }
+  function pnlBudTagKept(t, ref) {
+    var b = pnlBudsOf(t), src = b && isObj(b.tags) ? b.tags : null;
+    return !!src && typeof ref === 'string' && pnlHas(src, ref) && src[ref] != null;
+  }
+  function pnlBudChips(list) {
+    var used = Object.create(null);
+    PNL_BUD_SAID.forEach(function (w) { used[w] = true; });
+    return (list || []).map(function (b) {
+      var name = String(b.name), label = name, n = 1;
+      while (used[label]) { n += 1; label = name + ' (' + n + ')'; }
+      used[label] = true;
+      return { key: b.key, label: label };
+    });
+  }
+  function pnlBudLines(t, c) {
+    var shown = pnlCatSet(t) ? c.lines.filter(function (l) { return pnlLineShown(t, l); }) : c.lines, label = Object.create(null), order = Object.create(null);
+    shown.forEach(function (l, i) {
+      if (l.key === 'merchTips' || l.key === 'reimbursements') return;
+      label[l.key] = String(l.label == null ? '' : l.label); order[l.key] = i;
+    });
+    if (Math.abs(num(c.dayByDay)) > 0.004) { label[DAY_BY_DAY] = 'Day by day'; order[DAY_BY_DAY] = shown.length; }
+    return { label: label, order: order, shown: shown };
+  }
+  function pnlSpentTotal(t, c) {
+    var cc = c || calc(t), L = pnlBudLines(t, cc), n = 0;
+    L.shown.forEach(function (l) { n += num(l.paid); });
+    var feed = cardDebts(t).filter(function (d) { return isObj(d.feed); });
+    if (feed.length && !L.shown.some(function (l) { return l.key === 'card'; })) feed.forEach(function (d) { n += cardSummary(d, t).remainder; });
+    if (Math.abs(num(cc.dayByDay)) > 0.004) n += num(cc.dayByDay);
+    otherDebts(t).forEach(function (d) { if (Math.abs(num(d.amount)) > 0.004) n += num(d.amount); });
+    return cents(n);
+  }
+  function pnlBuds(t, c, spent) {
+    var list = pnlBudList(t), out = { list: [], total: 0, none: 0, noneShown: 0 };
+    if (!list.length) return out;
+    var cc = c || calc(t), L = pnlBudLines(t, cc), tags = pnlBudTags(t, list), by = Object.create(null), lists = null;
+    var onLine = function (line) { return pnlHas(L.label, line); };
+    var paidTo = Object.create(null);
+    list.forEach(function (b) {
+      by[b.key] = { key: b.key, name: b.name, at: b.at, plan: b.plan, spent: 0, planned: 0, toPay: 0, n: 0, people: 0, groups: [], refs: {} };
+      out.list.push(by[b.key]);
+    });
+    var labelOf = function (line) {
+      if (onLine(line)) return L.label[line];
+      lists = lists || pnlPeopleCats(t);
+      return pnlHas(lists, line) && lists[line] ? String(lists[line]) : line === 'members' ? 'Members' : 'Crew';
+    };
+    var groupOf = function (m, line) {
+      var g = m.groups.filter(function (x) { return x.key === line; })[0];
+      if (!g) { g = { key: line, label: labelOf(line), amount: 0, rows: [], people: [], at: pnlHas(L.order, line) ? L.order[line] : 9999 }; m.groups.push(g); }
+      return g;
+    };
+    var put = function (m, line, x, kind, amount, crewId) {
+      var g = groupOf(m, line), ref = kind + ':' + x.id;
+      g.rows.push({ ref: ref, kind: kind, id: x.id, date: parseDay(x.date) ? x.date : '', amount: cents(amount), whole: cents(x.amount), crewId: crewId || null,
+        name: kind === 'k' ? String(x.note || x.label || 'Merch cash') : String(x.merchant || 'Charge'), at: num(x.createdAt) });
+      g.amount += num(amount); m.spent += num(amount); m.refs[ref] = true;
+    };
+    [['c', t.charges], ['k', t.cashLog]].forEach(function (pair) {
+      var kind = pair[0];
+      rows(pair[1]).forEach(function (x) {
+        if (kind === 'c' ? x.accounted : CASH_MOVES[x.category]) return;
+        var shares = isPeopleCat(t, x.category) ? crewShares(t, x).shares : [];
+        shares.forEach(function (s) { paidTo[s.crewId] = (pnlHas(paidTo, s.crewId) ? paidTo[s.crewId] : 0) + num(s.amount); });
+        var own = tags[kind + ':' + x.id];
+        if (own) {
+          chargeLineParts(t, x).forEach(function (q) { if (onLine(q.line)) put(by[own], q.line, x, kind, q.amount); });
+          return;
+        }
+        shares.forEach(function (s) {
+          var b = tags['p:' + s.crewId], line = personLine(t, s.crewId, s.person);
+          if (b && onLine(line)) put(by[b], line, x, kind, s.amount, s.crewId);
+        });
+      });
+    });
+    rows(t.crew).forEach(function (p) {
+      var b = tags['p:' + p.id];
+      if (!b) return;
+      var m = by[b], line = personLine(t, p.id, p), planned = cents(crewPay(t, p)), paid = cents(pnlHas(paidTo, p.id) ? paidTo[p.id] : 0);
+      var toPay = planned > 0 ? cents(Math.max(0, planned - paid)) : 0;
+      if (line === 'members' && !onLine('members')) line = 'crew';
+      groupOf(m, line).people.push({ id: p.id, name: String(p.name || '').trim() || 'No name', title: String(p.title || '').trim(), planned: planned, paid: paid, toPay: toPay });
+      m.planned += planned; m.toPay += toPay; m.people += 1;
+    });
+    out.total = spent && typeof spent === 'object' ? cents(num(spent.credit) + num(spent.debit) + num(spent.cash)) : pnlSpentTotal(t, cc);
+    out.list.forEach(function (m) {
+      m.spent = cents(m.spent); m.planned = cents(m.planned); m.toPay = cents(m.toPay); m.n = Object.keys(m.refs).length; delete m.refs;
+      m.left = m.plan != null ? cents(m.plan - m.spent - m.toPay) : null;
+      m.over = m.plan != null && cents(m.spent + m.toPay - m.plan) > 0 ? cents(m.spent + m.toPay - m.plan) : 0;
+      m.groups.sort(function (a, b) { return a.at - b.at || String(a.label).localeCompare(String(b.label)); });
+      m.groups.forEach(function (g) {
+        g.amount = cents(g.amount);
+        g.rows.sort(function (a, b) { return String(b.date).localeCompare(String(a.date)) || b.at - a.at; });
+        g.people.sort(function (a, b) { return a.name.localeCompare(b.name); });
+      });
+    });
+    out.none = cents(out.total - out.list.reduce(function (n, m) { return n + m.spent; }, 0));
+    var whole = footTo(out.list.map(function (m) { return m.spent; }).concat([out.none]), out.total, 1);
+    out.list.forEach(function (m, i) {
+      m.shown = whole[i];
+      var gw = footTo(m.groups.map(function (g) { return g.amount; }), m.shown, 1);
+      m.groups.forEach(function (g, j) {
+        g.shown = gw[j];
+        var rw = footTo(g.rows.map(function (r) { return r.amount; }), g.shown, 1);
+        g.rows.forEach(function (r, k) { r.shown = rw[k]; });
+      });
+    });
+    out.noneShown = whole[whole.length - 1];
+    return out;
+  }
+  function pnlBudOne(m, key) { return ((m && m.list) || []).filter(function (b) { return b.key === key; })[0] || null; }
+  function pnlBudSay(n) { return Math.abs(round(num(n))) >= 1 ? money(n) : moneyCents(n); }
+  function pnlBudLeft(m) {
+    var spent = round(num(m.shown)) + round(num(m.toPay)), plan = round(num(m.plan)), exact = cents(num(m.plan) - num(m.spent) - num(m.toPay));
+    if (exact < 0) return { text: 'Over by ' + (spent - plan >= 1 ? money(spent - plan) : moneyCents(-exact)), over: true };
+    return { text: (plan - spent >= 0 ? money(plan - spent) : moneyCents(exact)) + ' left', over: false };
+  }
+  function pnlBudRowWords(m) {
+    var bits = [], over = false, owe = num(m.toPay) > 0.004;
+    if (m.plan != null) {
+      var w = pnlBudLeft(m);
+      over = w.over;
+      if (!over) bits.push('of ' + money(m.plan));
+      if (owe) bits.push('Still to pay ' + pnlBudSay(m.toPay));
+      bits.push(w.text);
+    } else if (owe) bits.push('Still to pay ' + pnlBudSay(m.toPay));
+    return { text: bits.join(' · '), over: over };
+  }
+  function pnlBudWords(m) {
+    var bits = ['Spent ' + money(m.shown)], over = false;
+    if (num(m.toPay) > 0.004) bits.push('Still to pay ' + pnlBudSay(m.toPay));
+    if (m.plan != null) {
+      var w = pnlBudLeft(m);
+      over = w.over;
+      bits.push('Budget ' + money(m.plan), w.text);
+    }
+    return { text: bits.join(' · '), over: over };
+  }
+  function pnlBudNameWhy(t, name, key) {
+    var nm = pnlWord(name, PNL_BUD_NAME_MAX), plain = pnlCatPlain(nm);
+    if (!nm) return 'Name it first';
+    if (!plain) return 'Use a letter or a number in its name';
+    if (PNL_BUD_SAID.some(function (w) { return pnlCatPlain(w) === plain; })) return '“' + nm + '” can’t be a budget’s name';
+    var same = pnlBudList(t).filter(function (b) { return b.key !== key && pnlCatPlain(b.name) === plain; })[0];
+    return same ? '“' + same.name + '” is already a budget here' : '';
+  }
+  function pnlBudAmount(v) {
+    var n = typeof v === 'number' ? cents(v) : v == null || v === '' ? 0 : cents(num(v));
+    return n > 0 ? n : null;
+  }
+  function pnlBudNew(t, name, plan, id) {
+    if (!isPnlBook(t)) return { why: 'This isn’t a P&L.' };
+    var why = pnlBudNameWhy(t, name, null);
+    if (why) return { why: why };
+    var key = 'b-' + String(id == null ? '' : id).toLowerCase().replace(/[^a-z0-9]+/g, '').slice(0, 30);
+    var had = pnlBudsOf(t), taken = !!had && isObj(had.list) && Object.prototype.hasOwnProperty.call(had.list, key);
+    if (!PNL_BUD_KEY.test(key) || taken) return { why: 'Couldn’t make it. Try again.' };
+    var top = 0;
+    pnlBudList(t).forEach(function (b) { if (b.at < 9999 && b.at > top) top = b.at; });
+    var e = { name: pnlWord(name, PNL_BUD_NAME_MAX), at: Math.floor(top) + 1 }, p = pnlBudAmount(plan);
+    if (p != null) e.plan = p;
+    var patch = { pnlBuds: { list: {} } };
+    patch.pnlBuds.list[key] = e;
+    return { patch: patch, key: key, name: e.name };
+  }
+  function pnlBudNewTag(t, name, plan, id, ref) {
+    var r = pnlBudNew(t, name, plan, id);
+    if (!r.patch || !pnlBudRefLive(t, ref)) return r;
+    r.patch.pnlBuds.tags = {};
+    r.patch.pnlBuds.tags[ref] = r.key;
+    return r;
+  }
+  function pnlBudChange(t, key, o) {
+    var was = pnlBudList(t).filter(function (b) { return b.key === key; })[0];
+    if (!was) return { why: 'That budget isn’t here anymore.' };
+    o = isObj(o) ? o : {};
+    var e = {};
+    if ('name' in o) {
+      var why = pnlBudNameWhy(t, o.name, key);
+      if (why) return { why: why };
+      var nm = pnlWord(o.name, PNL_BUD_NAME_MAX);
+      if (nm !== was.name) e.name = nm;
+    }
+    if ('plan' in o) { var p = pnlBudAmount(o.plan); if (p !== was.plan) e.plan = p; }
+    if (!Object.keys(e).length) return { patch: {} };
+    var patch = { pnlBuds: { list: {} } };
+    patch.pnlBuds.list[key] = e;
+    return { patch: patch };
+  }
+  function pnlBudTag(t, ref, key) {
+    if (!isPnlBook(t) || !pnlBudRefLive(t, ref)) return null;
+    var list = pnlBudList(t), now = pnlBudTags(t, list)[ref] || '';
+    if (key && !list.some(function (b) { return b.key === key; })) return null;
+    if ((key || '') === now) return null;
+    var patch = { pnlBuds: { tags: {} } };
+    patch.pnlBuds.tags[ref] = key || null;
+    return { patch: patch };
+  }
+  function pnlBudDelete(t, key) {
+    var list = pnlBudList(t), b = list.filter(function (x) { return x.key === key; })[0];
+    if (!b) return null;
+    var raw = pnlBudsOf(t), src = isObj(raw.tags) ? raw.tags : {}, live = pnlBudTags(t, list), n = 0, people = 0;
+    var patch = { pnlBuds: { list: {} } }, tags = {};
+    patch.pnlBuds.list[key] = null;
+    Object.keys(src).forEach(function (ref) {
+      if (src[ref] !== key) return;
+      tags[ref] = null;
+      if (live[ref] === key) { if (ref.charAt(0) === 'p') people += 1; else n += 1; }
+    });
+    if (Object.keys(tags).length) patch.pnlBuds.tags = tags;
+    return { patch: patch, name: b.name, n: n, people: people };
+  }
+  function pnlBudEntry(t, kind, id) {
+    var out = { own: '', via: [] }, list = pnlBudList(t);
+    var map = kind === 'k' ? (isObj(t) ? t.cashLog : null) : (isObj(t) ? t.charges : null), x = isObj(map) && isObj(map[id]) ? map[id] : null;
+    if (!x || !list.length) return out;
+    var tags = pnlBudTags(t, list), names = {};
+    list.forEach(function (b) { names[b.key] = b.name; });
+    out.own = tags[kind + ':' + id] || '';
+    if (out.own || !isPeopleCat(t, x.category)) return out;
+    crewShares(t, Object.assign({ id: id }, x)).shares.forEach(function (s) {
+      var b = tags['p:' + s.crewId], who = String(s.person.name || '').trim() || 'them';
+      if (b && !out.via.some(function (v) { return v.key === b && v.who === who; })) out.via.push({ key: b, name: names[b], who: who });
+    });
+    return out;
+  }
   var PNL_UPLOAD_MAX = 120;
   function pnlUploadCat(t, name) {
     var plain = pnlCatPlain(name);
@@ -9868,6 +10131,11 @@
     pnlLineShown: pnlLineShown, pnlCatsNow: pnlCatsNow, pnlCatPlain: pnlCatPlain, pnlCatsBack: pnlCatsBack, pnlCatBase: pnlCatBase, pnlCatHolds: pnlCatHolds,
     pnlCatDelete: pnlCatDelete, pnlCatAdd: pnlCatAdd, pnlMerge: pnlMerge, bookCatLabels: bookCatLabels,
     PNL_ADVANCE_FROM_MAX: PNL_ADVANCE_FROM_MAX, pnlAdvance: pnlAdvance, pnlAdvanceWords: pnlAdvanceWords,
+    PNL_BUD_KEY: PNL_BUD_KEY, PNL_BUD_NAME_MAX: PNL_BUD_NAME_MAX, PNL_BUD_SAID: PNL_BUD_SAID, pnlBudList: pnlBudList, pnlBudRefLive: pnlBudRefLive,
+    pnlBudTags: pnlBudTags, pnlBudLines: pnlBudLines, pnlSpentTotal: pnlSpentTotal, pnlBuds: pnlBuds, pnlBudOne: pnlBudOne, pnlBudRowWords: pnlBudRowWords,
+    pnlBudWords: pnlBudWords, pnlBudNameWhy: pnlBudNameWhy, pnlBudAmount: pnlBudAmount, pnlBudNew: pnlBudNew, pnlBudNewTag: pnlBudNewTag,
+    pnlBudChange: pnlBudChange, pnlBudTag: pnlBudTag, pnlBudDelete: pnlBudDelete, pnlBudEntry: pnlBudEntry,
+    pnlBudTagOf: pnlBudTagOf, pnlBudTagKept: pnlBudTagKept, pnlBudChips: pnlBudChips, pnlBudLeft: pnlBudLeft, pnlBudSay: pnlBudSay,
     PNL_UPLOAD_MAX: PNL_UPLOAD_MAX, pnlUploadCat: pnlUploadCat, pnlUploadList: pnlUploadList, pnlUploadModel: pnlUploadModel, pnlUploadPatch: pnlUploadPatch,
     pnlUploadAfter: pnlUploadAfter, pnlUploadDay: pnlUploadDay, pnlUploadPay: pnlUploadPay, crewTwoLines: crewTwoLines, pnlOneCrew: pnlOneCrew,
     SHOW_DAYS_REACH: SHOW_DAYS_REACH, isShowDoc: isShowDoc, showDocName: showDocName, showDocDays: showDocDays, showDoc: showDoc, showDocLogged: showDocLogged, showDaysPatch: showDaysPatch,
