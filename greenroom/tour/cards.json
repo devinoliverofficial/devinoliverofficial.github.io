@@ -1721,13 +1721,13 @@
       "img": "off-bud-tours.jpg",
       "ring": {
         "x": 67.0,
-        "y": 52.5,
+        "y": 57.9,
         "w": 19.6,
         "h": 2.5
       },
       "lit": [
         {
-          "x": 21.8,
+          "x": 15.1,
           "y": 0.1,
           "w": 13.3,
           "h": 5.9
@@ -1771,13 +1771,13 @@
       "img": "off-mypay.jpg",
       "ring": {
         "x": 4.6,
-        "y": 14.2,
+        "y": 19.2,
         "w": 90.8,
         "h": 26.1
       },
       "lit": [
         {
-          "x": 39.1,
+          "x": 32.3,
           "y": 0.1,
           "w": 16.7,
           "h": 5.9
@@ -1794,7 +1794,7 @@
       "id": "bud-projects",
       "chapter": "Off tour · Budget",
       "title": "Switch projects",
-      "body": "Off Tour is each artist’s own book for life between tours. Run more than one? Tap the slim pills up top to jump between projects.",
+      "body": "Off Tour is each artist’s own book for life between tours. Run more than one? Tap the slim pills up top to jump between projects, on Tours, My Pay and P&L too.",
       "who": "crew",
       "tm": true,
       "iphone": false,
@@ -1809,7 +1809,7 @@
       },
       "lit": [
         {
-          "x": 59.7,
+          "x": 53.0,
           "y": 0.1,
           "w": 18.4,
           "h": 5.9
@@ -1841,7 +1841,7 @@
       },
       "lit": [
         {
-          "x": 59.7,
+          "x": 53.0,
           "y": 0.1,
           "w": 18.4,
           "h": 5.9
@@ -1851,6 +1851,38 @@
           "y": 11.7,
           "w": 34.8,
           "h": 6.2
+        },
+        {
+          "x": 27.6,
+          "y": 92.8,
+          "w": 13.4,
+          "h": 7.2
+        }
+      ]
+    },
+    {
+      "id": "bud-pnl",
+      "chapter": "Off tour · Budget",
+      "title": "P&L",
+      "body": "Tap P&L at the top of Budget: a P&L for anything, like a music video, a recording budget or a show. Create P&L sits at the top, and each one gets its own Expenses, Cards/Links and Income. Put them in groups, like Music Video or Recording Budgets.",
+      "who": "crew",
+      "tm": true,
+      "iphone": false,
+      "web": false,
+      "needs": "",
+      "img": "bud-pnl.jpg",
+      "ring": {
+        "x": 4.6,
+        "y": 12.1,
+        "w": 90.8,
+        "h": 37.4
+      },
+      "lit": [
+        {
+          "x": 75.4,
+          "y": 0.1,
+          "w": 9.4,
+          "h": 5.9
         },
         {
           "x": 27.6,
